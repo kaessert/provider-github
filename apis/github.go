@@ -22,6 +22,8 @@ import (
 
 	clusterorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
+	namespacedorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
 )
 
 func init() {
@@ -29,6 +31,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes,
 		clusterv1alpha1.SchemeBuilder.AddToScheme,
 		clusterorganizationsv1alpha1.SchemeBuilder.AddToScheme,
+		namespacedv1alpha1.SchemeBuilder.AddToScheme,
+		namespacedorganizationsv1alpha1.SchemeBuilder.AddToScheme,
 	)
 }
 

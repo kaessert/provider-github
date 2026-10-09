@@ -45,7 +45,7 @@ type RepositoryParameters struct {
 
 	// Org is the Organization for the Membership
 	// +immutable
-	// +crossplane:generate:reference:type=Organization
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization
@@ -157,7 +157,7 @@ type RepositoryPermissions struct {
 
 type RepositoryUser struct {
 	// Name is the name of the user
-	// +crossplane:generate:reference:type=Membership
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Membership
 	User string `json:"user,omitempty"`
 
 	// Name is a reference to an Membership
@@ -174,7 +174,7 @@ type RepositoryUser struct {
 
 type RepositoryTeam struct {
 	// Team is the name of the team
-	// +crossplane:generate:reference:type=Team
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Team
 	Team string `json:"team,omitempty"`
 
 	// TeamRef is a reference to a Team

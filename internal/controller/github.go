@@ -49,6 +49,15 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		organizationwebhook.Setup,
 		actionssecretaccess.Setup,
 		dependabotsecretaccess.Setup,
+		organization.SetupNamespaced,
+		repository.SetupNamespaced,
+		membership.SetupNamespaced,
+		team.SetupNamespaced,
+		organizationvariable.SetupNamespaced,
+		runnergroup.SetupNamespaced,
+		organizationwebhook.SetupNamespaced,
+		actionssecretaccess.SetupNamespaced,
+		dependabotsecretaccess.SetupNamespaced,
 	} {
 		if err := setup(mgr, o, metrics); err != nil {
 			return err
@@ -70,6 +79,15 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		organizationwebhook.SetupWithTimeout,
 		actionssecretaccess.SetupWithTimeout,
 		dependabotsecretaccess.SetupWithTimeout,
+		organization.SetupNamespacedWithTimeout,
+		repository.SetupNamespacedWithTimeout,
+		membership.SetupNamespacedWithTimeout,
+		team.SetupNamespacedWithTimeout,
+		organizationvariable.SetupNamespacedWithTimeout,
+		runnergroup.SetupNamespacedWithTimeout,
+		organizationwebhook.SetupNamespacedWithTimeout,
+		actionssecretaccess.SetupNamespacedWithTimeout,
+		dependabotsecretaccess.SetupNamespacedWithTimeout,
 	}
 
 	for _, setup := range setupFuncs {

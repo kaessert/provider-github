@@ -1,0 +1,26 @@
+---
+# Organization webhook signed with a secret read from a Kubernetes Secret.
+# The applied secret is recorded in the connection secret to detect rotation.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: OrganizationWebhook
+metadata:
+  name: sample-organization-webhook-ns
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    orgRef:
+      name: pgh-sample-organization-ns
+    url: https://hooks.example.com/github
+    contentType: json
+    events:
+    - push
+    - pull_request
+    secretKeyRef:
+      name: sample-webhook-secret
+      namespace: default
+      key: secret
+  writeConnectionSecretToRef:
+    name: sample-organization-webhook-conn

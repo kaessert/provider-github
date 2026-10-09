@@ -465,3 +465,27 @@ func TestDelete_404IsNotAnError(t *testing.T) {
 		t.Errorf("Delete returned %v on 404, want nil", err)
 	}
 }
+
+// A namespaced resource reads the webhook secret from its own namespace only,
+// whatever namespace the selector names.
+func TestDesiredSecretSecretNamespacePinned(t *testing.T) {
+	kube := newKube(t, sourceSecret(testSecret))
+	ref := &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: testSourceName, Namespace: "tenant-b"},
+		Key:             testSourceKey,
+	}
+
+	free := external{kube: kube}
+	if _, err := free.desiredSecret(context.Background(), ref); err == nil {
+		t.Fatal("cluster-scoped resource read a Secret from the namespace in the selector, which holds none")
+	}
+
+	pinned := external{kube: kube, secretNamespace: testNamespace}
+	got, err := pinned.desiredSecret(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("desiredSecret: %v", err)
+	}
+	if got != testSecret {
+		t.Errorf("secret = %q, want the one in %s", got, testNamespace)
+	}
+}

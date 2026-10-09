@@ -1,0 +1,61 @@
+# Namespaced scope (github.m.crossplane.io).
+#
+# A ProviderConfig is namespaced: only managed resources in the same namespace
+# can reference it. The credentials Secret is always read from that same
+# namespace, whatever namespace secretRef names.
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: default
+  name: example-provider-secret
+type: Opaque
+data:
+  # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
+
+---
+apiVersion: github.m.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  namespace: default
+  name: example
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: default
+      name: example-provider-secret
+      key: creds
+
+---
+# A ClusterProviderConfig is cluster-scoped and can be referenced from any
+# namespace. It names its credentials Secret by an explicit namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: crossplane-system
+  name: example-cluster-provider-secret
+type: Opaque
+data:
+  # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
+
+---
+apiVersion: github.m.crossplane.io/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: example
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: example-cluster-provider-secret
+      key: creds
+
+---
+# Reference a ClusterProviderConfig from a managed resource (the default when
+# providerConfigRef is omitted is the ClusterProviderConfig named "default"):
+#
+#   spec:
+#     providerConfigRef:
+#       kind: ClusterProviderConfig
+#       name: example

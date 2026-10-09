@@ -52,6 +52,11 @@ const (
 type external struct {
 	github *ghclient.Client
 	kube   client.Client
+
+	// secretNamespace, when set, is the only namespace the webhook secret is
+	// read from, whatever namespace the spec names. Namespaced resources set it
+	// to their own namespace.
+	secretNamespace string
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -248,13 +253,17 @@ func (c *external) desiredHook(ctx context.Context, cr *v1alpha1.OrganizationWeb
 }
 
 func (c *external) desiredSecret(ctx context.Context, ref *xpv2.SecretKeySelector) (string, error) {
+	ns := ref.Namespace
+	if c.secretNamespace != "" {
+		ns = c.secretNamespace
+	}
 	s := &corev1.Secret{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, s); err != nil {
-		return "", errors.Wrapf(err, "cannot get secret `%s/%s`", ref.Namespace, ref.Name)
+	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, s); err != nil {
+		return "", errors.Wrapf(err, "cannot get secret `%s/%s`", ns, ref.Name)
 	}
 	data, ok := s.Data[ref.Key]
 	if !ok {
-		return "", errors.Errorf("secret key `%s` not found in secret `%s/%s`", ref.Key, ref.Namespace, ref.Name)
+		return "", errors.Errorf("secret key `%s` not found in secret `%s/%s`", ref.Key, ns, ref.Name)
 	}
 	return string(data), nil
 }

@@ -31,7 +31,7 @@ type MembershipParameters struct {
 
 	// Org is the Organization for the Membership
 	// +immutable
-	// +crossplane:generate:reference:type=Organization
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization

@@ -1,0 +1,1084 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: repositories.organizations.github.m.crossplane.io
+spec:
+  group: organizations.github.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - github
+    kind: Repository
+    listKind: RepositoryList
+    plural: repositories
+    singular: repository
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='CollaboratorPartial')].status
+      name: COLLAB-PARTIAL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='BranchProtectionPartial')].status
+      name: BPR-PARTIAL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='SettingsPartial')].status
+      name: SETTINGS-PARTIAL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='ArchivedConfigFrozen')].status
+      name: ARCHIVED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: A Repository is an example API type.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: A RepositorySpec defines the desired state of a Repository.
+            properties:
+              forProvider:
+                description: RepositoryParameters are the configurable fields of a
+                  Repository.
+                properties:
+                  allowAutoMerge:
+                    description: |-
+                      AllowAutoMerge allows auto-merge on the repository.
+                      Requires GitHub Pro/Team/Enterprise or a public repository; on a free-tier
+                      org's private repo, GitHub silently rejects setting this to true, which
+                      causes a reconcile loop.
+                    type: boolean
+                  allowMergeCommit:
+                    description: AllowMergeCommit allows merge commits on the repository.
+                    type: boolean
+                  allowRebaseMerge:
+                    description: AllowRebaseMerge allows rebase merging on the repository.
+                    type: boolean
+                  allowSquashMerge:
+                    description: AllowSquashMerge allows squash merging on the repository.
+                    type: boolean
+                  allowUpdateBranch:
+                    description: AllowUpdateBranch allows users to update pull request
+                      branches from the base branch.
+                    type: boolean
+                  archived:
+                    description: Archived sets if a repository should be archived
+                      on delete
+                    type: boolean
+                  branchProtectionRules:
+                    items:
+                      description: |-
+                        BranchProtectionRule represents a rule for protecting a branch in a repository.
+                        It includes various parameters for enforcing code quality and access control.
+                      properties:
+                        allowDeletions:
+                          description: |-
+                            Allow users with push access to delete matching branches.
+                            Default: false
+                          type: boolean
+                        allowForcePushes:
+                          description: |-
+                            Permit force pushes for all users with push access.
+                            Default: false
+                          type: boolean
+                        allowForkSyncing:
+                          description: |-
+                            Will allow users to pull changes from upstream when the branch is locked.
+                            Default: false
+                          type: boolean
+                        branch:
+                          description: The branch name to apply the protection rule
+                            to.
+                          type: string
+                        branchProtectionRestrictions:
+                          description: |-
+                            Restrict who can push to matching branches.
+                            Specify people, teams, or apps allowed to push to matching branches.
+                            Required status checks will still prevent these people, teams, and apps from merging if the checks fail.
+                          properties:
+                            apps:
+                              description: Only apps allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                            blockCreations:
+                              description: |-
+                                If set to true, will cause the restrictions setting to also block pushes which create new branches
+                                unless initiated by a user, team, app with the ability to push.
+                                Default: false
+                              type: boolean
+                            teams:
+                              description: Only teams allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                            users:
+                              description: Only people allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        enforceAdmins:
+                          description: Enforce settings even for administrators and
+                            custom roles with the "bypass branch protections" permission.
+                          type: boolean
+                        lockBranch:
+                          description: |-
+                            Branch is read-only. Users cannot push to the branch.
+                            Default: false
+                          type: boolean
+                        requireLinearHistory:
+                          description: |-
+                            Prevent merge commits from being pushed to matching branches.
+                            Default: false
+                          type: boolean
+                        requireSignedCommits:
+                          description: |-
+                            Commits pushed to matching branches must have verified signatures.
+                            Default: false
+                          type: boolean
+                        requiredConversationResolution:
+                          description: |-
+                            When enabled, all conversations on code must be resolved before a pull request can be merged into a branch that matches this rule.
+                            Default: false
+                          type: boolean
+                        requiredPullRequestReviews:
+                          description: |-
+                            Require a pull request before merging.
+                            When enabled, all commits must be made to a non-protected branch and submitted via a pull request
+                            before they can be merged into a branch that matches this rule.
+                          properties:
+                            bypassPullRequestAllowances:
+                              description: Allow specific users, teams, or apps to
+                                bypass pull request requirements.
+                              properties:
+                                apps:
+                                  description: The list of app slugs allowed to bypass
+                                    pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: The list of team slugs allowed to bypass
+                                    pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: The list of user logins allowed to
+                                    bypass pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            dismissStaleReviews:
+                              description: Set to true if you want to automatically
+                                dismiss approving reviews when someone pushes a new
+                                commit.
+                              type: boolean
+                            dismissalRestrictions:
+                              description: Specify which users, teams, and apps can
+                                dismiss pull request reviews.
+                              properties:
+                                apps:
+                                  description: The list of app slugs with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: The list of team slugs with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: The list of user logins with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requireCodeOwnerReviews:
+                              description: Blocks merging pull requests until code
+                                owners review them.
+                              type: boolean
+                            requireLastPushApproval:
+                              description: |-
+                                Whether the most recent push must be approved by someone other than the person who pushed it.
+                                Default: false
+                              type: boolean
+                            requiredApprovingReviewCount:
+                              description: Specify the number of reviewers required
+                                to approve pull requests. Use a number between 1 and
+                                6 or 0 to not require reviewers.
+                              type: integer
+                          required:
+                          - dismissStaleReviews
+                          - requireCodeOwnerReviews
+                          - requiredApprovingReviewCount
+                          type: object
+                        requiredStatusChecks:
+                          description: |-
+                            Require status checks to pass before merging.
+                            When enabled, commits must first be pushed to another branch,
+                            then merged or pushed directly to a branch that matches this rule after status checks have passed.
+                          properties:
+                            checks:
+                              description: The list of status checks to require in
+                                order to merge into this branch.
+                              items:
+                                description: RequiredStatusCheck represents the configuration
+                                  for a single check
+                                properties:
+                                  appId:
+                                    description: |-
+                                      The ID of the GitHub App that must provide this check.
+                                      Omit this field to explicitly allow any app to set the status.
+                                    format: int64
+                                    minimum: 2
+                                    type: integer
+                                  context:
+                                    description: The name of the required check.
+                                    type: string
+                                required:
+                                - context
+                                type: object
+                              type: array
+                            strict:
+                              description: Require branches to be up-to-date before
+                                merging.
+                              type: boolean
+                          required:
+                          - checks
+                          - strict
+                          type: object
+                      required:
+                      - branch
+                      - enforceAdmins
+                      type: object
+                    type: array
+                  createFork:
+                    description: Creates a repository fork, it takes precedence over
+                      "CreateFromTemplate" setting.
+                    properties:
+                      defaultBranchOnly:
+                        description: When forking from an existing repository, fork
+                          with only the default branch.
+                        type: boolean
+                      owner:
+                        description: The account owner of the repository. The name
+                          is not case-sensitive.
+                        type: string
+                      repo:
+                        description: The name of the repository without the .git extension.
+                          The name is not case-sensitive.
+                        type: string
+                    required:
+                    - defaultBranchOnly
+                    - owner
+                    - repo
+                    type: object
+                  createFromTemplate:
+                    description: Creates a new repository using a repository template
+                    properties:
+                      includeAllBranches:
+                        description: |-
+                          Set to true to include the directory structure and files from all branches in the template repository,
+                          and not just the default branch.
+                        type: boolean
+                      owner:
+                        description: The account owner of the template repository.
+                          The name is not case-sensitive.
+                        type: string
+                      repo:
+                        description: The name of the template repository without the
+                          .git extension. The name is not case-sensitive.
+                        type: string
+                    required:
+                    - includeAllBranches
+                    - owner
+                    - repo
+                    type: object
+                  defaultBranch:
+                    description: DefaultBranch is the name of the default branch.
+                    type: string
+                  deleteBranchOnMerge:
+                    description: DeleteBranchOnMerge deletes head branches automatically
+                      when pull requests merge.
+                    type: boolean
+                  description:
+                    type: string
+                  forceDelete:
+                    description: Safeguard for accidental deletion
+                    type: boolean
+                  hasDiscussions:
+                    description: HasDiscussions enables the Discussions feature on
+                      the repository.
+                    type: boolean
+                  hasIssues:
+                    description: HasIssues enables the Issues feature on the repository.
+                    type: boolean
+                  hasProjects:
+                    description: HasProjects enables the Projects feature on the repository.
+                    type: boolean
+                  hasWiki:
+                    description: HasWiki enables the Wiki feature on the repository.
+                    type: boolean
+                  isTemplate:
+                    description: |-
+                      Set to true to make this repo available as a template repository.
+                      Default: false
+                    type: boolean
+                  mergeCommitMessage:
+                    description: |-
+                      MergeCommitMessage sets the default body format for merge commits.
+                      Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_BODY
+                    - PR_TITLE
+                    - BLANK
+                    type: string
+                  mergeCommitTitle:
+                    description: |-
+                      MergeCommitTitle sets the default title format for merge commits.
+                      Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_TITLE
+                    - MERGE_MESSAGE
+                    type: string
+                  org:
+                    description: Org is the Organization for the Membership
+                    type: string
+                  orgRef:
+                    description: OrgRef is a reference to an Organization
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        type: string
+                      namespace:
+                        description: Namespace of the referenced object
+                        type: string
+                      policy:
+                        description: Policies for referencing.
+                        properties:
+                          resolution:
+                            default: Required
+                            description: |-
+                              Resolution specifies whether resolution of this reference is required.
+                              The default is 'Required', which means the reconcile will fail if the
+                              reference cannot be resolved. 'Optional' means this reference will be
+                              a no-op if it cannot be resolved.
+                            enum:
+                            - Required
+                            - Optional
+                            type: string
+                          resolve:
+                            description: |-
+                              Resolve specifies when this reference should be resolved. The default
+                              is 'IfNotPresent', which will attempt to resolve the reference only when
+                              the corresponding field is not present. Use 'Always' to resolve the
+                              reference on every reconcile.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            type: string
+                        type: object
+                    required:
+                    - name
+                    type: object
+                  orgSelector:
+                    description: OrgSlector selects a reference to an Organization
+                    properties:
+                      matchControllerRef:
+                        description: |-
+                          MatchControllerRef ensures an object with the same controller reference
+                          as the selecting object is selected.
+                        type: boolean
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: MatchLabels ensures an object with matching labels
+                          is selected.
+                        type: object
+                      namespace:
+                        description: Namespace for the selector
+                        type: string
+                      policy:
+                        description: Policies for selection.
+                        properties:
+                          resolution:
+                            default: Required
+                            description: |-
+                              Resolution specifies whether resolution of this reference is required.
+                              The default is 'Required', which means the reconcile will fail if the
+                              reference cannot be resolved. 'Optional' means this reference will be
+                              a no-op if it cannot be resolved.
+                            enum:
+                            - Required
+                            - Optional
+                            type: string
+                          resolve:
+                            description: |-
+                              Resolve specifies when this reference should be resolved. The default
+                              is 'IfNotPresent', which will attempt to resolve the reference only when
+                              the corresponding field is not present. Use 'Always' to resolve the
+                              reference on every reconcile.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            type: string
+                        type: object
+                    type: object
+                  permissions:
+                    description: RepositoryParameters are the configurable fields
+                      of a Repository.
+                    properties:
+                      teams:
+                        items:
+                          properties:
+                            role:
+                              description: Role is the role of the team
+                              type: string
+                            team:
+                              description: Team is the name of the team
+                              type: string
+                            teamRef:
+                              description: TeamRef is a reference to a Team
+                              properties:
+                                name:
+                                  description: Name of the referenced object.
+                                  type: string
+                                namespace:
+                                  description: Namespace of the referenced object
+                                  type: string
+                                policy:
+                                  description: Policies for referencing.
+                                  properties:
+                                    resolution:
+                                      default: Required
+                                      description: |-
+                                        Resolution specifies whether resolution of this reference is required.
+                                        The default is 'Required', which means the reconcile will fail if the
+                                        reference cannot be resolved. 'Optional' means this reference will be
+                                        a no-op if it cannot be resolved.
+                                      enum:
+                                      - Required
+                                      - Optional
+                                      type: string
+                                    resolve:
+                                      description: |-
+                                        Resolve specifies when this reference should be resolved. The default
+                                        is 'IfNotPresent', which will attempt to resolve the reference only when
+                                        the corresponding field is not present. Use 'Always' to resolve the
+                                        reference on every reconcile.
+                                      enum:
+                                      - Always
+                                      - IfNotPresent
+                                      type: string
+                                  type: object
+                              required:
+                              - name
+                              type: object
+                            teamSelector:
+                              description: TeamSelector selects a reference to a Team
+                              properties:
+                                matchControllerRef:
+                                  description: |-
+                                    MatchControllerRef ensures an object with the same controller reference
+                                    as the selecting object is selected.
+                                  type: boolean
+                                matchLabels:
+                                  additionalProperties:
+                                    type: string
+                                  description: MatchLabels ensures an object with
+                                    matching labels is selected.
+                                  type: object
+                                namespace:
+                                  description: Namespace for the selector
+                                  type: string
+                                policy:
+                                  description: Policies for selection.
+                                  properties:
+                                    resolution:
+                                      default: Required
+                                      description: |-
+                                        Resolution specifies whether resolution of this reference is required.
+                                        The default is 'Required', which means the reconcile will fail if the
+                                        reference cannot be resolved. 'Optional' means this reference will be
+                                        a no-op if it cannot be resolved.
+                                      enum:
+                                      - Required
+                                      - Optional
+                                      type: string
+                                    resolve:
+                                      description: |-
+                                        Resolve specifies when this reference should be resolved. The default
+                                        is 'IfNotPresent', which will attempt to resolve the reference only when
+                                        the corresponding field is not present. Use 'Always' to resolve the
+                                        reference on every reconcile.
+                                      enum:
+                                      - Always
+                                      - IfNotPresent
+                                      type: string
+                                  type: object
+                              type: object
+                          required:
+                          - role
+                          type: object
+                        type: array
+                      users:
+                        items:
+                          properties:
+                            role:
+                              description: Role is the role of the user
+                              type: string
+                            user:
+                              description: Name is the name of the user
+                              type: string
+                            userRef:
+                              description: Name is a reference to an Membership
+                              properties:
+                                name:
+                                  description: Name of the referenced object.
+                                  type: string
+                                namespace:
+                                  description: Namespace of the referenced object
+                                  type: string
+                                policy:
+                                  description: Policies for referencing.
+                                  properties:
+                                    resolution:
+                                      default: Required
+                                      description: |-
+                                        Resolution specifies whether resolution of this reference is required.
+                                        The default is 'Required', which means the reconcile will fail if the
+                                        reference cannot be resolved. 'Optional' means this reference will be
+                                        a no-op if it cannot be resolved.
+                                      enum:
+                                      - Required
+                                      - Optional
+                                      type: string
+                                    resolve:
+                                      description: |-
+                                        Resolve specifies when this reference should be resolved. The default
+                                        is 'IfNotPresent', which will attempt to resolve the reference only when
+                                        the corresponding field is not present. Use 'Always' to resolve the
+                                        reference on every reconcile.
+                                      enum:
+                                      - Always
+                                      - IfNotPresent
+                                      type: string
+                                  type: object
+                              required:
+                              - name
+                              type: object
+                            userSelector:
+                              description: NameSelector selects a reference to an
+                                Organization
+                              properties:
+                                matchControllerRef:
+                                  description: |-
+                                    MatchControllerRef ensures an object with the same controller reference
+                                    as the selecting object is selected.
+                                  type: boolean
+                                matchLabels:
+                                  additionalProperties:
+                                    type: string
+                                  description: MatchLabels ensures an object with
+                                    matching labels is selected.
+                                  type: object
+                                namespace:
+                                  description: Namespace for the selector
+                                  type: string
+                                policy:
+                                  description: Policies for selection.
+                                  properties:
+                                    resolution:
+                                      default: Required
+                                      description: |-
+                                        Resolution specifies whether resolution of this reference is required.
+                                        The default is 'Required', which means the reconcile will fail if the
+                                        reference cannot be resolved. 'Optional' means this reference will be
+                                        a no-op if it cannot be resolved.
+                                      enum:
+                                      - Required
+                                      - Optional
+                                      type: string
+                                    resolve:
+                                      description: |-
+                                        Resolve specifies when this reference should be resolved. The default
+                                        is 'IfNotPresent', which will attempt to resolve the reference only when
+                                        the corresponding field is not present. Use 'Always' to resolve the
+                                        reference on every reconcile.
+                                      enum:
+                                      - Always
+                                      - IfNotPresent
+                                      type: string
+                                  type: object
+                              type: object
+                          required:
+                          - role
+                          type: object
+                        type: array
+                    type: object
+                  private:
+                    description: Private sets the repository to private, if false
+                      it will be public
+                    type: boolean
+                  repositoryRules:
+                    description: RepositoryRules are the rules for the repository
+                    items:
+                      description: RepositoryRuleset represents the rules for a repository
+                      properties:
+                        bypassActors:
+                          description: BypassActors is the list of actors that can
+                            bypass the ruleset
+                          items:
+                            properties:
+                              actorId:
+                                description: ActorId is the ID of the actor
+                                format: int64
+                                type: integer
+                              actorType:
+                                description: 'ActorType is the type of the actor,
+                                  can be one of: Integration, OrganizationAdmin, RepositoryRole,
+                                  Team'
+                                type: string
+                              bypassMode:
+                                description: 'BypassMode is the bypass mode of the
+                                  actor, can be one of: "always", "pull_request"'
+                                type: string
+                            type: object
+                          type: array
+                        conditions:
+                          description: Conditions is the conditions for the ruleset,
+                            which branches or tags are included or excluded from the
+                            ruleset
+                          properties:
+                            refName:
+                              properties:
+                                exclude:
+                                  description: Exclude is the list of branches or
+                                    tags to exclude
+                                  items:
+                                    type: string
+                                  type: array
+                                include:
+                                  description: Include is the list of branches or
+                                    tags to include
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - exclude
+                              - include
+                              type: object
+                          type: object
+                        enforcement:
+                          description: 'Enforcement is the enforcement level of the
+                            ruleset, can be one of: "disabled", "active"'
+                          type: string
+                        name:
+                          description: Name is the name of the ruleset
+                          type: string
+                        rules:
+                          description: Rules is the rules for the ruleset
+                          properties:
+                            creation:
+                              description: Creation restricts the creation of matching
+                                branches or tags that are set in Conditions
+                              type: boolean
+                            deletion:
+                              description: Deletion restricts the deletion of matching
+                                branches or tags that are set in Conditions
+                              type: boolean
+                            nonFastForward:
+                              description: NonFastForward restricts force pushes to
+                                matching branches or tags that are set in Conditions
+                              type: boolean
+                            pullRequest:
+                              description: PullRequest is the rules for pull requests
+                              properties:
+                                dismissStaleReviewsOnPush:
+                                  description: DismissStaleReviewsOnPush automatically
+                                    dismiss approving reviews when someone pushes
+                                    a new commit.
+                                  type: boolean
+                                requireCodeOwnerReview:
+                                  description: RequireCodeOwnerReview requires the
+                                    pull request to be approved by a code owner.
+                                  type: boolean
+                                requireLastPushApproval:
+                                  description: RequireLastPushApproval requires the
+                                    most recent push to be approved by someone other
+                                    than the person who pushed it.
+                                  type: boolean
+                                requiredApprovingReviewCount:
+                                  description: RequiredApprovingReviewCount specifies
+                                    the number of reviewers required to approve pull
+                                    requests.
+                                  type: integer
+                                requiredReviewThreadResolution:
+                                  description: RequiredReviewThreadResolution requires
+                                    all conversations on code to be resolved before
+                                    a pull request can be merged.
+                                  type: boolean
+                              type: object
+                            requiredDeployments:
+                              description: RequiredDeployments requires that deployment
+                                to specific environments are successful before merging.
+                              properties:
+                                environments:
+                                  description: Environments is the list of environments
+                                    that are required to be deployed to before merging
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requiredLinearHistory:
+                              description: RequiredLinearHistory requires a linear
+                                commit history, which prevents merge commits.
+                              type: boolean
+                            requiredSignatures:
+                              description: RequiredSignatures requires signed commits.
+                              type: boolean
+                            requiredStatusChecks:
+                              description: RequiredStatusChecks requires status checks
+                                to pass before merging.
+                              properties:
+                                requiredStatusChecks:
+                                  description: RequiredStatusChecks is the list of
+                                    status checks to require in order to merge into
+                                    this branch.
+                                  items:
+                                    properties:
+                                      context:
+                                        description: Context is the name of the required
+                                          check.
+                                        type: string
+                                      integrationId:
+                                        description: IntegrationId is the ID of integration
+                                          that must provide this check.
+                                        format: int64
+                                        type: integer
+                                    required:
+                                    - context
+                                    type: object
+                                  type: array
+                                strictRequiredStatusChecksPolicy:
+                                  description: StrictRequiredStatusChecksPolicy requires
+                                    branches to be up-to-date before merging.
+                                  type: boolean
+                              type: object
+                            update:
+                              description: Update restricts the update of matching
+                                branches or tags that are set in Conditions
+                              type: boolean
+                          type: object
+                        target:
+                          description: 'Target is the target of the ruleset, can be
+                            one of: "branch", "tag"'
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  squashMergeCommitMessage:
+                    description: |-
+                      SquashMergeCommitMessage sets the default body format for squash-merge commits.
+                      Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_BODY
+                    - COMMIT_MESSAGES
+                    - BLANK
+                    type: string
+                  squashMergeCommitTitle:
+                    description: |-
+                      SquashMergeCommitTitle sets the default title format for squash-merge commits.
+                      Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_TITLE
+                    - COMMIT_OR_PR_TITLE
+                    type: string
+                  topics:
+                    description: |-
+                      Topics is the list of topics for the repository.
+                      Topics help categorize and discover repositories.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                  webhooks:
+                    items:
+                      description: |-
+                        Repository webhook
+                        https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks
+                      properties:
+                        active:
+                          description: |-
+                            Determines if notifications are sent when the webhook is triggered.
+                            Default: true
+                          type: boolean
+                        contentType:
+                          description: The media type used to serialize the payloads.
+                            Supported values include json and form.
+                          enum:
+                          - json
+                          - form
+                          type: string
+                        events:
+                          description: Determines what events the hook is triggered
+                            for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
+                          items:
+                            type: string
+                          type: array
+                        insecureSsl:
+                          description: |-
+                            Determines whether the SSL certificate of the host for url will be verified when delivering payloads.
+                            We strongly recommend not setting this to true as you are subject to man-in-the-middle and other attacks.
+                            Default: false
+                          type: boolean
+                        secretKeyRef:
+                          description: |-
+                            Reference to a secret key containing the webhook secret.
+                            You can use the webhook secret to limit incoming requests to only those originating from GitHub.
+                            For more information, see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
+                            The Secret is always read from the namespace of this resource; a namespace set on the selector is ignored.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              description: Name of the secret.
+                              type: string
+                            namespace:
+                              description: Namespace of the secret.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          - namespace
+                          type: object
+                        url:
+                          description: The URL to which the payloads will be delivered.
+                          type: string
+                      required:
+                      - contentType
+                      - events
+                      - url
+                      type: object
+                    type: array
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: A RepositoryStatus represents the observed state of a Repository.
+            properties:
+              atProvider:
+                description: RepositoryObservation are the observable fields of a
+                  Repository.
+                properties:
+                  unappliedBranchProtection:
+                    description: Branch protection items GitHub did not apply on the
+                      last push, per declared rule.
+                    items:
+                      description: UnappliedBranchProtection records the items GitHub
+                        left out when the provider pushed a branch protection rule.
+                      properties:
+                        branch:
+                          type: string
+                        items:
+                          description: Items GitHub did not apply, e.g. "bypassApps:some-app"
+                            or "allowForcePushes".
+                          items:
+                            type: string
+                          type: array
+                        ruleHash:
+                          description: Hash of the declared rule the items were observed
+                            against.
+                          type: string
+                      required:
+                      - branch
+                      - items
+                      - ruleHash
+                      type: object
+                    type: array
+                  unappliedSettings:
+                    description: Repository settings GitHub did not apply on the last
+                      push, with the value that was declared.
+                    items:
+                      description: UnappliedSetting records a repository setting GitHub
+                        left unchanged when the provider pushed it.
+                      properties:
+                        declared:
+                          description: Declared value the refusal was observed against,
+                            e.g. "true".
+                          type: string
+                        field:
+                          description: Field name as in spec.forProvider, e.g. "hasWiki".
+                          type: string
+                      required:
+                      - declared
+                      - field
+                      type: object
+                    type: array
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastHandledReconcileAt:
+                description: |-
+                  LastHandledReconcileAt holds the value of the most recent
+                  reconcile-requested-at annotation token that the controller has
+                  processed. Users can compare this to the annotation to determine
+                  whether a reconcile request has been handled.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

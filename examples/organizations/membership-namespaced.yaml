@@ -1,0 +1,13 @@
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Membership
+metadata:
+  name: pgh-sample-user-ns
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    orgRef: 
+      name: pgh-sample-organization-ns
+    role: member
