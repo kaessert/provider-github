@@ -3,23 +3,20 @@ meta.upbound.io/example-id: organizations/v1alpha1/organizationwebhook
 uptest.upbound.io/timeout: "600"
 uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-organization-webhook-namespaced.sh
 crossplane.io/update-test: |
-  - field: org
-    skip: "organization locator: a different value addresses another organization's object, it is not an update"
   - field: url
-    skip:
-      reason: write-only
+    value: https://example.com/pgh-e2e-ns-updated
   - field: contentType
-    skip:
-      reason: write-only
+    value: form
   - field: events
-    skip:
-      reason: write-only
+    value:
+      - repository
+      - team
   - field: active
-    skip:
-      reason: write-only
+    value: false
   - field: insecureSsl
-    skip:
-      reason: write-only
+    value: true
   - field: secretKeyRef
     skip:
       reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"

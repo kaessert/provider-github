@@ -3,17 +3,18 @@ meta.upbound.io/example-id: organizations/v1alpha1/runnergroup
 uptest.upbound.io/timeout: "600"
 uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-runner-group.sh
 crossplane.io/update-test: |
-  - field: org
-    skip: "organization locator: a different value addresses another organization's object, it is not an update"
-  - field: visibility
-    skip:
-      reason: write-only
-  - field: selectedRepositories
-    skip:
-      reason: write-only
   - field: allowsPublicRepositories
-    skip:
-      reason: write-only
+    value: true
+  - field: visibility
+    value: selected
+  - field: selectedRepositories
+    value:
+      - repo: demo-repository-1
+  - field: selectedRepositories
+    value: []
   - field: selectedWorkflows
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "GitHub accepts a workflow only if the file already exists at the named ref in a repository, and the test organization has no repository kept for the suite that holds one. Becomes testable once such a repository exists"
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
