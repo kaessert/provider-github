@@ -3,14 +3,16 @@ meta.upbound.io/example-id: organizations/v1alpha1/organizationvariable
 uptest.upbound.io/timeout: "600"
 uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-organization-variable-namespaced.sh
 crossplane.io/update-test: |
+  - field: value
+    value: updated-value
+  - field: visibility
+    value: private
+  - field: selectedRepositories
+    value:
+      - repo: demo-repository-1
+    withValues:
+      visibility: selected
+  - field: selectedRepositories
+    value: []
   - field: org
     skip: "organization locator: a different value addresses another organization's object, it is not an update"
-  - field: value
-    skip:
-      reason: write-only
-  - field: visibility
-    skip:
-      reason: write-only
-  - field: selectedRepositories
-    skip:
-      reason: write-only

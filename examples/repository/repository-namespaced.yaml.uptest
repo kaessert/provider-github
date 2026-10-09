@@ -4,86 +4,115 @@ uptest.upbound.io/timeout: "600"
 uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-repository-namespaced.sh
 crossplane.io/update-test: |
   - field: description
-    skip:
-      reason: write-only
-  - field: permissions
-    skip:
-      reason: write-only
+    value: Crossplane provider-github updated repository description
+  - field: topics
+    value:
+      - crossplane
+      - updated
+  - field: hasIssues
+    value: false
+  - field: hasProjects
+    value: true
+  - field: hasWiki
+    value: true
+  - field: hasDiscussions
+    value: true
+  - field: deleteBranchOnMerge
+    value: false
+  - field: allowUpdateBranch
+    value: false
+  - field: allowAutoMerge
+    value: true
+  - field: mergeCommitMessage
+    value: BLANK
+  - field: mergeCommitTitle
+    value: MERGE_MESSAGE
+    withValues:
+      mergeCommitMessage: PR_TITLE
+  - field: squashMergeCommitMessage
+    value: COMMIT_MESSAGES
+  - field: squashMergeCommitTitle
+    value: COMMIT_OR_PR_TITLE
+  - field: allowRebaseMerge
+    value: true
+  - field: allowMergeCommit
+    value: false
+  - field: allowSquashMerge
+    value: false
+  - field: isTemplate
+    value: true
+  - field: private
+    value: false
+  - field: permissions.teams
+    value:
+      - team: developers
+        role: pull
+  - field: permissions.teams
+    value: []
   - field: webhooks
+    value:
+      - url: https://example.com/pgh-e2e-repository-ns-hook
+        contentType: json
+        events:
+          - push
+        active: true
+        insecureSsl: false
+  - field: webhooks
+    value: []
+  - field: repositoryRules
+    value:
+      - name: pgh-e2e-ruleset
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          deletion: true
+    expect:
+      - name: pgh-e2e-ruleset
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          creation: false
+          update: false
+          deletion: true
+          requiredLinearHistory: false
+          requiredSignatures: false
+          nonFastForward: false
+    ignoreListElementKeys:
+      - bypassActors
+  - field: archived
+    value: true
+  - field: permissions.users
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "the test organization has no collaborator login set aside for the suite, and adding a person to a repository notifies them"
   - field: branchProtectionRules
     skip:
-      reason: write-only
-  - field: repositoryRules
+      reason: fixture-missing
+      evidence: "the repository is created empty, and a protection rule can only be applied to an existing branch; the controller skips rules for missing branches, so nothing is written"
+  - field: defaultBranch
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "GitHub rejects a default-branch change on an empty repository (Cannot update default branch for an empty repository); needs a repository with a second branch"
   - field: createFromTemplate
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "create-time only: the repository is created empty, and a template cannot be applied to an existing repository"
   - field: createFork
+    skip:
+      reason: fixture-missing
+      evidence: "create-time only: the repository is created empty, and an existing repository cannot be turned into a fork"
+  - field: forceDelete
     skip:
       reason: write-only
   - field: org
     skip: "organization locator: a different value addresses another organization's object, it is not an update"
-  - field: archived
-    skip:
-      reason: write-only
-  - field: forceDelete
-    skip:
-      reason: write-only
-  - field: private
-    skip:
-      reason: write-only
-  - field: isTemplate
-    skip:
-      reason: write-only
-  - field: topics
-    skip:
-      reason: write-only
-      disposition: one-live-patch
-  - field: defaultBranch
-    skip:
-      reason: write-only
-  - field: allowMergeCommit
-    skip:
-      reason: write-only
-  - field: allowSquashMerge
-    skip:
-      reason: write-only
-  - field: allowRebaseMerge
-    skip:
-      reason: write-only
-  - field: allowAutoMerge
-    skip:
-      reason: write-only
-  - field: allowUpdateBranch
-    skip:
-      reason: write-only
-  - field: deleteBranchOnMerge
-    skip:
-      reason: write-only
-  - field: hasIssues
-    skip:
-      reason: write-only
-  - field: hasProjects
-    skip:
-      reason: write-only
-  - field: hasWiki
-    skip:
-      reason: write-only
-  - field: hasDiscussions
-    skip:
-      reason: write-only
-  - field: mergeCommitTitle
-    skip:
-      reason: write-only
-  - field: mergeCommitMessage
-    skip:
-      reason: write-only
-  - field: squashMergeCommitTitle
-    skip:
-      reason: write-only
-  - field: squashMergeCommitMessage
-    skip:
-      reason: write-only

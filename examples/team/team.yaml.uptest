@@ -4,16 +4,16 @@ uptest.upbound.io/timeout: "600"
 uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-team.sh
 crossplane.io/update-test: |
   - field: description
-    skip:
-      reason: write-only
+    value: Crossplane provider-github updated team description
+  - field: privacy
+    value: secret
+  - field: parent
+    value: developers
+    withValues:
+      privacy: closed
   - field: members
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "the test organization has no member login set aside for the suite, and adding a person to a team notifies them"
   - field: org
     skip: "organization locator: a different value addresses another organization's object, it is not an update"
-  - field: parent
-    skip:
-      reason: write-only
-  - field: privacy
-    skip:
-      reason: write-only

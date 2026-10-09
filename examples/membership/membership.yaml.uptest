@@ -5,6 +5,7 @@ uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-membership.sh
 crossplane.io/update-test: |
   - field: role
     skip:
-      reason: write-only
+      reason: fixture-missing
+      evidence: "admin is the only other role an existing membership can be edited to, and the provider refuses to delete a membership whose role is admin, so patching it would leave an undeletable resource; the invitee this example needs is also an out-of-band prerequisite"
   - field: org
     skip: "organization locator: a different value addresses another organization's object, it is not an update"
