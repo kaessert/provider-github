@@ -75,6 +75,7 @@ var minimalObserveCases = map[string]struct {
 		reason: "A repository with no fields is public, which differs from the default of private.",
 		gh:     &github.Repository{},
 		want:   managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false},
+		ready:  xpv2.ReasonUnavailable,
 	},
 	"PrivateRepositoryWithNoOtherFields": {
 		reason: "A private repository with no other fields matches a spec that declares nothing.",
