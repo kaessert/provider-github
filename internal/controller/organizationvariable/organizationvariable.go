@@ -30,6 +30,7 @@ import (
 
 	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/controller/mgmtpolicy"
 )
 
 const (
@@ -62,11 +63,19 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
+	cr.Status.AtProvider.ID = name
+
 	ghVisibility := ""
 	if v.Visibility != nil {
 		ghVisibility = *v.Visibility
 	}
-	if v.Value != cr.Spec.ForProvider.Value || ghVisibility != cr.Spec.ForProvider.Visibility {
+	// An omitted visibility, or an omitted value under an Observe-only policy,
+	// is not compared.
+	p := cr.Spec.ForProvider
+	valueDrift := v.Value != p.Value && (p.Value != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies()))
+	visibilityDrift := p.Visibility != "" && ghVisibility != p.Visibility
+	if valueDrift || visibilityDrift {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
@@ -83,6 +92,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghclient.SortInt64(crIDs)
 		ghclient.SortInt64(ghIDs)
 		if !slices.Equal(crIDs, ghIDs) {
+			cr.SetConditions(xpv2.Unavailable())
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
 	}

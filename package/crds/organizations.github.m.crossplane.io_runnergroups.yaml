@@ -302,8 +302,6 @@ spec:
                     - selected
                     - private
                     type: string
-                required:
-                - visibility
                 type: object
               managementPolicies:
                 default:
@@ -439,6 +437,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: visibility is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)'
     served: true
     storage: true
     subresources:

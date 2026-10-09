@@ -524,6 +524,9 @@ type RepoFork struct {
 
 // RepositoryObservation are the observable fields of a Repository.
 type RepositoryObservation struct {
+	// ID is the external name of the repository on GitHub.
+	ID string `json:"id,omitempty"`
+
 	// Branch protection items GitHub did not apply on the last push, per declared rule.
 	UnappliedBranchProtection []UnappliedBranchProtection `json:"unappliedBranchProtection,omitempty"`
 	// Repository settings GitHub did not apply on the last push, with the value that was declared.

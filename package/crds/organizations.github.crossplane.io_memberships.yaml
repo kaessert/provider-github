@@ -190,8 +190,6 @@ spec:
                     type: object
                   role:
                     type: string
-                required:
-                - role
                 type: object
               managementPolicies:
                 default:
@@ -286,6 +284,10 @@ spec:
                 description: MembershipObservation are the observable fields of a
                   Membership.
                 properties:
+                  id:
+                    description: ID is the external name of the membership (the user's
+                      login) on GitHub.
+                    type: string
                   observableField:
                     type: string
                 type: object
@@ -353,6 +355,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: role is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.role)'
     served: true
     storage: true
     subresources:

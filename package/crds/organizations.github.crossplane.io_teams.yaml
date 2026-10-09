@@ -454,6 +454,9 @@ spec:
               atProvider:
                 description: TeamObservation are the observable fields of a Team.
                 properties:
+                  id:
+                    description: ID is the external name of the team on GitHub.
+                    type: string
                   observableField:
                     type: string
                 type: object

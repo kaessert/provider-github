@@ -67,7 +67,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	if s.Visibility != visibility {
+	cr.Status.AtProvider.ID = name
+
+	// An omitted visibility (an Observe-only import) is not compared.
+	if visibility != "" && s.Visibility != visibility {
 		cr.SetConditions(secretaccess.VisibilityMismatch(s.Visibility, visibility))
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
@@ -78,6 +81,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 		if !secretaccess.SameRepos(cr.Spec.ForProvider.SelectedRepositories, ghNames) {
+			cr.SetConditions(xpv2.Unavailable())
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
 	}

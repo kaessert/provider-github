@@ -29,7 +29,8 @@ import (
 
 // MembershipParameters are the configurable fields of a Membership.
 type MembershipParameters struct {
-	Role string `json:"role"`
+	// +optional
+	Role string `json:"role,omitempty"`
 
 	// Org is the Organization for the Membership
 	// +immutable
@@ -47,6 +48,9 @@ type MembershipParameters struct {
 
 // MembershipObservation are the observable fields of a Membership.
 type MembershipObservation struct {
+	// ID is the external name of the membership (the user's login) on GitHub.
+	ID string `json:"id,omitempty"`
+
 	ObservableField string `json:"observableField,omitempty"`
 }
 
@@ -78,6 +82,7 @@ type MembershipStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.role)",message="role is required unless managementPolicies is Observe-only"
 type Membership struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

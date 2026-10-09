@@ -241,10 +241,6 @@ spec:
                       The URL to which the payloads will be delivered. An existing
                       webhook with this URL is adopted.
                     type: string
-                required:
-                - contentType
-                - events
-                - url
                 type: object
               managementPolicies:
                 default:
@@ -409,6 +405,19 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: url is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.url)'
+        - message: contentType is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.contentType)'
+        - message: events is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.events)'
     served: true
     storage: true
     subresources:

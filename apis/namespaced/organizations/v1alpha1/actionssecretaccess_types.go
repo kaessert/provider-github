@@ -28,7 +28,7 @@ import (
 )
 
 // ActionsSecretAccessParameters are the configurable fields of an ActionsSecretAccess.
-// +kubebuilder:validation:XValidation:rule="self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
+// +kubebuilder:validation:XValidation:rule="!has(self.visibility) || self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
 type ActionsSecretAccessParameters struct {
 	// Org is the name of the GitHub organization that owns this secret.
 	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Organization
@@ -47,7 +47,8 @@ type ActionsSecretAccessParameters struct {
 	// "selected" but cannot change visibility itself; a mismatch with GitHub
 	// sets Ready=False with the reason.
 	// +kubebuilder:validation:Enum=all;private;selected
-	Visibility string `json:"visibility"`
+	// +optional
+	Visibility string `json:"visibility,omitempty"`
 
 	// SelectedRepositories lists the repositories that may use the secret.
 	// Only used (and required) when Visibility is "selected".
@@ -57,6 +58,8 @@ type ActionsSecretAccessParameters struct {
 
 // ActionsSecretAccessObservation are the observable fields of an ActionsSecretAccess.
 type ActionsSecretAccessObservation struct {
+	// ID is the external name of the secret on GitHub.
+	ID string `json:"id,omitempty"`
 }
 
 // An ActionsSecretAccessSpec defines the desired state of an ActionsSecretAccess.
@@ -87,6 +90,7 @@ type ActionsSecretAccessStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)",message="visibility is required unless managementPolicies is Observe-only"
 type ActionsSecretAccess struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
