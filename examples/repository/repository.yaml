@@ -1,0 +1,34 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-e2e-repository
+spec:
+  forProvider:
+    org: pgh-test
+    description: Crossplane provider-github example repository
+    private: true
+    # GitHub only deletes a repository when forceDelete is true; without it the
+    # managed resource cannot be removed.
+    forceDelete: true
+    topics:
+      - crossplane
+      - example
+    hasIssues: true
+    hasProjects: false
+    hasWiki: false
+    hasDiscussions: false
+    allowMergeCommit: true
+    allowSquashMerge: true
+    allowRebaseMerge: false
+    allowUpdateBranch: true
+    deleteBranchOnMerge: true
+    mergeCommitTitle: PR_TITLE
+    mergeCommitMessage: PR_BODY
+    squashMergeCommitTitle: PR_TITLE
+    squashMergeCommitMessage: PR_BODY
+    # Reference an Organization managed resource instead of naming the
+    # organization directly:
+    #   orgRef:
+    #     name: <Organization managed resource>
+  providerConfigRef:
+    name: default

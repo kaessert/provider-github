@@ -1,0 +1,25 @@
+for: organizations.github.m.crossplane.io/v1alpha1/OrganizationWebhook
+meta.upbound.io/example-id: organizations/v1alpha1/organizationwebhook
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-organization-webhook-namespaced.sh
+crossplane.io/update-test: |
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
+  - field: url
+    skip:
+      reason: write-only
+  - field: contentType
+    skip:
+      reason: write-only
+  - field: events
+    skip:
+      reason: write-only
+  - field: active
+    skip:
+      reason: write-only
+  - field: insecureSsl
+    skip:
+      reason: write-only
+  - field: secretKeyRef
+    skip:
+      reason: write-only

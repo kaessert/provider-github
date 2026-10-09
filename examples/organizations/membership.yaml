@@ -1,9 +1,0 @@
-apiVersion: organizations.github.crossplane.io/v1alpha1
-kind: Membership
-metadata:
-  name: pgh-sample-user
-spec:
-  forProvider:
-    orgRef: 
-      name: pgh-sample-organization
-    role: member

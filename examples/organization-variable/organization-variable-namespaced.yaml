@@ -1,0 +1,22 @@
+# The external name is the variable name. GitHub variable names are
+# upper-case letters, digits and underscores, which a Kubernetes object name
+# cannot be, so it is set explicitly.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-e2e-variable-ns
+  namespace: default
+  annotations:
+    crossplane.io/external-name: PGH_E2E_VARIABLE_NS
+spec:
+  forProvider:
+    org: pgh-test
+    value: example-value
+    visibility: all
+    # Restrict the variable to specific repositories:
+    #   visibility: selected
+    #   selectedRepositories:
+    #     - repo: <repository name>
+  providerConfigRef:
+    kind: ProviderConfig
+    name: default

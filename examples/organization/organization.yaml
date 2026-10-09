@@ -1,0 +1,14 @@
+# An Organization adopts an existing GitHub organization: the provider
+# cannot create or delete one. The external name is the organization login.
+# The cluster and namespaced examples manage the same organization.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Organization
+metadata:
+  name: pgh-test
+  annotations:
+    crossplane.io/external-name: pgh-test
+spec:
+  forProvider:
+    description: Crossplane provider-github example organization
+  providerConfigRef:
+    name: default

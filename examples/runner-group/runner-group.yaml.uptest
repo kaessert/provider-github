@@ -1,0 +1,19 @@
+for: organizations.github.crossplane.io/v1alpha1/RunnerGroup
+meta.upbound.io/example-id: organizations/v1alpha1/runnergroup
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-runner-group.sh
+crossplane.io/update-test: |
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
+  - field: visibility
+    skip:
+      reason: write-only
+  - field: selectedRepositories
+    skip:
+      reason: write-only
+  - field: allowsPublicRepositories
+    skip:
+      reason: write-only
+  - field: selectedWorkflows
+    skip:
+      reason: write-only

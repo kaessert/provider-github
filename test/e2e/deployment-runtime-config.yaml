@@ -1,0 +1,29 @@
+# E2E-only DeploymentRuntimeConfig template.
+#
+# Lowers the provider's --poll interval so the post-assert convergence checks
+# (test/hooks/run-update-tester.sh, test/hooks/converge-barrier.sh) do not wait
+# a full production poll cycle. It is applied only by
+# local.xpkg.deploy.provider.% on the controlplane.up path that `make e2e` and
+# `make e2e.<resource>` reach; it never touches production packaging, and the
+# provider's own default (cmd/provider/main.go) stays 1m.
+#
+# __E2E_POLL_INTERVAL__ is substituted by the `e2e-drc` Makefile target with the
+# current E2E_POLL_INTERVAL before the rendered copy is applied. Do not apply
+# this file with kubectl directly: always go through `make`, which performs the
+# substitution and also rewrites metadata.name and the package-runtime image.
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtimeconfig-e2e
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      strategy: {}
+      template:
+        spec:
+          containers:
+            - name: package-runtime
+              args:
+                - --debug
+                - --poll=__E2E_POLL_INTERVAL__

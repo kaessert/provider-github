@@ -17,6 +17,15 @@ endif
 PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
 
 PLATFORMS ?= linux_amd64 linux_arm64
+
+# Source .env credentials for E2E tests if present (optional fallback).
+# Primary credential source: environment variables / CI secrets.
+# .env format is KEY=VALUE (no `export` prefix) -- valid GNU Make syntax.
+# Note: ROOT_DIR is not yet set (common.mk sets it), so we use CURDIR.
+ifneq (,$(wildcard $(CURDIR)/../.env))
+  include $(CURDIR)/../.env
+  export
+endif
 GOLANGCILINT_VERSION ?= 2.12.2
 # VERSION guard: reachability, not just existence, of git tags.
 #
@@ -238,24 +247,330 @@ reviewable: test.tools
 
 CROSSPLANE_VERSION = 2.2.1
 CROSSPLANE_CLI_VERSION = v2.2.1
+-include build/makelib/local.xpkg.mk
 -include build/makelib/controlplane.mk
 
 # NOTE(hasheddan): we force image building to happen prior to xpkg build so that
 # we ensure image is present in daemon.
 xpkg.build.provider-github: do.build.images
 
+# ====================================================================================
+# End to End Testing
+
+# Setup Uptest
+#
+# uptest fork -- carries --post-assert-script (upstream crossplane/uptest#65,
+# unreleased) plus two merged-but-unreleased upstream fixes: `crossplane beta
+# trace -n <namespace>` for dual-scope managed resources (#52) and
+# --skip-webhook-check, which drops two remote fetches and two hard 10s sleeps
+# per invocation for a provider with no conversion webhooks (#60).
+#
+# k8s_tools.mk's own $(TOOLS_HOST_DIR)/uptest-$(UPTEST_VERSION) recipe stays
+# untouched -- overriding UPTEST_VERSION alone 404s, because its download rule
+# hardcodes the upstream org. This block instead points UPTEST at a NEW filename
+# under the same $(TOOLS_HOST_DIR) and supplies its own download recipe for that
+# filename, so the two never collide on one make target. $(TOOLS_HOST_DIR) can be
+# hardlinked from a shared cross-worktree tool cache, so reusing the stock
+# uptest-$(UPTEST_VERSION) path here would swap the binary under another
+# worktree's concurrently-running E2E.
+#
+# Retirement: delete this block and revert to plain UPTEST_VERSION the moment
+# upstream ships a release containing #52, #60 and #65.
+UPTEST_FORK_REPO := kaessert/uptest
+UPTEST_FORK_REF  := v2.3.0-fork.e21896e
+UPTEST           := $(TOOLS_HOST_DIR)/uptest-fork-$(UPTEST_FORK_REF)
+
+$(UPTEST):
+	@$(INFO) installing uptest fork $(UPTEST_FORK_REF)
+	@mkdir -p $(TOOLS_HOST_DIR)
+	@curl -fsSLo $(UPTEST) https://github.com/$(UPTEST_FORK_REPO)/releases/download/$(UPTEST_FORK_REF)/uptest_$(SAFEHOSTPLATFORM) || $(FAIL)
+	@chmod +x $(UPTEST)
+	@$(OK) installing uptest fork $(UPTEST_FORK_REF)
+
+UPTEST_LOCAL_DEPLOY_TARGET = local-deploy
+# uptest's built-in default process budget is 1200s, which is shorter than a
+# single multi-resource apply stage once post-assert update-test hooks run.
+UPTEST_DEFAULT_TIMEOUT ?= 3600s
+
+# The GitHub organization every example manages. It is a recorded fact about the
+# test environment, not something derived from the credentials. The examples
+# name this organization literally, so changing it means changing them too;
+# e2e-preflight fails when the two disagree.
+E2E_ORG ?= pgh-test
+export E2E_ORG
+
+# ----------------------------------------------------------------------------------
+# E2E poll interval -- single source of truth
+#
+# The post-assert converge/run checks wait a multiple of the provider's --poll
+# interval to prove the controller has stopped reconciling, not just that it has
+# not ticked yet. At the production default (--poll=1m) those waits dominate E2E
+# wall-clock time. This variable lowers BOTH sides of that wait -- the E2E
+# controlplane's --poll flag AND the update-tester wait windows -- from one
+# place, so neither can change without the other following. Lowering only the
+# tester side would shrink its drift-detection sleep below a real reconcile cycle
+# and silently stop catching the reconcile-loop bug class it exists to catch.
+#
+# `?=` keeps this overridable per invocation (e.g. `make e2e.repository
+# E2E_POLL_INTERVAL=30s`).
+E2E_POLL_INTERVAL ?= 10s
+
+# Rendered E2E-only DeploymentRuntimeConfig. test/e2e/deployment-runtime-config.yaml
+# is the checked-in template (placeholder: __E2E_POLL_INTERVAL__); the e2e-drc
+# target below substitutes the current E2E_POLL_INTERVAL and writes the result
+# here. build/makelib/local.xpkg.mk's local.xpkg.deploy.provider.% rule applies
+# $(DRC_FILE) instead of its own built-in default, but only on the
+# controlplane.up path (local-deploy, below), which `make e2e` and
+# `make e2e.<resource>` reach. It never touches production packaging.
+DRC_FILE := $(CACHE_DIR)/e2e-deployment-runtime-config.yaml
+
+# Reaches update-tester's `converge` (drift-detection sleep = 1.5x this value)
+# and `run` (slow-observe bar = 0.5x this value) steps via
+# test/hooks/run-update-tester.sh and test/hooks/converge-barrier.sh, both of
+# which read it from the environment.
+#
+# E2E_POLL_INTERVAL is the ONLY supported knob for this pairing: `override`
+# makes a command-line or environment attempt to set UPDATE_TESTER_POLL_INTERVAL
+# directly be ignored, which would otherwise unpair the two. The assignment MUST
+# stay recursive (`=`, not `:=`) so a target-specific E2E_POLL_INTERVAL reaches
+# both knobs.
+export override UPDATE_TESTER_POLL_INTERVAL = $(E2E_POLL_INTERVAL)
+
+# Bounds the update-tester's per-field poll and its converge pre-check. At file
+# scope so the default `make e2e` goal, which has no per-resource target in
+# scope, gets it too. `?=` keeps a caller's own value winning.
+UPDATE_TESTER_TIMEOUT ?= 300
+export UPDATE_TESTER_TIMEOUT
+
+# Renders test/e2e/deployment-runtime-config.yaml's placeholder into $(DRC_FILE).
+#
+# This cannot be wired as a prerequisite of local.xpkg.deploy.provider.%: GNU
+# Make does not merge a second pattern rule's prerequisites onto a stem that
+# already matched a pattern rule with a recipe. It is listed FIRST in the same
+# rule statement as local.xpkg.deploy.provider.$(PROJECT_NAME) on the
+# `local-deploy:` line below instead; in serial (non -j) mode one rule's
+# prerequisites build strictly left to right, so the render finishes before the
+# deploy recipe reads $(DRC_FILE). E2E is not invoked with -j.
+#
+# $(YQ) is an explicit prerequisite because the deploy recipe reads it but, as a
+# pattern rule, cannot pick up a prerequisite that downloads it.
+.PHONY: e2e-drc
+e2e-drc: $(YQ)
+	@mkdir -p $(CACHE_DIR)
+	@sed -e 's/--poll=__E2E_POLL_INTERVAL__/--poll=$(E2E_POLL_INTERVAL)/' \
+	     test/e2e/deployment-runtime-config.yaml > $(DRC_FILE)
+
+# local-deploy: load the provider image into the kind cluster and deploy the
+# xpkg. Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET and by CI
+# (`make controlplane.up local-deploy`). e2e-drc MUST stay first in this list.
+.PHONY: local-deploy
+local-deploy: e2e-drc local.xpkg.deploy.provider.$(PROJECT_NAME)
+
+# Helper variables for comma-separated manifest lists (uptest CLI convention).
+# uptest expects a single comma-separated string, not space-separated.
+comma := ,
+empty :=
+space := $(empty) $(empty)
+
+# Per-resource manifest variables. A resource whose cluster and namespaced MRs
+# address distinct external objects lists BOTH scope variants as a comma pair, so
+# one uptest pass gates cluster and namespaced together. Every example uses its
+# own external name so the two scopes can run at once.
+#
+# Sorted alphabetically by resource name so a new resource's addition lands at a
+# distinct diff hunk instead of colliding with a concurrent addition.
+#
+# GATED: ActionsSecretAccess manages access to an organization Actions secret that
+# must already exist; the provider never creates it and the test organization
+# carries no disposable one.
+UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS := examples/actions-secret-access/actions-secret-access.yaml,examples/actions-secret-access/actions-secret-access-namespaced.yaml
+# GATED: DependabotSecretAccess manages access to an organization Dependabot secret
+# that must already exist; the provider never creates it and the test organization
+# carries no disposable one.
+UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS := examples/dependabot-secret-access/dependabot-secret-access.yaml,examples/dependabot-secret-access/dependabot-secret-access-namespaced.yaml
+# GATED: Membership invites a real GitHub user to the organization, which the
+# credentials alone cannot do for a throwaway account.
+UPTEST_MANIFESTS_MEMBERSHIP := examples/membership/membership.yaml,examples/membership/membership-namespaced.yaml
+# GATED: Organization adopts the shared test organization, which the provider can
+# neither create nor delete. Both scopes manage that one organization, so they run
+# as two sequential passes (the _NS variable) rather than a comma pair.
+UPTEST_MANIFESTS_ORGANIZATION := examples/organization/organization.yaml
+UPTEST_MANIFESTS_ORGANIZATION_NS := examples/organization/organization-namespaced.yaml
+UPTEST_MANIFESTS_ORGANIZATION_VARIABLE := examples/organization-variable/organization-variable.yaml,examples/organization-variable/organization-variable-namespaced.yaml
+UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK := examples/organization-webhook/organization-webhook.yaml,examples/organization-webhook/organization-webhook-namespaced.yaml
+UPTEST_MANIFESTS_REPOSITORY := examples/repository/repository.yaml,examples/repository/repository-namespaced.yaml
+UPTEST_MANIFESTS_RUNNER_GROUP := examples/runner-group/runner-group.yaml,examples/runner-group/runner-group-namespaced.yaml
+UPTEST_MANIFESTS_TEAM := examples/team/team.yaml,examples/team/team-namespaced.yaml
+
+# E2E manifest tiers
+# CORE: resources that need nothing beyond the GitHub App credentials and the test organization.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
+# GATED: resources that need an out-of-band prerequisite (an existing organization secret,
+# an inviteable user, the shared organization itself).
+UPTEST_MANIFESTS_GATED = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_MEMBERSHIP),$(UPTEST_MANIFESTS_ORGANIZATION),$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+
+# ALL: every resource example, discovered via wildcard (excludes examples/provider/).
+# Diagnostic only, never a gate.
+_UPTEST_MANIFESTS_ALL_RAW := $(filter-out examples/provider/%,$(wildcard examples/*/*.yaml))
+UPTEST_MANIFESTS_ALL := $(subst $(space),$(comma),$(_UPTEST_MANIFESTS_ALL_RAW))
+
+# Default e2e input: CORE manifests (can be overridden per-target below).
+UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
+
+UPTEST_SETUP_SCRIPT ?= test/setup.sh
+
+# Per-run uptest test-directory isolation (each concurrent E2E run gets its own
+# staging directory) -- without this, concurrent E2E runs share /tmp/uptest-e2e
+# and corrupt each other's staged chainsaw test files.
+#
+# CASE_DIR points the shared convergence barrier (test/hooks/converge-barrier.sh)
+# at uptest's own rendered manifests for this run -- never examples/, whose
+# sources still carry unsubstituted placeholders. It shares the same
+# KIND_CLUSTER_NAME-derived root as --test-directory above, so concurrent runs
+# cannot read each other's staged manifests. --post-assert-script runs ONE shared
+# convergence barrier per test run, after every resource's own assertions pass.
+ifdef KIND_CLUSTER_NAME
+  UPTEST_ARGS += --test-directory=/tmp/uptest-e2e-$(KIND_CLUSTER_NAME)
+  export CASE_DIR = /tmp/uptest-e2e-$(KIND_CLUSTER_NAME)/case
+  UPTEST_ARGS += --post-assert-script=$(abspath test/hooks/converge-barrier.sh)
+endif
+
+-include build/makelib/uptest.mk
+
+# Minimum free disk space (GB) required on / before running E2E. A full root
+# filesystem does not announce itself -- it surfaces as a build or pod failure
+# that never mentions disk, 30+ minutes into an uptest run, as a bogus PROVIDER
+# failure. Override on the command line if needed.
+E2E_MIN_FREE_GB ?= 15
+
+# Pre-flight: validate free disk space and the GitHub App credentials before any E2E run.
+e2e-preflight: ## Validate disk space and GitHub App credentials before E2E
+	@FREE=$$(df -BG --output=avail / | tail -1 | tr -dc '0-9'); \
+	if [ "$$FREE" -lt "$(E2E_MIN_FREE_GB)" ]; then \
+	  echo "ERROR: only $${FREE}GB free on / -- E2E needs >= $(E2E_MIN_FREE_GB)GB." >&2; \
+	  echo "  A full disk fails E2E as a BOGUS PROVIDER error 30+ min from now." >&2; \
+	  echo "  Reclaim: docker image prune -f; rm -rf /tmp/tmp.* /tmp/go-build*;" >&2; \
+	  echo "           delete unused kind clusters (kind delete cluster --name <name>);" >&2; \
+	  echo "           trim \$$(go env GOCACHE) (oldest-first, keep it under ~30GB)." >&2; \
+	  exit 1; \
+	fi; \
+	echo "e2e-preflight: disk OK ($${FREE}GB free, >= $(E2E_MIN_FREE_GB)GB required)"
+	@./test/preflight.sh || exit 1
+
+# `e2e: e2e-preflight` looks like a preflight but is not one: build/makelib/uptest.mk
+# already declares `e2e: build controlplane.down controlplane.up ... uptest`, and a
+# second rule for the same target only APPENDS to that prerequisite list. `e2e` has
+# no recipe of its own, so a prerequisite added here lands at the END -- the guard
+# would print its verdict after the tests it exists to gate have already run.
+#
+# Attach the guard instead to `build` -- the first prerequisite in uptest.mk's e2e
+# chain, and one that HAS a recipe -- gated on the top-level goal so a plain
+# `make build` never starts requiring GitHub credentials:
+build: $(if $(filter e2e e2e.%,$(MAKECMDGOALS)),e2e-preflight,)
+
+# The MAKECMDGOALS filter above is not optional polish. `build` is the documented
+# public entry point of this repo, so an unconditional `build: e2e-preflight` would
+# make compiling the binary require a live GitHub App. The filter must list every
+# E2E entry point this Makefile defines that `e2e.%` cannot match (`-` is not `.`).
+# This provider defines no `e2e-full` aggregate, so `e2e e2e.%` is complete today.
+# A target whose recipe shells out via recursive `$(MAKE) e2e ...` needs no entry:
+# the sub-make's own MAKECMDGOALS is `e2e`.
+
+# Pin VERSION for the e2e path. local.xpkg.mk derives the package cache key by
+# stripping the version off the xpkg filename and writes the Provider CR with the
+# bare PROJECT_NAME. They agree only when VERSION matches -v<d>.<d>.<d>*.xpkg;
+# otherwise the provider hangs at Installed=False reason=UnpackingPackage.
+e2e e2e.%: VERSION := v0.0.0-e2e
+
+# Per-resource E2E target blocks, sorted alphabetically by resource name.
+
+# GATED: requires an existing organization Actions secret named in the example.
+e2e.actions-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS)
+e2e.actions-secret-access: e2e
+
+# GATED: requires an existing organization Dependabot secret named in the example.
+e2e.dependabot-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS)
+e2e.dependabot-secret-access: e2e
+
+# GATED: invites a real GitHub user; set the external name to a login that may be invited.
+e2e.membership: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_MEMBERSHIP)
+e2e.membership: e2e
+
+e2e.organization-variable: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE)
+e2e.organization-variable: e2e
+
+e2e.organization-webhook: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK)
+e2e.organization-webhook: e2e
+
+# Listed after organization-variable and organization-webhook because the target
+# blocks are kept in byte order with the colon, and `-` sorts before `:`.
+# GATED: adopts the shared test organization, which can be neither created nor
+# deleted. Both scopes manage that one organization, so they run as two sequential
+# passes instead of a comma pair.
+e2e.organization: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION)
+e2e.organization: e2e
+	@$(MAKE) e2e UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+
+e2e.repository: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY)
+e2e.repository: e2e
+
+e2e.runner-group: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RUNNER_GROUP)
+e2e.runner-group: e2e
+
+e2e.team: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_TEAM)
+e2e.team: e2e
+
+# One dotted per-resource target per .PHONY line, sorted, so two concurrent waves
+# adding different resources land on distinct lines instead of the same shared line.
+.PHONY: e2e-preflight
+.PHONY: e2e.actions-secret-access
+.PHONY: e2e.dependabot-secret-access
+.PHONY: e2e.membership
+.PHONY: e2e.organization
+.PHONY: e2e.organization-variable
+.PHONY: e2e.organization-webhook
+.PHONY: e2e.repository
+.PHONY: e2e.runner-group
+.PHONY: e2e.team
+
+# ====================================================================================
+# Update-Tester Targets
+#
+# The update tester is consumed as a pinned module from tools/update-tester (a stub
+# module holding only go.mod/go.sum, no vendored source), so there is no build
+# step: `go -C` runs it directly from the module cache. Every path handed across
+# that boundary is absolute, because `go -C tools/update-tester` changes the child
+# process's working directory.
+#
+# Per-field update tests run live inside the uptest flow, through the
+# post-assert-hook symlinks in test/hooks/. update-test.validate is the offline
+# half: a static coverage gate that reads the example YAML and the generated Go
+# types and needs no cluster.
+UPDATE_TESTER := go -C tools/update-tester tool crossplane-update-tester
+
+# update-test.validate: annotation-coverage gate. Runs `validate` against every
+# example manifest that carries a crossplane.io/update-test: annotation KEY, so a
+# field silently dropped from an annotation is caught. The candidate list is the
+# union of an annotation still inline and one that lives in a
+# `<manifest>.yaml.uptest` sidecar (stripped back to the manifest path the tool
+# reads); a *.yaml-only glob would go blind and validate nothing the moment
+# annotations migrate to sidecars. The tool resolves each manifest's types file
+# itself from --root, by the manifest's scope and Kind.
+update-test.validate:
+	@fail=0; \
+	for f in $$( { grep -rl 'crossplane.io/update-test:' examples --include='*.yaml'; \
+	  find examples -name '*.yaml.uptest' -exec grep -l 'crossplane.io/update-test:' {} \; \
+	    | sed 's/\.uptest$$//'; } | sort -u); do \
+	  echo "=== $$f ==="; \
+	  $(UPDATE_TESTER) validate --root "$$PWD" "$$PWD/$$f" || fail=1; \
+	done; \
+	exit $$fail
+
+.PHONY: update-test.validate
+
 fallthrough: submodules
 	@echo Initial setup complete. Running make again . . .
 	@make
-
-# integration tests
-e2e.run: test-integration
-
-# Run integration tests.
-test-integration: $(KIND) $(KUBECTL) $(HELM3)
-	@$(INFO) running integration tests using kind $(KIND_VERSION)
-	@KIND_NODE_IMAGE_TAG=${KIND_NODE_IMAGE_TAG} $(ROOT_DIR)/cluster/local/integration_tests.sh || $(FAIL)
-	@$(OK) integration tests passed
 
 # Update the submodules, such as the common build scripts.
 submodules:
@@ -296,7 +611,7 @@ dev-clean: $(KIND) $(KUBECTL)
 	@$(INFO) Deleting kind cluster
 	@$(KIND) delete cluster --name=$(PROJECT_NAME)-dev
 
-.PHONY: submodules fallthrough test-integration run dev dev-clean
+.PHONY: submodules fallthrough run dev dev-clean
 
 # ====================================================================================
 # Special Targets

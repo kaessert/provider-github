@@ -1,0 +1,19 @@
+for: organizations.github.m.crossplane.io/v1alpha1/Team
+meta.upbound.io/example-id: organizations/v1alpha1/team
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-team-namespaced.sh
+crossplane.io/update-test: |
+  - field: description
+    skip:
+      reason: write-only
+  - field: members
+    skip:
+      reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
+  - field: parent
+    skip:
+      reason: write-only
+  - field: privacy
+    skip:
+      reason: write-only

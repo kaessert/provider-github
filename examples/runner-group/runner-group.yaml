@@ -1,0 +1,15 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: RunnerGroup
+metadata:
+  name: pgh-e2e-runner-group
+spec:
+  forProvider:
+    org: pgh-test
+    visibility: all
+    allowsPublicRepositories: false
+    # Restrict the group to specific repositories:
+    #   visibility: selected
+    #   selectedRepositories:
+    #     - repo: <repository name>
+  providerConfigRef:
+    name: default

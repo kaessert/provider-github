@@ -1,0 +1,10 @@
+for: organizations.github.m.crossplane.io/v1alpha1/Membership
+meta.upbound.io/example-id: organizations/v1alpha1/membership
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-membership-namespaced.sh
+crossplane.io/update-test: |
+  - field: role
+    skip:
+      reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
