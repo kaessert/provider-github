@@ -101,6 +101,7 @@ type SecretConfiguration struct {
 
 // OrganizationParameters are the configurable fields of a Organization.
 type OrganizationParameters struct {
+	// +optional
 	Description string               `json:"description"`
 	Actions     ActionsConfiguration `json:"actions,omitempty"`
 
@@ -111,6 +112,9 @@ type OrganizationParameters struct {
 
 // OrganizationObservation are the observable fields of a Organization.
 type OrganizationObservation struct {
+	// ID is the external name of the organization on GitHub.
+	ID string `json:"id,omitempty"`
+
 	Description string `json:"description,omitempty"`
 }
 
@@ -142,6 +146,7 @@ type OrganizationStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.description)",message="description is required unless managementPolicies is Observe-only"
 type Organization struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

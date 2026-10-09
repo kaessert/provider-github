@@ -123,6 +123,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
+	cr.Status.AtProvider.ID = name
+
 	notUpToDate := managed.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: false,

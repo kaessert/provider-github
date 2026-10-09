@@ -320,6 +320,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.ID = name
 
 	categorized, err := categorizeMembers(ctx, c.github, cr.Spec.ForProvider.Org, teamSlug, cr.Spec.ForProvider.Members)
 	if err != nil {
@@ -339,6 +340,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	setTeamMembershipPartialCondition(ctx, cr, categorized.pendingOrg, categorized.pendingTeam, categorized.roleEnforced)
 
 	if structuralDrift || categorized.hasMemberDrift() {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: false,

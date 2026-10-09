@@ -34,6 +34,7 @@ import (
 
 	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/controller/mgmtpolicy"
 
 	"github.com/google/go-github/v90/github"
 )
@@ -152,6 +153,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
+	cr.Status.AtProvider.ID = name
+
 	notUpToDate := managed.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: false,
@@ -201,7 +204,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
-	if cr.Spec.ForProvider.Description != pointer.Deref(org.Description, "") {
+	// An omitted description (an Observe-only import) is not compared; under a
+	// policy that writes, an empty description is a declared one.
+	desc := cr.Spec.ForProvider.Description
+	if (desc != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())) && desc != pointer.Deref(org.Description, "") {
 		return notUpToDate, nil
 	}
 

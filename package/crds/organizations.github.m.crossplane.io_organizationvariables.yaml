@@ -287,9 +287,6 @@ spec:
                     - private
                     - selected
                     type: string
-                required:
-                - value
-                - visibility
                 type: object
               managementPolicies:
                 default:
@@ -356,6 +353,10 @@ spec:
               atProvider:
                 description: OrganizationVariableObservation are the observable fields
                   of a OrganizationVariable.
+                properties:
+                  id:
+                    description: ID is the external name of the variable on GitHub.
+                    type: string
                 type: object
               conditions:
                 description: Conditions of the resource.
@@ -421,6 +422,15 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: value is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.value)'
+        - message: visibility is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)'
     served: true
     storage: true
     subresources:

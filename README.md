@@ -234,6 +234,22 @@ A resource without the block reconciles exactly as before, which is the same as
 `False` (`reason: InSync`) when `mode: warn` finds none. It reports that drift
 occurred, not which fields differ.
 
+#### Ready while drift is corrected
+
+When the provider finds a resource that exists on GitHub but differs from the
+spec, it sets `Ready=False` (`reason: Unavailable`) until a later poll finds it
+in sync. `Organization` and `Repository` do not do this yet: their `Ready` stays
+`True` while drift is corrected. With `mode: enabled` that is about one poll cycle per correction: the
+update runs, and the next reconcile sets `Ready=True`. Resources that already
+report their own `Ready=False` reason (for example `SecretNotFound` or
+`VisibilityMismatch` on `ActionsSecretAccess` and `DependabotSecretAccess`) keep
+that reason.
+
+`mode: warn` and `mode: disabled` stop the correction but do not clear this
+condition. While drift is left uncorrected, `Ready` therefore **stays `False`**
+for as long as the drift lasts, not for one poll cycle. It returns to `True`
+once the spec and GitHub agree again.
+
 #### Ignoring fields owned elsewhere
 
 `spec.driftDetection.ignore[].paths` names `forProvider` fields that something
@@ -253,6 +269,33 @@ reconciled until the path is removed. The organization, `url` and the reference
 fields that address a resource (`org`, `orgRef`, `orgSelector`) can never be
 ignored. `mode: warn` and `mode: disabled` need no ignore paths and work on
 every kind.
+
+### Observe-only import
+
+`spec.managementPolicies: ["Observe"]` adopts an existing GitHub object without
+managing it. An Observe-only resource may leave out the create-time fields that
+are otherwise required, and the provider does not compare a field it is not
+given:
+
+| Kind | Fields that may be omitted |
+|---|---|
+| `ActionsSecretAccess`, `DependabotSecretAccess`, `RunnerGroup` | `visibility` |
+| `OrganizationVariable` | `visibility`, `value` |
+| `Membership` | `role` |
+| `Organization` | `description` |
+| `OrganizationWebhook` | `url`, `contentType`, `events` |
+
+These fields are required again as soon as `managementPolicies` contains `*` (the
+default), `Create` or `Update`; the API server rejects the resource without
+them. The object is addressed by its external name
+(`crossplane.io/external-name`). An `OrganizationWebhook` with a numeric
+external name is read by that ID; without one it is found by `url`, so an
+Observe-only webhook needs one of the two.
+
+`status.atProvider.id` holds the external name on `ActionsSecretAccess`,
+`DependabotSecretAccess`, `Membership`, `Organization`, `OrganizationVariable`,
+`Repository` and `Team`. `OrganizationWebhook` and `RunnerGroup` keep the
+numeric GitHub ID they already report there.
 
 ### crossplane-runtime v2: removed features and always-on management policies
 

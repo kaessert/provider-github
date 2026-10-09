@@ -1029,6 +1029,9 @@ spec:
                 description: RepositoryObservation are the observable fields of a
                   Repository.
                 properties:
+                  id:
+                    description: ID is the external name of the repository on GitHub.
+                    type: string
                   unappliedBranchProtection:
                     description: Branch protection items GitHub did not apply on the
                       last push, per declared rule.

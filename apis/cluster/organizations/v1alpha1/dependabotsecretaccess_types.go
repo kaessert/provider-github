@@ -28,7 +28,7 @@ import (
 )
 
 // DependabotSecretAccessParameters are the configurable fields of a DependabotSecretAccess.
-// +kubebuilder:validation:XValidation:rule="self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
+// +kubebuilder:validation:XValidation:rule="!has(self.visibility) || self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
 type DependabotSecretAccessParameters struct {
 	// Org is the name of the GitHub organization that owns this secret.
 	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
@@ -47,7 +47,8 @@ type DependabotSecretAccessParameters struct {
 	// "selected" but cannot change visibility itself; a mismatch with GitHub
 	// sets Ready=False with the reason.
 	// +kubebuilder:validation:Enum=all;private;selected
-	Visibility string `json:"visibility"`
+	// +optional
+	Visibility string `json:"visibility,omitempty"`
 
 	// SelectedRepositories lists the repositories that may use the secret.
 	// Only used (and required) when Visibility is "selected".
@@ -57,6 +58,8 @@ type DependabotSecretAccessParameters struct {
 
 // DependabotSecretAccessObservation are the observable fields of a DependabotSecretAccess.
 type DependabotSecretAccessObservation struct {
+	// ID is the external name of the secret on GitHub.
+	ID string `json:"id,omitempty"`
 }
 
 // A DependabotSecretAccessSpec defines the desired state of a DependabotSecretAccess.
@@ -87,6 +90,7 @@ type DependabotSecretAccessStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)",message="visibility is required unless managementPolicies is Observe-only"
 type DependabotSecretAccess struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

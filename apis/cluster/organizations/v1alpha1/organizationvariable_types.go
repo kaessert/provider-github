@@ -58,11 +58,13 @@ type OrganizationVariableParameters struct {
 	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Value of the variable.
+	// +optional
 	Value string `json:"value"`
 
 	// Visibility controls which repositories can access this variable.
 	// +kubebuilder:validation:Enum=all;private;selected
-	Visibility string `json:"visibility"`
+	// +optional
+	Visibility string `json:"visibility,omitempty"`
 
 	// SelectedRepositories lists repositories that have access to the
 	// variable. Only used (and required) when Visibility is "selected".
@@ -72,6 +74,8 @@ type OrganizationVariableParameters struct {
 
 // OrganizationVariableObservation are the observable fields of a OrganizationVariable.
 type OrganizationVariableObservation struct {
+	// ID is the external name of the variable on GitHub.
+	ID string `json:"id,omitempty"`
 }
 
 // A OrganizationVariableSpec defines the desired state of a OrganizationVariable.
@@ -102,6 +106,8 @@ type OrganizationVariableStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.value)",message="value is required unless managementPolicies is Observe-only"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)",message="visibility is required unless managementPolicies is Observe-only"
 type OrganizationVariable struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

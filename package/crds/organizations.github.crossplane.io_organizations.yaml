@@ -420,8 +420,6 @@ spec:
                           type: object
                         type: array
                     type: object
-                required:
-                - description
                 type: object
               managementPolicies:
                 default:
@@ -518,6 +516,9 @@ spec:
                 properties:
                   description:
                     type: string
+                  id:
+                    description: ID is the external name of the organization on GitHub.
+                    type: string
                 type: object
               conditions:
                 description: Conditions of the resource.
@@ -583,6 +584,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: description is required unless managementPolicies is Observe-only
+          rule: '!has(self.spec) || !has(self.spec.managementPolicies) || !(''*''
+            in self.spec.managementPolicies || ''Create'' in self.spec.managementPolicies
+            || ''Update'' in self.spec.managementPolicies) || has(self.spec.forProvider.description)'
     served: true
     storage: true
     subresources:

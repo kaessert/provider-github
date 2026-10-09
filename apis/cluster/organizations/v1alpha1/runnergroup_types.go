@@ -65,7 +65,8 @@ type RunnerGroupParameters struct {
 
 	// Visibility controls which repositories can use this runner group.
 	// +kubebuilder:validation:Enum=all;selected;private
-	Visibility string `json:"visibility"`
+	// +optional
+	Visibility string `json:"visibility,omitempty"`
 
 	// SelectedRepositories lists repositories that can use the runner
 	// group. Only used when Visibility is "selected".
@@ -119,6 +120,7 @@ type RunnerGroupStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.visibility)",message="visibility is required unless managementPolicies is Observe-only"
 type RunnerGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

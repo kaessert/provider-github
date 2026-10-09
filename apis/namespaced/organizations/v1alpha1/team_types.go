@@ -97,6 +97,9 @@ type TeamMemberTeam struct {
 
 // TeamObservation are the observable fields of a Team.
 type TeamObservation struct {
+	// ID is the external name of the team on GitHub.
+	ID string `json:"id,omitempty"`
+
 	ObservableField string `json:"observableField,omitempty"`
 }
 

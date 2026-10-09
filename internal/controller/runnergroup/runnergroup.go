@@ -67,10 +67,12 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
-	if g.GetVisibility() != p.Visibility ||
+	// An omitted visibility (an Observe-only import) is not compared.
+	if (p.Visibility != "" && g.GetVisibility() != p.Visibility) ||
 		g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories ||
 		g.GetRestrictedToWorkflows() != (len(want) > 0) ||
 		!util.EqualUnordered(g.SelectedWorkflows, want) {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
@@ -84,6 +86,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 		if !upToDate {
+			cr.SetConditions(xpv2.Unavailable())
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
 	}

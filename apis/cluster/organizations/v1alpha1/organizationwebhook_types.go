@@ -43,14 +43,17 @@ type OrganizationWebhookParameters struct {
 
 	// The URL to which the payloads will be delivered. An existing
 	// webhook with this URL is adopted.
-	URL string `json:"url"`
+	// +optional
+	URL string `json:"url,omitempty"`
 
 	// The media type used to serialize the payloads. Supported values include json and form.
 	// +kubebuilder:validation:Enum=json;form
-	ContentType string `json:"contentType"`
+	// +optional
+	ContentType string `json:"contentType,omitempty"`
 
 	// Determines what events the hook is triggered for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
 	// +kubebuilder:validation:MinItems=1
+	// +optional
 	Events []string `json:"events"`
 
 	// Determines if notifications are sent when the webhook is triggered.
@@ -106,6 +109,9 @@ type OrganizationWebhookStatus struct {
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.url)",message="url is required unless managementPolicies is Observe-only"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.contentType)",message="contentType is required unless managementPolicies is Observe-only"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.events)",message="events is required unless managementPolicies is Observe-only"
 type OrganizationWebhook struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

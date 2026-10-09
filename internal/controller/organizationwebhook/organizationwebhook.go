@@ -87,6 +87,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if !configUpToDate(h, p) {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false, ResourceLateInitialized: lateInit}, nil
 	}
 	secretOK, err := c.secretUpToDate(ctx, cr, h)
@@ -94,6 +95,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 	if !secretOK {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false, ResourceLateInitialized: lateInit}, nil
 	}
 
@@ -101,11 +103,12 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true, ResourceLateInitialized: lateInit}, nil
 }
 
-// configUpToDate compares every hook field except the secret.
+// configUpToDate compares every hook field except the secret. A url,
+// contentType or events the spec omits (an Observe-only import) is not compared.
 func configUpToDate(h *github.Hook, p v1alpha1.OrganizationWebhookParameters) bool {
-	return h.Config.GetURL() == p.URL &&
-		h.Config.GetContentType() == p.ContentType &&
-		util.EqualUnordered(h.Events, p.Events) &&
+	return (p.URL == "" || h.Config.GetURL() == p.URL) &&
+		(p.ContentType == "" || h.Config.GetContentType() == p.ContentType) &&
+		(len(p.Events) == 0 || util.EqualUnordered(h.Events, p.Events)) &&
 		h.GetActive() == pointer.Deref(p.Active, true) &&
 		(h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSSL, false)
 }
@@ -182,6 +185,11 @@ func (c *external) findHook(ctx context.Context, cr *v1alpha1.OrganizationWebhoo
 			return nil, nil
 		}
 		return h, err
+	}
+
+	// Without a url there is nothing to match a hook by.
+	if cr.Spec.ForProvider.URL == "" {
+		return nil, nil
 	}
 
 	opts := &github.ListOptions{PerPage: 100}
