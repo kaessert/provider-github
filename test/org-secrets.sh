@@ -127,13 +127,24 @@ case "${1:-}" in
     ;;
   watch)
     KUBECTL="${KUBECTL:-kubectl}"
-    # Six consecutive failed readiness probes, ten seconds apart, mean the
-    # cluster is gone rather than briefly unreachable. The deadline bounds a
-    # watcher whose cluster outlives any plausible run.
+    # Pin the cluster this watcher belongs to. The ambient kubeconfig can fall
+    # back to a different cluster once this one is deleted, so the probe reads a
+    # private copy of the current context and also compares the kube-system
+    # namespace UID: a cluster that reuses the address is not this cluster.
+    kubeconfig="$(mktemp)"
+    trap 'rm -f "${kubeconfig}"' EXIT
+    "${KUBECTL}" config view --minify --flatten > "${kubeconfig}" 2>/dev/null \
+      || fail "watch: cannot read the current kubeconfig context"
+    probe() { "${KUBECTL}" --kubeconfig "${kubeconfig}" --request-timeout=10s get namespace kube-system -o 'jsonpath={.metadata.uid}' 2>/dev/null; }
+    uid="$(probe)"
+    [ -n "${uid}" ] || fail "watch: the cluster does not answer, so it cannot be watched"
+    # Six consecutive probes that do not return this cluster's UID, ten seconds
+    # apart, mean the cluster is gone rather than briefly unreachable. The
+    # deadline bounds a watcher whose cluster outlives any plausible run.
     misses=0
     deadline=$(( $(date +%s) + 21600 ))
     while [ "${misses}" -lt 6 ] && [ "$(date +%s)" -lt "${deadline}" ]; do
-      if "${KUBECTL}" get --raw /readyz --request-timeout=10s >/dev/null 2>&1; then
+      if [ "$(probe)" = "${uid}" ]; then
         misses=0
       else
         misses=$((misses + 1))
