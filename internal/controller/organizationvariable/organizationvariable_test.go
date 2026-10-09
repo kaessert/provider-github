@@ -98,7 +98,7 @@ func ghVariable(value, visibility string) *github.ActionsVariable {
 
 // Observe must report ResourceExists=false on 404 so the managed
 // reconciler proceeds to Create rather than declaring an error state.
-func TestObserve_DoesNotExist_Returns404AsNotExists(t *testing.T) {
+func TestObserveDoesNotExistReturns404AsNotExists(t *testing.T) {
 	e := newExternalWithActions(&fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return nil, fake.GenerateEmptyResponse(), fake.Generate404Response()
@@ -116,7 +116,7 @@ func TestObserve_DoesNotExist_Returns404AsNotExists(t *testing.T) {
 
 // When the GitHub-side value matches the CR's value, the variable
 // is up to date. Anchors the equality semantics of Observe.
-func TestObserve_UpToDate_ValueAndVisibilityMatch(t *testing.T) {
+func TestObserveUpToDateValueAndVisibilityMatch(t *testing.T) {
 	e := newExternalWithActions(&fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("bar", "all"), fake.GenerateEmptyResponse(), nil
@@ -134,7 +134,7 @@ func TestObserve_UpToDate_ValueAndVisibilityMatch(t *testing.T) {
 
 // Value drift between CR and GitHub is the most common reason a
 // variable goes out of date — Observe must flag it so Update runs.
-func TestObserve_ValueDrift_ReportsNotUpToDate(t *testing.T) {
+func TestObserveValueDriftReportsNotUpToDate(t *testing.T) {
 	e := newExternalWithActions(&fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("OTHER", "all"), fake.GenerateEmptyResponse(), nil
@@ -152,7 +152,7 @@ func TestObserve_ValueDrift_ReportsNotUpToDate(t *testing.T) {
 
 // Visibility drift is independent of value drift — even with the
 // right value, a wrong visibility must trigger an Update.
-func TestObserve_VisibilityDrift_ReportsNotUpToDate(t *testing.T) {
+func TestObserveVisibilityDriftReportsNotUpToDate(t *testing.T) {
 	e := newExternalWithActions(&fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("bar", "private"), fake.GenerateEmptyResponse(), nil
@@ -171,7 +171,7 @@ func TestObserve_VisibilityDrift_ReportsNotUpToDate(t *testing.T) {
 // For visibility=selected, the selected-repo set must match (compared
 // in ID-space so name ordering doesn't false-flag drift). When the
 // repos line up, Observe is UpToDate.
-func TestObserve_Selected_UpToDateWhenRepoIDsMatch(t *testing.T) {
+func TestObserveSelectedUpToDateWhenRepoIDsMatch(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("bar", "selected"), fake.GenerateEmptyResponse(), nil
@@ -200,7 +200,7 @@ func TestObserve_Selected_UpToDateWhenRepoIDsMatch(t *testing.T) {
 
 // A selected variable with no repositories must be up to date when
 // GitHub also lists none; an empty and a nil ID list are the same set.
-func TestObserve_Selected_NoRepos_UpToDate(t *testing.T) {
+func TestObserveSelectedNoReposUpToDate(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("bar", "selected"), fake.GenerateEmptyResponse(), nil
@@ -222,7 +222,7 @@ func TestObserve_Selected_NoRepos_UpToDate(t *testing.T) {
 
 // When GH has different selected repos than CR (here: extra repo on
 // GH side), Observe reports NotUpToDate so Update can converge.
-func TestObserve_Selected_DriftReportsNotUpToDate(t *testing.T) {
+func TestObserveSelectedDriftReportsNotUpToDate(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
 			return ghVariable("bar", "selected"), fake.GenerateEmptyResponse(), nil
@@ -252,7 +252,7 @@ func TestObserve_Selected_DriftReportsNotUpToDate(t *testing.T) {
 // Create with visibility=all sends value + visibility but NO
 // SelectedRepositoryIDs — sending IDs when visibility != selected
 // is rejected by the GitHub API.
-func TestCreate_VisibilityAll_OmitsSelectedRepoIDs(t *testing.T) {
+func TestCreateVisibilityAllOmitsSelectedRepoIDs(t *testing.T) {
 	var captured *github.ActionsCreateOrgVariableRequest
 	actions := &fake.MockActionsClient{
 		MockCreateOrgVariable: func(_ context.Context, _ string, v github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
@@ -279,7 +279,7 @@ func TestCreate_VisibilityAll_OmitsSelectedRepoIDs(t *testing.T) {
 // Create with visibility=selected must resolve repo names to IDs and
 // pass them in SelectedRepositoryIDs so GitHub knows which repos can
 // read the variable on the very first reconcile.
-func TestCreate_VisibilitySelected_ResolvesAndSendsRepoIDs(t *testing.T) {
+func TestCreateVisibilitySelectedResolvesAndSendsRepoIDs(t *testing.T) {
 	var captured *github.ActionsCreateOrgVariableRequest
 	actions := &fake.MockActionsClient{
 		MockCreateOrgVariable: func(_ context.Context, _ string, v github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
@@ -309,7 +309,7 @@ func TestCreate_VisibilitySelected_ResolvesAndSendsRepoIDs(t *testing.T) {
 // test pins that visibility transitions away from "selected" don't
 // leak a stale repo-ID list (which would re-add associations the
 // user just removed).
-func TestUpdate_VisibilityChange_DropsRepoIDs(t *testing.T) {
+func TestUpdateVisibilityChangeDropsRepoIDs(t *testing.T) {
 	var captured *github.ActionsUpdateOrgVariableRequest
 	actions := &fake.MockActionsClient{
 		MockUpdateOrgVariable: func(_ context.Context, _, _ string, v github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
@@ -331,7 +331,7 @@ func TestUpdate_VisibilityChange_DropsRepoIDs(t *testing.T) {
 // Update must send name, value, visibility and the selected repo IDs:
 // every field left out of the PATCH keeps its old value on GitHub, so
 // the drift Observe reported would never converge.
-func TestUpdate_VisibilitySelected_SendsFullPayload(t *testing.T) {
+func TestUpdateVisibilitySelectedSendsFullPayload(t *testing.T) {
 	var captured *github.ActionsUpdateOrgVariableRequest
 	actions := &fake.MockActionsClient{
 		MockUpdateOrgVariable: func(_ context.Context, _, _ string, v github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
@@ -364,7 +364,7 @@ func TestUpdate_VisibilitySelected_SendsFullPayload(t *testing.T) {
 
 // Delete must swallow 404 so a controller restart that lost track of
 // an already-deleted variable doesn't block finalizer removal.
-func TestDelete_404IsNotAnError(t *testing.T) {
+func TestDelete404IsNotAnError(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockDeleteOrgVariable: func(_ context.Context, _, _ string) (*github.Response, error) {
 			return fake.GenerateEmptyResponse(), fake.Generate404Response()

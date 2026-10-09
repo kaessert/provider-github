@@ -1464,7 +1464,7 @@ func TestSetBranchProtectionPartialCondition(t *testing.T) {
 }
 
 // An identical report must not append a duplicate, or every reconcile grows status.conditions.
-func TestSetBranchProtectionPartialCondition_Idempotent(t *testing.T) {
+func TestSetBranchProtectionPartialConditionIdempotent(t *testing.T) {
 	cr := &v1alpha1.Repository{}
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})

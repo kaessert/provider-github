@@ -136,7 +136,7 @@ func knownRepos() *fake.MockRepositoriesClient {
 
 // Runner groups are matched by name; a list without that name means
 // the group does not exist and must be created.
-func TestObserve_NameNotListed_ReportsNotExists(t *testing.T) {
+func TestObserveNameNotListedReportsNotExists(t *testing.T) {
 	other := ghGroup(func(g *github.RunnerGroup) { g.Name = github.Ptr("other-runners") })
 	e := newExternal(&fake.MockActionsClient{MockListOrganizationRunnerGroups: listGroups(other)}, nil)
 
@@ -152,7 +152,7 @@ func TestObserve_NameNotListed_ReportsNotExists(t *testing.T) {
 // Observe must follow NextPage with the page number in the request;
 // otherwise groups past the first page are never found and get
 // re-created on every reconcile.
-func TestObserve_FindsGroupOnLaterPage(t *testing.T) {
+func TestObserveFindsGroupOnLaterPage(t *testing.T) {
 	var pages []int
 	e := newExternal(&fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: func(_ context.Context, _ string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
@@ -180,7 +180,7 @@ func TestObserve_FindsGroupOnLaterPage(t *testing.T) {
 // When every managed field matches, the group is up to date and its ID
 // is recorded for Update and Delete. Workflow and repository order on
 // GitHub's side must not count as drift.
-func TestObserve_UpToDate_AllFieldsMatch(t *testing.T) {
+func TestObserveUpToDateAllFieldsMatch(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
 			g.Visibility = github.Ptr("selected")
@@ -208,7 +208,7 @@ func TestObserve_UpToDate_AllFieldsMatch(t *testing.T) {
 
 // Each managed field is compared independently; drift in any one of
 // them must trigger an Update.
-func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
+func TestObserveFieldDriftReportsNotUpToDate(t *testing.T) {
 	cases := map[string]struct {
 		cr *v1alpha1.RunnerGroup
 		gh *github.RunnerGroup
@@ -246,7 +246,7 @@ func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
 
 // For visibility=selected, a repository with access on GitHub that the
 // CR does not list is drift, so Update can revoke it.
-func TestObserve_Selected_RepoAccessDrift_ReportsNotUpToDate(t *testing.T) {
+func TestObserveSelectedRepoAccessDriftReportsNotUpToDate(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
 			g.Visibility = github.Ptr("selected")
@@ -266,7 +266,7 @@ func TestObserve_Selected_RepoAccessDrift_ReportsNotUpToDate(t *testing.T) {
 
 // When GitHub's repository names match the spec (ignoring case), repo
 // access is up to date without any per-repository lookups.
-func TestObserve_Selected_NamesMatch_NoRepoLookups(t *testing.T) {
+func TestObserveSelectedNamesMatchNoRepoLookups(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
 			g.Visibility = github.Ptr("selected")
@@ -297,7 +297,7 @@ func TestObserve_Selected_NamesMatch_NoRepoLookups(t *testing.T) {
 
 // A spec that still uses a renamed repository's old name resolves to the
 // same ID GitHub lists under the new name, so it is not drift.
-func TestObserve_Selected_RenamedRepo_UpToDateByID(t *testing.T) {
+func TestObserveSelectedRenamedRepoUpToDateByID(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
 			g.Visibility = github.Ptr("selected")
@@ -332,7 +332,7 @@ func TestObserve_Selected_RenamedRepo_UpToDateByID(t *testing.T) {
 // Create must send repository IDs and workflow restrictions in the
 // create request, so the group is correct from its first reconcile,
 // and record the returned ID.
-func TestCreate_SendsRepoIDsAndWorkflows(t *testing.T) {
+func TestCreateSendsRepoIDsAndWorkflows(t *testing.T) {
 	var captured github.CreateRunnerGroupRequest
 	actions := &fake.MockActionsClient{
 		MockCreateOrganizationRunnerGroup: func(_ context.Context, _ string, req github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error) {
@@ -364,7 +364,7 @@ func TestCreate_SendsRepoIDsAndWorkflows(t *testing.T) {
 
 // The update endpoint cannot change repository access, so for
 // visibility=selected Update must also replace the access list.
-func TestUpdate_Selected_UpdatesGroupAndSetsRepoAccess(t *testing.T) {
+func TestUpdateSelectedUpdatesGroupAndSetsRepoAccess(t *testing.T) {
 	var updated github.UpdateRunnerGroupRequest
 	var setIDs []int64
 	var setGroupID int64
@@ -398,7 +398,7 @@ func TestUpdate_Selected_UpdatesGroupAndSetsRepoAccess(t *testing.T) {
 
 // Delete must swallow 404 so an already-deleted group doesn't block
 // finalizer removal.
-func TestDelete_404IsNotAnError(t *testing.T) {
+func TestDelete404IsNotAnError(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockDeleteOrganizationRunnerGroup: func(_ context.Context, _ string, _ int64) (*github.Response, error) {
 			return fake.GenerateEmptyResponse(), fake.Generate404Response()

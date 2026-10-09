@@ -50,7 +50,7 @@ func swapGlobalPool(t *testing.T, p *quotaPool) {
 // under the supplied cacheKey, with CooldownUntil set to the response's
 // Reset time — the wire that lets the picker skip the credential on
 // subsequent Connects.
-func TestClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
+func TestClientRecordsToPoolOnTooManyRequests(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	resetAt := now.Add(15 * time.Minute)
 
@@ -81,7 +81,7 @@ func TestClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
 	}
 }
 
-func TestClient_RecordsToPoolOnSuccess(t *testing.T) {
+func TestClientRecordsToPoolOnSuccess(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -114,7 +114,7 @@ func TestClient_RecordsToPoolOnSuccess(t *testing.T) {
 
 // Pool wiring must work even when metrics is nil (e.g. in controller
 // unit tests). Telemetry being optional should not skip pool updates.
-func TestClient_NilMetricsIsSafe(t *testing.T) {
+func TestClientNilMetricsIsSafe(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -140,7 +140,7 @@ func TestClient_NilMetricsIsSafe(t *testing.T) {
 // Exercises a non-Organizations service path (Repositories) to confirm
 // cacheKey propagates through every wrapper, not just the Orgs one. The
 // empty-key check guards against the field being silently dropped.
-func TestClient_RecordsToPool_Repositories(t *testing.T) {
+func TestClientRecordsToPoolRepositories(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -170,7 +170,7 @@ func TestClient_RecordsToPool_Repositories(t *testing.T) {
 // the supplied (org, app_id, app_installation_id, method) labels —
 // regardless of HTTP outcome. Verifies the method-name plumbing from
 // each wrapper through recordResponse to telemetry.
-func TestClient_IncrementsAPICallsCounter(t *testing.T) {
+func TestClientIncrementsAPICallsCounter(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 
 	metrics := telemetryNewForTest(t)
@@ -201,7 +201,7 @@ func TestClient_IncrementsAPICallsCounter(t *testing.T) {
 // A wrapped call returning (nil, nil, err) — the ghinstallation token-mint
 // failure shape — must mark the credential unhealthy in the pool so the
 // picker steers away on the next pick.
-func TestClient_AuthFailure_RecordsUnhealthy(t *testing.T) {
+func TestClientAuthFailureRecordsUnhealthy(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 

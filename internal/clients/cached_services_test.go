@@ -18,7 +18,7 @@ import (
 // Credential layout is "appID,installationID,PEM"; both IDs are returned
 // as plain strings (no integer parsing) so they can be used directly as
 // Prometheus label values.
-func TestExtractAppIDs_HappyPath(t *testing.T) {
+func TestExtractAppIDsHappyPath(t *testing.T) {
 	creds := "12345,67890,-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
 
 	appID, installID, err := ExtractAppIDs(creds)
@@ -35,7 +35,7 @@ func TestExtractAppIDs_HappyPath(t *testing.T) {
 
 // A malformed creds blob must error rather than silently return partial
 // results that could leak into metric labels as garbage.
-func TestExtractAppIDs_TooFewFields(t *testing.T) {
+func TestExtractAppIDsTooFewFields(t *testing.T) {
 	_, _, err := ExtractAppIDs("12345,only-two-fields")
 	if err == nil {
 		t.Fatal("expected error for 2-field input, got nil")
@@ -47,7 +47,7 @@ func TestExtractAppIDs_TooFewFields(t *testing.T) {
 
 // Splitting on the first two commas is only safe because PEM bodies are
 // base64 plus dashes/newlines — never commas. Encodes that invariant.
-func TestExtractAppIDs_PrivateKeyContainsNoCommas(t *testing.T) {
+func TestExtractAppIDsPrivateKeyContainsNoCommas(t *testing.T) {
 	creds := "1,2,-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA+/=\n-----END RSA PRIVATE KEY-----"
 
 	appID, installID, err := ExtractAppIDs(creds)

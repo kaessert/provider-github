@@ -144,7 +144,7 @@ func newExternal(orgs *fake.MockOrganizationsClient, kube client.Client) externa
 
 // A known hook ID is fetched directly; a matching hook is up to date,
 // Available, and its ID is recorded in status.
-func TestObserve_ByID_UpToDate(t *testing.T) {
+func TestObserveByIDUpToDate(t *testing.T) {
 	var gotID int64
 	orgs := &fake.MockOrganizationsClient{
 		MockGetHook: func(_ context.Context, _ string, id int64) (*github.Hook, *github.Response, error) {
@@ -174,7 +174,7 @@ func TestObserve_ByID_UpToDate(t *testing.T) {
 }
 
 // A hook deleted on GitHub must be re-created, not reported as an error.
-func TestObserve_ByID_404_ReportsNotExists(t *testing.T) {
+func TestObserveByID404ReportsNotExists(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockGetHook: func(_ context.Context, _ string, _ int64) (*github.Hook, *github.Response, error) {
 			return nil, fake.GenerateEmptyResponse(), fake.Generate404Response()
@@ -195,7 +195,7 @@ func TestObserve_ByID_404_ReportsNotExists(t *testing.T) {
 // past the first page, and its ID becomes the external name so later
 // reconciles fetch it directly. The external name change must be
 // persisted.
-func TestObserve_AdoptsByURLOnLaterPage(t *testing.T) {
+func TestObserveAdoptsByURLOnLaterPage(t *testing.T) {
 	var pages []int
 	orgs := &fake.MockOrganizationsClient{
 		MockListHooks: func(_ context.Context, _ string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
@@ -233,7 +233,7 @@ func TestObserve_AdoptsByURLOnLaterPage(t *testing.T) {
 }
 
 // Without a known ID and no hook with the spec URL, the hook must be created.
-func TestObserve_URLNotListed_ReportsNotExists(t *testing.T) {
+func TestObserveURLNotListedReportsNotExists(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockListHooks: func(_ context.Context, _ string, _ *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 			other := ghHook(func(h *github.Hook) { h.Config.URL = github.Ptr(testOtherURL) })
@@ -253,7 +253,7 @@ func TestObserve_URLNotListed_ReportsNotExists(t *testing.T) {
 
 // GitHub does not preserve event order, so the same events in another
 // order are not drift.
-func TestObserve_EventsReordered_UpToDate(t *testing.T) {
+func TestObserveEventsReorderedUpToDate(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockGetHook: getHook(ghHook(func(h *github.Hook) { h.Events = []string{"pull_request", "push"} })),
 	}
@@ -271,7 +271,7 @@ func TestObserve_EventsReordered_UpToDate(t *testing.T) {
 // Each managed field is compared independently; drift in any one of
 // them must trigger an Update. Unset active and insecureSsl mean true
 // and false.
-func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
+func TestObserveFieldDriftReportsNotUpToDate(t *testing.T) {
 	cases := map[string]*github.Hook{
 		"Url":         ghHook(func(h *github.Hook) { h.Config.URL = github.Ptr(testOtherURL) }),
 		"ContentType": ghHook(func(h *github.Hook) { h.Config.ContentType = github.Ptr("form") }),
@@ -297,7 +297,7 @@ func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
 // GitHub only reports that a secret is set, so the referenced secret is
 // compared with the one recorded in the connection secret at the last
 // apply. A rotated, missing or unwanted secret must trigger an Update.
-func TestObserve_Secret(t *testing.T) {
+func TestObserveSecret(t *testing.T) {
 	cases := map[string]struct {
 		cr       *v1alpha1.OrganizationWebhook
 		gh       *github.Hook
@@ -349,7 +349,7 @@ func TestObserve_Secret(t *testing.T) {
 // Rotation detection needs the connection secret, so a secretKeyRef
 // without writeConnectionSecretToRef is rejected before any
 // GitHub call.
-func TestObserve_SecretRefWithoutConnectionSecret_Errors(t *testing.T) {
+func TestObserveSecretRefWithoutConnectionSecretErrors(t *testing.T) {
 	e := newExternal(&fake.MockOrganizationsClient{}, newKube(t, sourceSecret(testSecret)))
 
 	_, err := e.Observe(context.Background(), newCR(withExternalName(testHookIDStr), withSecretRef()))
@@ -360,7 +360,7 @@ func TestObserve_SecretRefWithoutConnectionSecret_Errors(t *testing.T) {
 
 // Create sends the full desired config, records the new ID as the
 // external name, and publishes the applied secret for later drift checks.
-func TestCreate_SetsExternalNameAndPublishesSecret(t *testing.T) {
+func TestCreateSetsExternalNameAndPublishesSecret(t *testing.T) {
 	var sent *github.Hook
 	orgs := &fake.MockOrganizationsClient{
 		MockCreateHook: func(_ context.Context, _ string, h *github.Hook) (*github.Hook, *github.Response, error) {
@@ -401,7 +401,7 @@ func TestCreate_SetsExternalNameAndPublishesSecret(t *testing.T) {
 }
 
 // Without a secretKeyRef no secret is sent and nothing is published.
-func TestCreate_NoSecret(t *testing.T) {
+func TestCreateNoSecret(t *testing.T) {
 	var sent *github.Hook
 	orgs := &fake.MockOrganizationsClient{
 		MockCreateHook: func(_ context.Context, _ string, h *github.Hook) (*github.Hook, *github.Response, error) {
@@ -425,7 +425,7 @@ func TestCreate_NoSecret(t *testing.T) {
 
 // Update edits the hook by its ID with the current secret and publishes
 // it, so a rotation stops being drift once applied.
-func TestUpdate_EditsByIDAndPublishesSecret(t *testing.T) {
+func TestUpdateEditsByIDAndPublishesSecret(t *testing.T) {
 	var gotID int64
 	var sent *github.Hook
 	orgs := &fake.MockOrganizationsClient{
@@ -453,7 +453,7 @@ func TestUpdate_EditsByIDAndPublishesSecret(t *testing.T) {
 }
 
 // A hook already gone on GitHub is a successful delete.
-func TestDelete_404IsNotAnError(t *testing.T) {
+func TestDelete404IsNotAnError(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockDeleteHook: func(_ context.Context, _ string, _ int64) (*github.Response, error) {
 			return fake.GenerateEmptyResponse(), fake.Generate404Response()

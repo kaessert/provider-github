@@ -23,7 +23,7 @@ func fixedNow(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
 
-func TestPool_RecordResponse_UpdatesRemaining(t *testing.T) {
+func TestPoolRecordResponseUpdatesRemaining(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -47,7 +47,7 @@ func TestPool_RecordResponse_UpdatesRemaining(t *testing.T) {
 	}
 }
 
-func TestPool_RecordResponse_TooManyRequests_SetsCooldownToReset(t *testing.T) {
+func TestPoolRecordResponseTooManyRequestsSetsCooldownToReset(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -69,7 +69,7 @@ func TestPool_RecordResponse_TooManyRequests_SetsCooldownToReset(t *testing.T) {
 	}
 }
 
-func TestPool_RecordResponse_TooManyRequests_NoResetHeader_UsesFloor(t *testing.T) {
+func TestPoolRecordResponseTooManyRequestsNoResetHeaderUsesFloor(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -87,7 +87,7 @@ func TestPool_RecordResponse_TooManyRequests_NoResetHeader_UsesFloor(t *testing.
 	}
 }
 
-func TestPool_RecordResponse_TooManyRequests_PastResetHeader_UsesFloor(t *testing.T) {
+func TestPoolRecordResponseTooManyRequestsPastResetHeaderUsesFloor(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -109,7 +109,7 @@ func TestPool_RecordResponse_TooManyRequests_PastResetHeader_UsesFloor(t *testin
 	}
 }
 
-func TestPool_RecordResponse_NilResponse_NoOp(t *testing.T) {
+func TestPoolRecordResponseNilResponseNoOp(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -130,7 +130,7 @@ func TestPool_RecordResponse_NilResponse_NoOp(t *testing.T) {
 // A (nil response, non-nil error) outcome — ghinstallation can't mint a
 // token, or any other pre-HTTP failure — must set a cooldown so the
 // picker skips the credential on the next pick.
-func TestPool_RecordResponse_AuthFailure_SetsUnhealthyCooldown(t *testing.T) {
+func TestPoolRecordResponseAuthFailureSetsUnhealthyCooldown(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -146,7 +146,7 @@ func TestPool_RecordResponse_AuthFailure_SetsUnhealthyCooldown(t *testing.T) {
 // Each consecutive (nil, err) outcome doubles the cooldown: 60s, 120s,
 // 240s, 480s, … A permanently broken credential should not be retried
 // at a fixed cadence forever.
-func TestPool_RecordResponse_AuthFailure_BackoffGrowsExponentially(t *testing.T) {
+func TestPoolRecordResponseAuthFailureBackoffGrowsExponentially(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -167,7 +167,7 @@ func TestPool_RecordResponse_AuthFailure_BackoffGrowsExponentially(t *testing.T)
 
 // Backoff caps at 15 minutes regardless of how many consecutive failures
 // have accumulated; a recovered credential can't be locked out for hours.
-func TestPool_RecordResponse_AuthFailure_BackoffCappedAt15Min(t *testing.T) {
+func TestPoolRecordResponseAuthFailureBackoffCappedAt15Min(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -186,7 +186,7 @@ func TestPool_RecordResponse_AuthFailure_BackoffCappedAt15Min(t *testing.T) {
 // starts at the 60s base rather than continuing the exponential growth.
 // CooldownUntil is deliberately not cleared — max() semantics remain in
 // force so a longer 429 cooldown is never shortened.
-func TestPool_RecordResponse_SuccessResetsUnhealthyCounter(t *testing.T) {
+func TestPoolRecordResponseSuccessResetsUnhealthyCounter(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -212,7 +212,7 @@ func TestPool_RecordResponse_SuccessResetsUnhealthyCounter(t *testing.T) {
 // shrink a longer one (e.g. a 5-minute 429 cooldown) — otherwise the
 // picker would try the still-rate-limited credential and trigger another
 // 429.
-func TestPool_RecordResponse_AuthFailure_DoesNotShortenLongerCooldown(t *testing.T) {
+func TestPoolRecordResponseAuthFailureDoesNotShortenLongerCooldown(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -235,7 +235,7 @@ func TestPool_RecordResponse_AuthFailure_DoesNotShortenLongerCooldown(t *testing
 // pick returns a reason for the selection: "only_candidate" when filter
 // leaves a single option, "highest_remaining" when one candidate strictly
 // dominates, "random_tiebreak" when N ≥ 2 share the top.
-func TestPool_Pick_ReasonValues(t *testing.T) {
+func TestPoolPickReasonValues(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -301,7 +301,7 @@ func TestPool_Pick_ReasonValues(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_EmptyKeys_ReturnsError(t *testing.T) {
+func TestPoolPickEmptyKeysReturnsError(t *testing.T) {
 	p := newQuotaPool(time.Now)
 
 	_, _, err := p.pick(nil)
@@ -310,7 +310,7 @@ func TestPool_Pick_EmptyKeys_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_SingleUnseenApp_ReturnsIt(t *testing.T) {
+func TestPoolPickSingleUnseenAppReturnsIt(t *testing.T) {
 	p := newQuotaPool(time.Now)
 
 	chosen, _, err := p.pick([]string{"app1"})
@@ -322,7 +322,7 @@ func TestPool_Pick_SingleUnseenApp_ReturnsIt(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_PrefersHighestRemaining(t *testing.T) {
+func TestPoolPickPrefersHighestRemaining(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -344,7 +344,7 @@ func TestPool_Pick_PrefersHighestRemaining(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_PrefersUnseenOverDepleted(t *testing.T) {
+func TestPoolPickPrefersUnseenOverDepleted(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -363,7 +363,7 @@ func TestPool_Pick_PrefersUnseenOverDepleted(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_SkipsAppsInCooldown(t *testing.T) {
+func TestPoolPickSkipsAppsInCooldown(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -387,7 +387,7 @@ func TestPool_Pick_SkipsAppsInCooldown(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_AllInCooldown_ReturnsCooldownError(t *testing.T) {
+func TestPoolPickAllInCooldownReturnsCooldownError(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	p := newQuotaPool(fixedNow(now))
 
@@ -421,7 +421,7 @@ func TestPool_Pick_AllInCooldown_ReturnsCooldownError(t *testing.T) {
 	}
 }
 
-func TestPool_Pick_CooldownExpired_AppIsAgainAvailable(t *testing.T) {
+func TestPoolPickCooldownExpiredAppIsAgainAvailable(t *testing.T) {
 	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	currentTime := start
 	p := newQuotaPool(func() time.Time { return currentTime })
