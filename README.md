@@ -44,6 +44,12 @@ implements the following resources with partial functionality:
 * **Membership** — organization membership
   * role
 
+## Releases and support
+
+See [RELEASES.md](./RELEASES.md) for the release and support policy: which
+releases receive fixes, what each version number means, and what to expect when
+upgrading or downgrading.
+
 ## GitHub App permissions
 
 See [PERMISSIONS.md](./PERMISSIONS.md) for the GitHub App permissions

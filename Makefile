@@ -213,6 +213,8 @@ BASE_REF ?= origin/main
 check-breaking-changes: ## Fail if a changed CRD reshapes a served schema incompatibly
 	@BASE_REF=$(BASE_REF) ./hack/check-breaking-changes.sh
 
+reviewable: check-breaking-changes
+
 .PHONY: check-breaking-changes
 
 # ====================================================================================
