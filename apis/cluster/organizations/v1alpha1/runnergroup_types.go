@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+
+	"github.com/crossplane/provider-github/apis/common/driftdetection"
 )
 
 // RunnerGroupSelectedRepo references a repository that has access to a
@@ -93,6 +95,13 @@ type RunnerGroupObservation struct {
 type RunnerGroupSpec struct {
 	xpv2.ClusterManagedResourceSpec `json:",inline"`
 	ForProvider                     RunnerGroupParameters `json:"forProvider"`
+
+	// DriftDetection configures which forProvider fields are owned outside
+	// Crossplane and how drift in those fields is detected and corrected.
+	// Absent configuration means drift detection is enabled with no ignored
+	// paths.
+	// +optional
+	DriftDetection *driftdetection.DriftDetection `json:"driftDetection,omitempty"`
 }
 
 // A RunnerGroupStatus represents the observed state of a RunnerGroup.

@@ -26,6 +26,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/provider-github/internal/driftdetection"
 	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -47,10 +48,10 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 	name := managed.ControllerName(v1alpha1.OrganizationGroupKind)
 
 	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnector(&connector{
+		managed.WithExternalConnector(driftdetection.WrapConnector[resource.Managed](&connector{
 			kube:    mgr.GetClient(),
 			usage:   resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
+			metrics: metrics})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))), //nolint:staticcheck // crossplane-runtime's event.NewAPIRecorder still takes the record.EventRecorder that GetEventRecorderFor returns; the replacement events API is not accepted by it yet.
