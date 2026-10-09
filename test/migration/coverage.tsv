@@ -1,0 +1,56 @@
+# kind	path (from the object root)	what it exercises
+# Every nested object and every array of objects in the baseline schema's
+# forProvider has a row here, plus the spec-level lifecycle fields. check-coverage.sh
+# derives the schema side from the CRDs and fails on a sub-object with no row,
+# and on a row no fixture satisfies.
+ActionsSecretAccess	.spec.forProvider.selectedRepositories[]	repositories allowed to use the secret
+DependabotSecretAccess	.spec.forProvider.selectedRepositories[]	repositories allowed to use the secret
+Organization	.spec.forProvider.actions	Actions settings
+Organization	.spec.forProvider.actions.enabledRepos[]	repositories enabled for Actions
+Organization	.spec.forProvider.secrets	deprecated nested secrets access
+Organization	.spec.forProvider.secrets.actionsSecrets[]	Actions secret
+Organization	.spec.forProvider.secrets.actionsSecrets[].repositoryAccessList[]	repositories with access to it
+Organization	.spec.forProvider.secrets.dependabotSecrets[]	Dependabot secret
+Organization	.spec.forProvider.secrets.dependabotSecrets[].repositoryAccessList[]	repositories with access to it
+OrganizationVariable	.spec.forProvider.selectedRepositories[]	repositories allowed to read the variable
+OrganizationWebhook	.spec.forProvider.secretKeyRef	webhook secret
+Repository	.spec.forProvider.branchProtectionRules[]	branch protection
+Repository	.spec.forProvider.branchProtectionRules[].branchProtectionRestrictions	push restrictions
+Repository	.spec.forProvider.branchProtectionRules[].requiredPullRequestReviews	required reviews
+Repository	.spec.forProvider.branchProtectionRules[].requiredPullRequestReviews.bypassPullRequestAllowances	review bypass
+Repository	.spec.forProvider.branchProtectionRules[].requiredPullRequestReviews.dismissalRestrictions	dismissal restrictions
+Repository	.spec.forProvider.branchProtectionRules[].requiredStatusChecks	required checks
+Repository	.spec.forProvider.branchProtectionRules[].requiredStatusChecks.checks[]	a check
+Repository	.spec.forProvider.createFork	fork
+Repository	.spec.forProvider.createFromTemplate	template
+Repository	.spec.forProvider.permissions	permissions
+Repository	.spec.forProvider.permissions.teams[]	team permission
+Repository	.spec.forProvider.permissions.users[]	collaborator
+Repository	.spec.forProvider.repositoryRules[]	ruleset
+Repository	.spec.forProvider.repositoryRules[].bypassActors[]	ruleset bypass actor
+Repository	.spec.forProvider.repositoryRules[].conditions	ruleset conditions
+Repository	.spec.forProvider.repositoryRules[].conditions.refName	ref name include/exclude
+Repository	.spec.forProvider.repositoryRules[].rules	ruleset rules
+Repository	.spec.forProvider.repositoryRules[].rules.pullRequest	pull request rule
+Repository	.spec.forProvider.repositoryRules[].rules.requiredDeployments	required deployments rule
+Repository	.spec.forProvider.repositoryRules[].rules.requiredStatusChecks	required status checks rule
+Repository	.spec.forProvider.repositoryRules[].rules.requiredStatusChecks.requiredStatusChecks[]	a check in the rule
+Repository	.spec.forProvider.webhooks[]	repository webhook
+Repository	.spec.forProvider.webhooks[].secretKeyRef	its secret
+RunnerGroup	.spec.forProvider.selectedRepositories[]	repositories allowed to use the group
+RunnerGroup	.spec.forProvider.selectedWorkflows	workflows allowed to use the group
+Team	.spec.forProvider.members[]	team member
+Team	.spec.forProvider.parent	parent team
+Membership	.spec.forProvider.role	organization role
+Repository	.spec.forProvider.archived	archive-on-delete setting
+Repository	.spec.forProvider.isTemplate	template repository
+Repository	.spec.forProvider.topics	topics
+Repository	.spec.forProvider.allowMergeCommit	merge strategies
+OrganizationVariable	.spec.forProvider.visibility	visibility (every value is covered, see below)
+OrganizationWebhook	.spec.writeConnectionSecretToRef	webhook secret as a connection secret
+OrganizationWebhook	.spec.publishConnectionDetailsTo	external secret store publication
+OrganizationWebhook	.spec.publishConnectionDetailsTo.configRef	store config reference
+OrganizationWebhook	.spec.publishConnectionDetailsTo.metadata	published secret metadata
+OrganizationVariable	.spec.managementPolicies	non-default management policies
+Team	.spec.deletionPolicy	Orphan
+OrganizationVariable	.spec.providerRef	deprecated provider reference

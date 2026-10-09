@@ -1,0 +1,10 @@
+# Kubernetes objects the baseline fixtures read. The values are disposable
+# strings used only by this validation run, never real credentials.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pgh-mig-hook-secret
+  namespace: crossplane-system
+type: Opaque
+stringData:
+  secret: pgh-mig-webhook-signing-value

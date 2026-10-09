@@ -1,0 +1,13 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-adopt-var
+  annotations:
+    crossplane.io/external-name: PGH_MIG_ADOPT_VAR
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+  providerConfigRef:
+    name: default

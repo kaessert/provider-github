@@ -1,0 +1,13 @@
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: RunnerGroup
+metadata:
+  name: pgh-mig-adopt-rg
+  namespace: default
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

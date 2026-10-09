@@ -1,0 +1,29 @@
+# The Organization managed resource adopts the existing organization. It writes
+# the description and the Actions-enabled repository list, and (deprecated)
+# the repository access of two organization secrets. The setup step records the
+# organization's original description and Actions settings first, and the
+# cleanup sweep restores them.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Organization
+metadata:
+  name: pgh-mig-org
+  annotations:
+    crossplane.io/external-name: __ORG__
+spec:
+  forProvider:
+    description: pgh-mig organization description
+    actions:
+      enabledRepos:
+        - repo: pgh-mig-repo-main
+        - repo: pgh-mig-repo-rules
+    secrets:
+      actionsSecrets:
+        - name: PGH_MIG_ORG_ACTIONS_SECRET
+          repositoryAccessList:
+            - repo: pgh-mig-repo-main
+      dependabotSecrets:
+        - name: PGH_MIG_ORG_DEPENDABOT_SECRET
+          repositoryAccessList:
+            - repo: pgh-mig-repo-main
+  providerConfigRef:
+    name: default

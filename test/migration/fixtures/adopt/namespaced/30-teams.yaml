@@ -1,0 +1,53 @@
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-adopt-parent
+  namespace: default
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+    description: pgh-mig adopted parent team
+    privacy: closed
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+---
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-adopt-team
+  namespace: default
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+    description: pgh-mig adopted team
+    privacy: closed
+    parent: pgh-mig-adopt-parent
+    members:
+      - user: __MEMBER__
+        role: __TEAM_ROLE__
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+---
+# Drift probe: the declared description differs from the one on GitHub. An
+# Observe-only object must report it and must not write it.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-adopt-drift
+  namespace: default
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+    description: pgh-mig declared description that differs from GitHub
+    privacy: closed
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

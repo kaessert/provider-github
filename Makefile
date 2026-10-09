@@ -571,6 +571,44 @@ update-test.validate:
 
 .PHONY: update-test.validate
 
+# ====================================================================================
+# Migration Validation
+#
+# A one-off validation of the move from the last upstream tag (built from source) to
+# this tree: an in-place upgrade, and Observe-only adoption into both API scopes. It
+# is not part of the end-to-end suite -- no e2e target, UPTEST_MANIFESTS_* variable,
+# CI workflow or example reaches it -- and nothing gates on it. See
+# test/migration/README.md.
+#
+#   make validate.migration                       all three scenarios, in turn
+#   make validate.migration.upgrade               scenario (a): in-place upgrade
+#   make validate.migration.adopt-cluster         scenario (b): Observe-only adoption, cluster scope
+#   make validate.migration.adopt-namespaced      scenario (c): Observe-only adoption, namespaced scope
+#   make validate.migration.fixtures              offline: fixtures, coverage, separation, self-test
+#
+# The scenarios call the GitHub API against MIGRATION_ORG and need a cluster. They
+# take the cluster name and kubeconfig from the environment (KIND_CLUSTER_NAME,
+# KUBECONFIG) and never create a cluster under a name of their own.
+MIGRATION_ORG ?= pgh-test
+export MIGRATION_ORG
+MIGRATION_SCENARIOS := upgrade adopt-cluster adopt-namespaced
+MIGRATION_TARGETS := $(addprefix validate.migration.,$(MIGRATION_SCENARIOS))
+
+validate.migration:
+	@rc=0; for s in $(MIGRATION_SCENARIOS); do \
+	  $(MAKE) --no-print-directory validate.migration.$$s || rc=1; \
+	done; exit $$rc
+
+$(MIGRATION_TARGETS): validate.migration.%:
+	@test/migration/run.sh $*
+
+validate.migration.fixtures:
+	@test/migration/run.sh fixtures && test/migration/run.sh coverage && \
+	  test/migration/run.sh separation && test/migration/run.sh selftest
+
+.PHONY: validate.migration
+.PHONY: $(MIGRATION_TARGETS) validate.migration.fixtures
+
 fallthrough: submodules
 	@echo Initial setup complete. Running make again . . .
 	@make

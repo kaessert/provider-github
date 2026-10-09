@@ -1,0 +1,1 @@
+[{"id":6001,"active":true,"events":["repository"],"updated_at":"2026-01-02T00:00:00Z","config":{"url":"https://example.com/pgh-mig/org-hook-wcs","content_type":"json","insecure_ssl":"0","secret":"********"}},{"id":6999,"active":true,"events":["push"],"config":{"url":"https://other.example/hook"}}]

@@ -1,0 +1,21 @@
+# Observe-only adoption fixtures for the cluster-scoped kinds. Every object
+# carries managementPolicies [Observe]: the provider reads GitHub and writes
+# nothing, and deleting the managed resource leaves the GitHub object alone.
+#
+# The GitHub objects these name are created through the GitHub API by the
+# scenario's setup step (names and values in oob.sh, seed-adoption). Objects whose
+# create-time fields are left out (Organization, Membership, OrganizationVariable,
+# OrganizationWebhook, RunnerGroup, both SecretAccess kinds) exercise the
+# relaxed schema that lets an Observe-only object omit them.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Organization
+metadata:
+  name: pgh-mig-adopt-org
+  annotations:
+    crossplane.io/external-name: __ORG__
+spec:
+  managementPolicies:
+    - Observe
+  forProvider: {}
+  providerConfigRef:
+    name: default

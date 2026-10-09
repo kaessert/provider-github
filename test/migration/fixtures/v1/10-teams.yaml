@@ -1,0 +1,43 @@
+# Team fixtures. A parent and a child cover `parent`; the child also covers
+# `members`. `deletionPolicy: Orphan` on the third team leaves its GitHub team
+# in place when the managed resource goes, which the cleanup sweep then removes.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-team-parent
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig parent team
+    privacy: closed
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-team-child
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig child team
+    privacy: closed
+    parent: pgh-mig-team-parent
+    members:
+      - user: __MEMBER__
+        role: __TEAM_ROLE__
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-mig-team-orphan
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    org: __ORG__
+    description: pgh-mig team whose GitHub object outlives its managed resource
+    privacy: closed
+  providerConfigRef:
+    name: default

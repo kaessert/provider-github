@@ -1,0 +1,17 @@
+# Membership of a user who is ALREADY a member of the organization, so the
+# provider observes it and writes nothing. `deletionPolicy: Orphan` is
+# mandatory here: deleting this managed resource with the default policy would
+# remove the user from the organization.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Membership
+metadata:
+  name: pgh-mig-membership
+  annotations:
+    crossplane.io/external-name: __MEMBER__
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    org: __ORG__
+    role: __MEMBER_ROLE__
+  providerConfigRef:
+    name: default

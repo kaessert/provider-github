@@ -1,0 +1,27 @@
+# kind	name	jq path under .status.atProvider	expected value (JSON)
+# What the full-mirror status must report for the objects oob.sh seeds. The value
+# is GitHub's, never the declared one: pgh-mig-adopt-drift declares a different
+# description and must still report the one on GitHub. __MEMBER_ROLE__ is the
+# role of the organization member the run discovered.
+Repository	pgh-mig-adopt-repo	.description	"pgh-mig adopted repository"
+Repository	pgh-mig-adopt-repo	.private	true
+Repository	pgh-mig-adopt-repo	.topics | sort	["crossplane","pgh-mig"]
+Repository	pgh-mig-adopt-repo	.allowMergeCommit	true
+Repository	pgh-mig-adopt-repo	.allowSquashMerge	true
+Repository	pgh-mig-adopt-repo	.allowRebaseMerge	false
+Repository	pgh-mig-adopt-repo	.deleteBranchOnMerge	true
+Repository	pgh-mig-adopt-repo	.hasIssues	true
+Repository	pgh-mig-adopt-repo	.hasWiki	false
+Team	pgh-mig-adopt-team	.description	"pgh-mig adopted team"
+Team	pgh-mig-adopt-team	.privacy	"closed"
+Team	pgh-mig-adopt-drift	.description	"pgh-mig description on GitHub"
+Membership	pgh-mig-adopt-membership	.role	"__MEMBER_ROLE__"
+OrganizationVariable	pgh-mig-adopt-var	.value	"adopt-value"
+OrganizationVariable	pgh-mig-adopt-var	.visibility	"selected"
+OrganizationWebhook	pgh-mig-adopt-hook	.url	"https://example.com/pgh-mig/adopt-hook"
+OrganizationWebhook	pgh-mig-adopt-hook	.contentType	"json"
+OrganizationWebhook	pgh-mig-adopt-hook	.active	true
+RunnerGroup	pgh-mig-adopt-rg	.visibility	"selected"
+RunnerGroup	pgh-mig-adopt-rg	.allowsPublicRepositories	false
+ActionsSecretAccess	pgh-mig-adopt-actions-secret-access	.visibility	"selected"
+DependabotSecretAccess	pgh-mig-adopt-dependabot-secret-access	.visibility	"selected"

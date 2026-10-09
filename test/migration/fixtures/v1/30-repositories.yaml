@@ -1,0 +1,224 @@
+# Repository fixtures. Every repository is created from the template repository
+# the setup step provides (so it has a default branch for branch protection to
+# attach to), except the fork and the two plain ones.
+#
+# forceDelete is true everywhere: without it the provider refuses to delete a
+# repository, and the run could not clean up through the managed resource.
+#
+# pgh-mig-repo-main        template, topics, merge strategies, collaborators,
+#                          team permissions, webhook with secret, branch
+#                          protection (checks, reviews, restrictions, signed
+#                          commits) and a ruleset
+# pgh-mig-repo-rules       rulesets with bypass actors, ref conditions, creation/
+#                          update/deletion rules, required deployments
+# pgh-mig-repo-fork        fork of a public repository
+# pgh-mig-repo-archive     archived: the provider archives the repository
+# pgh-mig-repo-template    isTemplate
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-repo-main
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig primary repository
+    private: true
+    forceDelete: true
+    createFromTemplate:
+      owner: __ORG__
+      repo: pgh-mig-template
+      includeAllBranches: false
+    topics:
+      - crossplane
+      - pgh-mig
+    defaultBranch: main
+    allowMergeCommit: true
+    allowSquashMerge: true
+    allowRebaseMerge: false
+    allowAutoMerge: false
+    allowUpdateBranch: true
+    deleteBranchOnMerge: true
+    hasIssues: true
+    hasProjects: false
+    hasWiki: false
+    hasDiscussions: false
+    mergeCommitTitle: PR_TITLE
+    mergeCommitMessage: PR_BODY
+    squashMergeCommitTitle: PR_TITLE
+    squashMergeCommitMessage: PR_BODY
+    permissions:
+      users:
+        - user: __MEMBER__
+          role: __COLLAB_ROLE__
+      teams:
+        - team: pgh-mig-team-child
+          role: push
+    webhooks:
+      - url: https://example.com/pgh-mig/repo-hook
+        contentType: json
+        insecureSsl: false
+        active: true
+        events:
+          - push
+          - pull_request
+        secretKeyRef:
+          name: pgh-mig-hook-secret
+          namespace: crossplane-system
+          key: secret
+    branchProtectionRules:
+      - branch: main
+        enforceAdmins: false
+        requireLinearHistory: false
+        allowForcePushes: false
+        allowDeletions: false
+        requiredConversationResolution: true
+        lockBranch: false
+        allowForkSyncing: false
+        requireSignedCommits: true
+        requiredStatusChecks:
+          strict: true
+          checks:
+            - context: pgh-mig/ci
+        requiredPullRequestReviews:
+          dismissStaleReviews: true
+          requireCodeOwnerReviews: false
+          requiredApprovingReviewCount: 1
+          requireLastPushApproval: false
+          bypassPullRequestAllowances:
+            users:
+              - __MEMBER__
+            teams:
+              - pgh-mig-team-child
+          dismissalRestrictions:
+            users:
+              - __MEMBER__
+            teams:
+              - pgh-mig-team-child
+        branchProtectionRestrictions:
+          blockCreations: false
+          users:
+            - __MEMBER__
+          teams:
+            - pgh-mig-team-child
+    repositoryRules:
+      - name: pgh-mig-ruleset-main
+        enforcement: active
+        target: branch
+        bypassActors:
+          - actorId: 5
+            actorType: RepositoryRole
+            bypassMode: always
+        conditions:
+          refName:
+            include:
+              - "~DEFAULT_BRANCH"
+            exclude: []
+        rules:
+          creation: false
+          deletion: true
+          update: false
+          requiredLinearHistory: false
+          requiredSignatures: true
+          nonFastForward: true
+          pullRequest:
+            dismissStaleReviewsOnPush: true
+            requireCodeOwnerReview: false
+            requireLastPushApproval: false
+            requiredApprovingReviewCount: 1
+            requiredReviewThreadResolution: true
+          requiredStatusChecks:
+            strictRequiredStatusChecksPolicy: true
+            requiredStatusChecks:
+              - context: pgh-mig/ci
+  providerConfigRef:
+    name: default
+---
+# The ruleset below names the environment pgh-mig-env, which the scenario driver
+# creates through the GitHub API once this repository exists. Until then the
+# ruleset is rejected and the managed resource retries.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-repo-rules
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig repository with rulesets
+    private: true
+    forceDelete: true
+    createFromTemplate:
+      owner: __ORG__
+      repo: pgh-mig-template
+      includeAllBranches: false
+    repositoryRules:
+      - name: pgh-mig-ruleset-deploy
+        enforcement: active
+        target: branch
+        bypassActors: []
+        conditions:
+          refName:
+            include:
+              - refs/heads/pgh-mig/**
+            exclude:
+              - refs/heads/pgh-mig/keep/**
+        rules:
+          creation: true
+          deletion: true
+          update: true
+          requiredLinearHistory: true
+          requiredSignatures: false
+          nonFastForward: false
+          requiredDeployments:
+            environments:
+              - pgh-mig-env
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-repo-fork
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig fork of a public repository
+    private: false
+    forceDelete: true
+    createFork:
+      owner: __FORK_OWNER__
+      repo: __FORK_REPO__
+      defaultBranchOnly: true
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-repo-archive
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig repository the provider archives
+    private: true
+    forceDelete: true
+    archived: true
+    createFromTemplate:
+      owner: __ORG__
+      repo: pgh-mig-template
+      includeAllBranches: false
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-repo-template
+spec:
+  forProvider:
+    org: __ORG__
+    description: pgh-mig repository marked as a template
+    private: true
+    forceDelete: true
+    isTemplate: true
+  providerConfigRef:
+    name: default
