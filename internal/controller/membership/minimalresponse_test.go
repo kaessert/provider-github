@@ -109,3 +109,54 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 		})
 	}
 }
+
+// roleOmittedCases are GitHub responses carrying no role while the spec
+// declares one: the absent role differs from the declared one, so drift is
+// reported rather than the role being dereferenced.
+var roleOmittedCases = map[string]struct {
+	reason string
+	gh     *github.Membership
+}{
+	"EmptyMembership": {
+		reason: "A membership without a role must be reported as existing and not up to date.",
+		gh:     &github.Membership{},
+	},
+	"NilMembership": {
+		reason: "A nil membership must be reported as existing and not up to date.",
+		gh:     nil,
+	},
+}
+
+func TestObserveRoleOmittedByGitHub(t *testing.T) {
+	want := managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
+	for name, tc := range roleOmittedCases {
+		t.Run(name, func(t *testing.T) {
+			cr := membership(withAdminRole())
+			got, err := membershipAnswering(tc.gh).Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("\n%s\ne.Observe(...): unexpected error: %v", tc.reason, err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("\n%s\ne.Observe(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestNamespacedObserveRoleOmittedByGitHub(t *testing.T) {
+	want := managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
+	for name, tc := range roleOmittedCases {
+		t.Run(name, func(t *testing.T) {
+			e := scopebridge.New[*namespacedv1alpha1.Membership](membershipAnswering(tc.gh),
+				func() *clusterv1alpha1.Membership { return &clusterv1alpha1.Membership{} })
+			cr := ddtest.Convert(t, membership(withAdminRole()), &namespacedv1alpha1.Membership{})
+			got, err := e.Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("\n%s\ne.Observe(...): unexpected error: %v", tc.reason, err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("\n%s\ne.Observe(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}

@@ -71,7 +71,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	// An omitted role (an Observe-only import) is not compared.
-	if cr.Spec.ForProvider.Role != "" && *m.Role != cr.Spec.ForProvider.Role {
+	if cr.Spec.ForProvider.Role != "" && m.GetRole() != cr.Spec.ForProvider.Role {
 		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{
 			ResourceExists:   true,
