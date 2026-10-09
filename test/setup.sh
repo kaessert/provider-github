@@ -161,7 +161,12 @@ YAML
 if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   "${ROOT}/test/org-secrets.sh" create
-  KUBECTL="${KUBECTL}" setsid nohup "${ROOT}/test/org-secrets.sh" watch \
+  # The runner removes the kubeconfig it gives this script once the script
+  # returns, so the watcher keeps a private flattened copy of the context.
+  watch_kubeconfig="$(mktemp)"
+  ${KUBECTL} config view --minify --flatten > "${watch_kubeconfig}"
+  WATCH_KUBECONFIG="${watch_kubeconfig}" KUBECTL="${KUBECTL}" \
+    setsid nohup "${ROOT}/test/org-secrets.sh" watch \
     >"${TMPDIR:-/tmp}/org-secrets-watch.$$.log" 2>&1 </dev/null &
 fi
 

@@ -11,7 +11,8 @@
 # Usage:
 #   test/org-secrets.sh create   create (or overwrite) both secrets, visibility all
 #   test/org-secrets.sh delete   delete both secrets; a missing secret is fine
-#   test/org-secrets.sh watch    block until the Kubernetes cluster is gone, then
+#   test/org-secrets.sh watch    block until the Kubernetes cluster named by the
+#                                kubeconfig file in WATCH_KUBECONFIG is gone, then
 #                                delete both secrets (the net for a run that ends
 #                                without reaching the teardown script)
 #
@@ -23,6 +24,7 @@
 #
 # Optional environment:
 #   KUBECTL           path to the kubectl binary (watch only; default: kubectl)
+#   WATCH_KUBECONFIG  kubeconfig file for the cluster to watch (watch only; removed on exit)
 #   GITHUB_API_URL    API base (default: https://api.github.com)
 set -euo pipefail
 
@@ -127,13 +129,17 @@ case "${1:-}" in
     ;;
   watch)
     KUBECTL="${KUBECTL:-kubectl}"
-    # Pin the cluster this watcher belongs to by the UID of its kube-system
-    # namespace. The ambient kubeconfig can fall back to a different cluster once
-    # this one is deleted, and a cluster that reuses the address is not this one,
-    # so a probe counts only when it returns the UID recorded here.
-    probe() { "${KUBECTL}" --request-timeout=10s get namespace kube-system -o 'jsonpath={.metadata.uid}' 2>/dev/null; }
+    # The probe reads a private kubeconfig that the caller wrote before it
+    # detached (WATCH_KUBECONFIG): the test runner deletes the one it hands the
+    # setup step as soon as that step returns, and the ambient fallback can be a
+    # different cluster. It also pins the cluster by the UID of its kube-system
+    # namespace, so a cluster that later reuses the address does not count.
+    [ -s "${WATCH_KUBECONFIG:-}" ] || fail "watch: WATCH_KUBECONFIG must name a readable kubeconfig"
+    trap 'rm -f "${WATCH_KUBECONFIG}"' EXIT
+    probe() { "${KUBECTL}" --kubeconfig "${WATCH_KUBECONFIG}" --request-timeout=10s get namespace kube-system -o 'jsonpath={.metadata.uid}' 2>/dev/null || true; }
     uid="$(probe)"
     [ -n "${uid}" ] || fail "watch: the cluster does not answer, so it cannot be watched"
+    echo "org-secrets.sh: watching the cluster whose kube-system namespace is ${uid}"
     # Six consecutive probes that do not return this cluster's UID, ten seconds
     # apart, mean the cluster is gone rather than briefly unreachable. The
     # deadline bounds a watcher whose cluster outlives any plausible run.
