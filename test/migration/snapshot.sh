@@ -18,7 +18,9 @@
 #                 topics, fork/template origin, collaborators, team access,
 #                 webhooks (the secret is masked by GitHub, so presence shows),
 #                 branch protection of every protected branch, rulesets,
-#                 environments
+#                 environments (recorded as the string "unreadable" when the
+#                 installation is refused with 403: the App can create an
+#                 environment but not list them)
 #   teams         every team whose slug starts with pgh-mig-: settings, parent,
 #                 members with their team role
 #   variables     every PGH_MIG_ organization variable, with its selected repositories
@@ -80,6 +82,22 @@ snapshot_membership() {
   printf '%s' "${m}" | jq -c '{login: .user.login, id: .user.id, role, state}'
 }
 
+# snapshot_environments prints the repository's environments as a JSON array, or
+# the string "unreadable" when the installation may not list them: the App can
+# create an environment (administration) but listing needs a permission it does
+# not hold, so GitHub answers 403 and nothing about environments can be compared.
+snapshot_environments() { # snapshot_environments <repo>
+  local resp status
+  resp="$(gh_call GET "/repos/${ORG}/$1/environments")"
+  status="$(gh_status "${resp}")"
+  case "${status}" in
+    2??) gh_body "${resp}" | jq -c '[(.environments // [])[] | {id, name}] | sort_by(.name)' 2>/dev/null || echo '[]' ;;
+    403) echo '"unreadable"' ;;
+    404) echo '[]' ;;
+    *) die "GET /repos/${ORG}/$1/environments returned HTTP ${status}: $(gh_body "${resp}" | head -c 300)" ;;
+  esac
+}
+
 snapshot_repo() { # snapshot_repo <name>
   local name="$1" repo collabs teams hooks branches protections="{}" rulesets="[]" envs b prot ids id one
   repo="$(gh_get "/repos/${ORG}/${name}")"
@@ -105,8 +123,7 @@ snapshot_repo() { # snapshot_repo <name>
     done
     rulesets="$(printf '%s' "${rulesets}" | jq -c 'sort_by(.name)')"
   fi
-  envs="$(gh_get_opt "/repos/${ORG}/${name}/environments" | jq -c '[(.environments // [])[] | {id, name}] | sort_by(.name)' 2>/dev/null)"
-  [ -n "${envs}" ] || envs="[]"
+  envs="$(snapshot_environments "${name}")"
   jq -cn --argjson repo "${repo}" --argjson collabs "${collabs}" --argjson teams "${teams}" \
     --argjson hooks "${hooks}" --argjson protections "${protections}" --argjson rulesets "${rulesets}" \
     --argjson envs "${envs}" '

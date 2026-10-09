@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A local stand-in for the GitHub REST API, used by selftest.sh.
 
-Serves GET <path> from <root><path>.json (the query string is ignored; a second
+Serves GET <path> from <root><path>.json (answering 403 instead when a file
+<root><path>.json.403 exists; the query string is ignored; a second
 page is empty). Anything else is refused with 405, so a test that passes proves
 the snapshot tool only reads. Every request is appended to <log> as
 "<METHOD> <path>". Prints the port it listens on, then serves until killed.
@@ -36,6 +37,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
         path = os.path.join(ROOT, parsed.path.lstrip("/") + ".json")
+        if os.path.isfile(path + ".403"):
+            self._send(403, {"message": "Resource not accessible by integration"})
+            return
         if not os.path.isfile(path):
             self._send(404, {"message": "Not Found"})
             return
