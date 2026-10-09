@@ -70,7 +70,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	cr.Status.AtProvider.ID = name
 	cr.Status.AtProvider.Org = org
-	cr.Status.AtProvider.Visibility = s.Visibility
+	cr.Status.AtProvider.Visibility = s.GetVisibility()
 	cr.Status.AtProvider.SelectedRepositories = nil
 
 	// An omitted visibility (an Observe-only import) is not compared.

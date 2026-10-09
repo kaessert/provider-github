@@ -154,7 +154,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	cr.Status.AtProvider.ID = name
-	cr.Status.AtProvider.Description = pointer.Deref(org.Description, "")
+	cr.Status.AtProvider.Description = org.GetDescription()
 	cr.Status.AtProvider.Actions.EnabledRepos = nil
 	cr.Status.AtProvider.Secrets = nil
 
