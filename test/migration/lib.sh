@@ -18,9 +18,9 @@
 #
 #   MIGRATION_ORG              test organization login [pgh-test]
 #   MIGRATION_MEMBER           existing org member the fixtures use [first member found]
-#   MIGRATION_FORK_SOURCE      public owner/repo the fork fixture forks [octocat/Hello-World]
+#   MIGRATION_FORK_SOURCE      public owner/repo the fork fixture forks [actions/hello-world-docker-action]
 #   MIGRATION_WORKDIR          evidence + scratch directory [${TMPDIR:-/tmp}/provider-github-migration]
-#   MIGRATION_POLL             provider --poll interval [15s]
+#   MIGRATION_POLL             provider --poll interval [60s]
 #   MIGRATION_SETTLE_POLLS     poll cycles the candidate must run before the
 #                              post-upgrade snapshot is taken [4]
 #   MIGRATION_READY_TIMEOUT    seconds to wait for fixtures to become Ready [1500]
@@ -45,9 +45,9 @@ FIXTURES_DIR="${MIGRATION_FIXTURES_DIR:-${MIGRATION_DIR}/fixtures}"
 
 MIGRATION_ORG="${MIGRATION_ORG:-pgh-test}"
 MIGRATION_API_URL="${MIGRATION_API_URL:-https://api.github.com}"
-MIGRATION_FORK_SOURCE="${MIGRATION_FORK_SOURCE:-octocat/Hello-World}"
+MIGRATION_FORK_SOURCE="${MIGRATION_FORK_SOURCE:-actions/hello-world-docker-action}"
 MIGRATION_WORKDIR="${MIGRATION_WORKDIR:-${TMPDIR:-/tmp}/provider-github-migration}"
-MIGRATION_POLL="${MIGRATION_POLL:-15s}"
+MIGRATION_POLL="${MIGRATION_POLL:-60s}"
 MIGRATION_SETTLE_POLLS="${MIGRATION_SETTLE_POLLS:-4}"
 MIGRATION_READY_TIMEOUT="${MIGRATION_READY_TIMEOUT:-1500}"
 MIGRATION_BASELINE_REPO="${MIGRATION_BASELINE_REPO:-https://github.com/provider-github/provider-github.git}"

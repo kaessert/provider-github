@@ -117,7 +117,23 @@ capture_provider_logs candidate
 log_findings candidate
 
 # --- assertions --------------------------------------------------------------
-assert_snapshots_identical "no recreate and no write: GitHub is identical before and after the upgrade (IDs, settings, timestamps)" after-v1 after-v2
+# An object the baseline could not apply (it never reached Ready there, so GitHub
+# never had it) is created by the candidate, which is not a change to an existing
+# object. Such an object is left out of the comparison and reported.
+SNAP_AFTER=after-v2
+if [ -s "${EVIDENCE_DIR}/baseline-not-ready.txt" ]; then
+  # shellcheck disable=SC2016
+  UNAPPLIED_VARS="$(grep '^OrganizationVariable/' "${EVIDENCE_DIR}/baseline-not-ready.txt" | cut -d: -f1 | cut -d/ -f2 \
+    | while read -r n; do jq -r --arg n "${n}" '.[] | select(.name == $n) | .externalName' "${EVIDENCE_DIR}/k8s-v1.json"; done)"
+  if [ -n "${UNAPPLIED_VARS}" ]; then
+    jq --arg v "${UNAPPLIED_VARS//$'\n'/ }" '.variables |= with_entries(select(.key as $k | ($v | split(" ") | index($k)) | not))' \
+      "${EVIDENCE_DIR}/snapshots/after-v2.json" >"${EVIDENCE_DIR}/snapshots/after-v2-filtered.json"
+    SNAP_AFTER=after-v2-filtered
+    record INFO "organization variables the baseline never applied are left out of the GitHub comparison (the candidate created them)" "${UNAPPLIED_VARS//$'\n'/ }"
+  fi
+fi
+assert_snapshots_identical "no recreate and no write: GitHub is identical before and after the upgrade (IDs, settings, timestamps)" after-v1 "${SNAP_AFTER}"
+assert_snapshots_identical "no recreate and no setting changed: numeric IDs and settings are identical (timestamps ignored)" after-v1 "${SNAP_AFTER}" --ignore-timestamps
 
 # Kubernetes side.
 COMPARE="$(jq -rn --slurpfile b "${EVIDENCE_DIR}/k8s-v1.json" --slurpfile a "${EVIDENCE_DIR}/k8s-v2.json" '

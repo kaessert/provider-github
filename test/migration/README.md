@@ -49,9 +49,9 @@ The scenarios fail at once, naming the input, when something is missing:
 
 Optional: `MIGRATION_MEMBER` (an existing organization member the fixtures use;
 default: the first user member found), `MIGRATION_FORK_SOURCE` (public `owner/repo`
-to fork, default `octocat/Hello-World`), `MIGRATION_WORKDIR` (evidence and scratch,
+to fork, default `actions/hello-world-docker-action`, chosen because it carries `.github/workflows/ci.yml`, which the runner-group workflow fixture names), `MIGRATION_WORKDIR` (evidence and scratch,
 default `$TMPDIR/provider-github-migration`), `MIGRATION_POLL` (provider `--poll`,
-default `15s`), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
+default `60s`: at 15s a run exhausted the GitHub App installation's 5000 requests an hour), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
 `MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
 baseline), `MIGRATION_REQUIRE_BASELINE_READY=1` (fail rather than warn when a
 fixture is not Ready on the baseline) and `MIGRATION_KEEP_V1_FLAGS=1` (upgrade
