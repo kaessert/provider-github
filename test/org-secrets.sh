@@ -127,15 +127,11 @@ case "${1:-}" in
     ;;
   watch)
     KUBECTL="${KUBECTL:-kubectl}"
-    # Pin the cluster this watcher belongs to. The ambient kubeconfig can fall
-    # back to a different cluster once this one is deleted, so the probe reads a
-    # private copy of the current context and also compares the kube-system
-    # namespace UID: a cluster that reuses the address is not this cluster.
-    kubeconfig="$(mktemp)"
-    trap 'rm -f "${kubeconfig}"' EXIT
-    "${KUBECTL}" config view --minify --flatten > "${kubeconfig}" 2>/dev/null \
-      || fail "watch: cannot read the current kubeconfig context"
-    probe() { "${KUBECTL}" --kubeconfig "${kubeconfig}" --request-timeout=10s get namespace kube-system -o 'jsonpath={.metadata.uid}' 2>/dev/null; }
+    # Pin the cluster this watcher belongs to by the UID of its kube-system
+    # namespace. The ambient kubeconfig can fall back to a different cluster once
+    # this one is deleted, and a cluster that reuses the address is not this one,
+    # so a probe counts only when it returns the UID recorded here.
+    probe() { "${KUBECTL}" --request-timeout=10s get namespace kube-system -o 'jsonpath={.metadata.uid}' 2>/dev/null; }
     uid="$(probe)"
     [ -n "${uid}" ] || fail "watch: the cluster does not answer, so it cannot be watched"
     # Six consecutive probes that do not return this cluster's UID, ten seconds
