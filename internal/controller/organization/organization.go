@@ -18,12 +18,9 @@ package organization
 
 import (
 	"context"
-	"reflect"
 	"slices"
 	"sort"
 	"sync"
-
-	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
@@ -34,6 +31,7 @@ import (
 
 	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/controller/driftcmp"
 	"github.com/crossplane/provider-github/internal/controller/mgmtpolicy"
 
 	"github.com/google/go-github/v90/github"
@@ -169,7 +167,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		aRepos := getSortedRepoNames(repos)
 		cr.Status.AtProvider.Actions.EnabledRepos = enabledRepoObservations(aRepos)
 
-		if !reflect.DeepEqual(aRepos, crARepos) {
+		if !driftcmp.Equal(aRepos, crARepos) {
 			return drifted(cr), nil
 		}
 	}
@@ -186,7 +184,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				return managed.ExternalObservation{}, err
 			}
 			cr.Status.AtProvider.Secrets.ActionsSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.ActionsSecrets, ghActionsSecretRepos)
-			if !cmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
+			if !driftcmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
 				return drifted(cr), nil
 			}
 		}
@@ -200,7 +198,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				return managed.ExternalObservation{}, err
 			}
 			cr.Status.AtProvider.Secrets.DependabotSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.DependabotSecrets, ghDependabotSecretRepos)
-			if !cmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
+			if !driftcmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
 				return drifted(cr), nil
 			}
 		}
@@ -345,7 +343,7 @@ func setEnabledReposForActions(ctx context.Context, gh *ghclient.Client, name st
 	if err != nil {
 		return err
 	}
-	if reflect.DeepEqual(crARepos, getSortedRepoNames(repos)) {
+	if driftcmp.Equal(crARepos, getSortedRepoNames(repos)) {
 		return nil
 	}
 
