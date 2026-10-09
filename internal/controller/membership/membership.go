@@ -51,10 +51,10 @@ const (
 	errNewClient = "cannot create new Service"
 )
 
-// Setup adds a controller that reconciles Membership managed resources.
 // roleDirectMember is the GitHub API name of the plain organization member role.
 const roleDirectMember = "direct_member"
 
+// Setup adds a controller that reconciles Membership managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
 	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
 }
