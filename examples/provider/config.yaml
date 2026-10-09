@@ -8,6 +8,20 @@ data:
   # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
 
 ---
+# Credentials of a second GitHub App, pooled by the multi-app ProviderConfig
+# below.
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: crossplane-system
+  name: example-provider-secret-app2
+type: Opaque
+data:
+  # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
+
+---
+# A ProviderConfig is cluster-scoped, so it sets no metadata.namespace; only the
+# credentials Secret it names lives in a namespace.
 apiVersion: github.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
@@ -26,16 +40,6 @@ spec:
 # the app with the most remaining rate-limit quota and skips any whose
 # quota was recently exhausted (HTTP 429) until X-RateLimit-Reset (with a
 # 30s floor). Each entry has the same shape as `credentials`.
-apiVersion: v1
-kind: Secret
-metadata:
-  namespace: crossplane-system
-  name: example-provider-secret-app2
-type: Opaque
-data:
-  # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
-
----
 apiVersion: github.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:

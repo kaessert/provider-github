@@ -36,9 +36,17 @@ func TestNamespacedExamplesDecodeStrictly(t *testing.T) {
 		t.Fatalf("add to scheme: %v", err)
 	}
 
-	files, err := filepath.Glob("../../../../examples/organizations/*-namespaced.yaml")
+	// One directory per resource under examples/; examples/provider holds the
+	// ProviderConfig manifests, which are not managed resources of this API group.
+	matches, err := filepath.Glob("../../../../examples/*/*-namespaced.yaml")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var files []string
+	for _, file := range matches {
+		if filepath.Base(filepath.Dir(file)) != "provider" {
+			files = append(files, file)
+		}
 	}
 	if len(files) != 9 {
 		t.Fatalf("found %d namespaced examples, want 9", len(files))

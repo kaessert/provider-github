@@ -1,0 +1,15 @@
+for: organizations.github.m.crossplane.io/v1alpha1/Organization
+meta.upbound.io/example-id: organizations/v1alpha1/organization
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-organization-namespaced.sh
+crossplane.io/update-test: |
+  - field: description
+    value: Crossplane provider-github updated organization description
+  - field: actions
+    skip:
+      reason: fixture-missing
+      evidence: "the suite never changes the shared test organization's Actions policy or its secret access lists"
+  - field: secrets
+    skip:
+      reason: fixture-missing
+      evidence: "the suite never changes the shared test organization's Actions policy or its secret access lists"

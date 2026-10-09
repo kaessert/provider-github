@@ -46,7 +46,6 @@ make dev-clean           # Tear down the kind cluster from `make dev`
 make reviewable          # Code generation, linters, and tests — run before opening a PR
 make build               # Build the provider binary and OCI/xpkg artifacts
 make test                # Unit tests
-make test-integration    # Integration tests (requires kind + helm + up)
 make generate            # Regenerate CRDs and zz_generated_*.go via controller-gen + angryjet
 make lint                # golangci-lint (v2.4.0)
 ```
@@ -137,4 +136,4 @@ The seventh, `github_repository_unreconcilable{organization, repository, dimensi
 - `README.md` — a short overview of the implemented resources.
 - `RATE_LIMIT_TRACKING.md` — Prometheus metrics, example queries, and alert rules.
 - `PROVIDER_CHECKLIST.md` — Crossplane community checklist for providers (mostly governance, not day-to-day dev).
-- `examples/organizations/` — sample manifests for each managed resource.
+- `examples/<resource>/` — sample manifests for each managed resource, cluster-scoped and namespaced.

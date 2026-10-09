@@ -1,0 +1,17 @@
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: pgh-e2e-team-ns
+  namespace: default
+spec:
+  forProvider:
+    org: pgh-test
+    description: Crossplane provider-github example team
+    privacy: closed
+    # Reference an Organization managed resource instead of naming the
+    # organization directly:
+    #   orgRef:
+    #     name: <Organization managed resource>
+  providerConfigRef:
+    kind: ProviderConfig
+    name: default

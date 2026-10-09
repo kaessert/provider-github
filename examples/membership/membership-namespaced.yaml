@@ -1,0 +1,17 @@
+# A Membership invites a GitHub user to the organization. The external name
+# is the login of the user to invite; replace it with a login that may be
+# invited.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Membership
+metadata:
+  name: pgh-e2e-invitee-ns
+  namespace: default
+  annotations:
+    crossplane.io/external-name: pgh-e2e-invitee
+spec:
+  forProvider:
+    org: pgh-test
+    role: member
+  providerConfigRef:
+    kind: ProviderConfig
+    name: default

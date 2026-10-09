@@ -1,0 +1,89 @@
+for: organizations.github.crossplane.io/v1alpha1/Repository
+meta.upbound.io/example-id: organizations/v1alpha1/repository
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-repository.sh
+crossplane.io/update-test: |
+  - field: description
+    skip:
+      reason: write-only
+  - field: permissions
+    skip:
+      reason: write-only
+  - field: webhooks
+    skip:
+      reason: write-only
+  - field: branchProtectionRules
+    skip:
+      reason: write-only
+  - field: repositoryRules
+    skip:
+      reason: write-only
+  - field: createFromTemplate
+    skip:
+      reason: write-only
+  - field: createFork
+    skip:
+      reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"
+  - field: archived
+    skip:
+      reason: write-only
+  - field: forceDelete
+    skip:
+      reason: write-only
+  - field: private
+    skip:
+      reason: write-only
+  - field: isTemplate
+    skip:
+      reason: write-only
+  - field: topics
+    skip:
+      reason: write-only
+      disposition: one-live-patch
+  - field: defaultBranch
+    skip:
+      reason: write-only
+  - field: allowMergeCommit
+    skip:
+      reason: write-only
+  - field: allowSquashMerge
+    skip:
+      reason: write-only
+  - field: allowRebaseMerge
+    skip:
+      reason: write-only
+  - field: allowAutoMerge
+    skip:
+      reason: write-only
+  - field: allowUpdateBranch
+    skip:
+      reason: write-only
+  - field: deleteBranchOnMerge
+    skip:
+      reason: write-only
+  - field: hasIssues
+    skip:
+      reason: write-only
+  - field: hasProjects
+    skip:
+      reason: write-only
+  - field: hasWiki
+    skip:
+      reason: write-only
+  - field: hasDiscussions
+    skip:
+      reason: write-only
+  - field: mergeCommitTitle
+    skip:
+      reason: write-only
+  - field: mergeCommitMessage
+    skip:
+      reason: write-only
+  - field: squashMergeCommitTitle
+    skip:
+      reason: write-only
+  - field: squashMergeCommitMessage
+    skip:
+      reason: write-only
