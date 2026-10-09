@@ -36,7 +36,7 @@ import (
 
 	pointer "k8s.io/utils/ptr"
 
-	"github.com/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -700,7 +700,7 @@ func getRepoWebhookId(hooks []*github.Hook, webhookUrl string) (*int64, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("cannot find repository webhook id for %s", webhookUrl)
+	return nil, errors.Errorf("cannot find repository webhook id for %s", webhookUrl)
 }
 
 func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
@@ -747,15 +747,15 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 			perms := m.GetPermissions()
 			switch {
 			case perms.GetAdmin():
-				uToPermission[username] = "admin"
+				uToPermission[username] = repoPermissionAdmin
 			case perms.GetMaintain():
-				uToPermission[username] = "maintain"
+				uToPermission[username] = repoPermissionMaintain
 			case perms.GetPush():
-				uToPermission[username] = "push"
+				uToPermission[username] = repoPermissionPush
 			case perms.GetTriage():
-				uToPermission[username] = "triage"
+				uToPermission[username] = repoPermissionTriage
 			default:
-				uToPermission[username] = "pull"
+				uToPermission[username] = repoPermissionPull
 			}
 		}
 
@@ -1033,7 +1033,15 @@ func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, ow
 	return enforced, nil
 }
 
-const repoPermissionAdmin = "admin"
+// Repository permission levels reported by the GitHub API.
+const (
+	repoPermissionAdmin    = "admin"
+	repoPermissionMaintain = "maintain"
+	repoPermissionWrite    = "write"
+	repoPermissionPush     = "push"
+	repoPermissionTriage   = "triage"
+	repoPermissionPull     = "pull"
+)
 
 // 404 (not a collaborator) counts as no access.
 func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, user string) (bool, error) {
@@ -1045,7 +1053,7 @@ func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, u
 		return false, err
 	}
 	permission := level.GetPermission()
-	return permission == repoPermissionAdmin || permission == "write", nil
+	return permission == repoPermissionAdmin || permission == repoPermissionWrite, nil
 }
 
 // Probed because a team inheriting access from its parent is absent from the repo team list.
@@ -1349,9 +1357,9 @@ func protectionToRule(branch string, protection *github.Protection) v1alpha1.Bra
 		AllowForcePushes:               &protection.GetAllowForcePushes().Enabled,
 		AllowDeletions:                 &protection.GetAllowDeletions().Enabled,
 		RequiredConversationResolution: &protection.GetRequiredConversationResolution().Enabled,
-		LockBranch:                     util.ToBoolPtr(protection.GetLockBranch().GetEnabled()),
-		AllowForkSyncing:               util.ToBoolPtr(protection.GetAllowForkSyncing().GetEnabled()),
-		RequireSignedCommits:           util.ToBoolPtr(protection.GetRequiredSignatures().GetEnabled()),
+		LockBranch:                     pointer.To(protection.GetLockBranch().GetEnabled()),
+		AllowForkSyncing:               pointer.To(protection.GetAllowForkSyncing().GetEnabled()),
+		RequireSignedCommits:           pointer.To(protection.GetRequiredSignatures().GetEnabled()),
 	}
 
 	rChecks := protection.GetRequiredStatusChecks()
@@ -1437,7 +1445,7 @@ func protectionToRule(branch string, protection *github.Protection) v1alpha1.Bra
 	restr := protection.GetRestrictions()
 	if restr != nil {
 		bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
-		bpr.BranchProtectionRestrictions.BlockCreations = util.ToBoolPtr(protection.GetBlockCreations().GetEnabled())
+		bpr.BranchProtectionRestrictions.BlockCreations = pointer.To(protection.GetBlockCreations().GetEnabled())
 		if len(restr.Users) > 0 {
 			users := make([]string, len(restr.Users))
 			for i, user := range restr.Users {
@@ -2167,7 +2175,11 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	}
 
 	if rule.RequiredStatusChecks != nil {
+		// checks stays nil when there are no checks so the request body is unchanged.
 		var checks []*github.RequiredStatusCheck
+		if n := len(rule.RequiredStatusChecks.Checks); n > 0 {
+			checks = make([]*github.RequiredStatusCheck, 0, n)
+		}
 		for _, check := range rule.RequiredStatusChecks.Checks {
 			// if nil, allow any app to set the status of a check
 			appId := pointer.Deref(check.AppID, -1)
@@ -2434,11 +2446,11 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 		if _, inCR := crRulesets[rule.Name]; inCR {
 			if types := unmanagedRuleTypes(rRuleset.GetRules()); len(types) > 0 {
-				return nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+				return nil, errors.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
 			}
 		}
 		ruleset := v1alpha1.RepositoryRuleset{
-			Target:      util.ToStringPtr(string(pointer.Deref(rule.Target, ""))),
+			Target:      pointer.To(string(pointer.Deref(rule.Target, ""))),
 			Enforcement: (*string)(&rule.Enforcement),
 			Name:        rule.Name,
 
@@ -2450,13 +2462,13 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 			},
 			BypassActors: nil,
 			Rules: &v1alpha1.Rules{
-				Creation:              util.ToBoolPtr(false),
-				Update:                util.ToBoolPtr(false),
-				Deletion:              util.ToBoolPtr(false),
-				RequiredLinearHistory: util.ToBoolPtr(false),
+				Creation:              pointer.To(false),
+				Update:                pointer.To(false),
+				Deletion:              pointer.To(false),
+				RequiredLinearHistory: pointer.To(false),
 				RequiredDeployments:   nil,
-				RequiredSignatures:    util.ToBoolPtr(false),
-				NonFastForward:        util.ToBoolPtr(false),
+				RequiredSignatures:    pointer.To(false),
+				NonFastForward:        pointer.To(false),
 				PullRequest:           nil,
 				RequiredStatusChecks:  nil,
 			},
@@ -2488,30 +2500,30 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if rRuleset != nil && rRuleset.Rules != nil {
 			rules := rRuleset.Rules
 			if rules.Creation != nil {
-				ruleset.Rules.Creation = util.ToBoolPtr(true)
+				ruleset.Rules.Creation = pointer.To(true)
 			}
 			if rules.Deletion != nil {
-				ruleset.Rules.Deletion = util.ToBoolPtr(true)
+				ruleset.Rules.Deletion = pointer.To(true)
 			}
 			if rules.RequiredLinearHistory != nil {
-				ruleset.Rules.RequiredLinearHistory = util.ToBoolPtr(true)
+				ruleset.Rules.RequiredLinearHistory = pointer.To(true)
 			}
 			if rules.RequiredSignatures != nil {
-				ruleset.Rules.RequiredSignatures = util.ToBoolPtr(true)
+				ruleset.Rules.RequiredSignatures = pointer.To(true)
 			}
 			if rules.NonFastForward != nil {
-				ruleset.Rules.NonFastForward = util.ToBoolPtr(true)
+				ruleset.Rules.NonFastForward = pointer.To(true)
 			}
 			if rules.Update != nil {
-				ruleset.Rules.Update = util.ToBoolPtr(true)
+				ruleset.Rules.Update = pointer.To(true)
 			}
 			if params := rules.PullRequest; params != nil {
 				ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
-					RequireCodeOwnerReview:         util.ToBoolPtr(params.RequireCodeOwnerReview),
-					RequireLastPushApproval:        util.ToBoolPtr(params.RequireLastPushApproval),
-					RequiredReviewThreadResolution: util.ToBoolPtr(params.RequiredReviewThreadResolution),
-					RequiredApprovingReviewCount:   util.ToIntPtr(params.RequiredApprovingReviewCount),
-					DismissStaleReviewsOnPush:      util.ToBoolPtr(params.DismissStaleReviewsOnPush),
+					RequireCodeOwnerReview:         pointer.To(params.RequireCodeOwnerReview),
+					RequireLastPushApproval:        pointer.To(params.RequireLastPushApproval),
+					RequiredReviewThreadResolution: pointer.To(params.RequiredReviewThreadResolution),
+					RequiredApprovingReviewCount:   pointer.To(params.RequiredApprovingReviewCount),
+					DismissStaleReviewsOnPush:      pointer.To(params.DismissStaleReviewsOnPush),
 				}
 			}
 			if params := rules.RequiredDeployments; params != nil {
@@ -2530,7 +2542,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 				util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
 
 				ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
-					StrictRequiredStatusChecksPolicy: util.ToBoolPtr(params.StrictRequiredStatusChecksPolicy),
+					StrictRequiredStatusChecksPolicy: pointer.To(params.StrictRequiredStatusChecksPolicy),
 					RequiredStatusChecks:             requiredStatusChecksParameters,
 				}
 			}
@@ -2725,7 +2737,7 @@ func findRulesetIDByName(rulesets []*github.RepositoryRuleset, name string) (int
 			return *ruleset.ID, nil
 		}
 	}
-	return 0, fmt.Errorf("ruleset with name %s not found", name)
+	return 0, errors.Errorf("ruleset with name %s not found", name)
 }
 
 //nolint:gocyclo

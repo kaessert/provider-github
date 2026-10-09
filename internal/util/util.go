@@ -221,23 +221,6 @@ func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 
 }
 
-// ToBoolPtr converts a boolean value to a pointer to a boolean value.
-func ToBoolPtr(b bool) *bool {
-	return &b
-}
-
-// ToIntPtr is a helper function that takes an integer 'i' as input and returns a pointer to 'i'.
-// This can be useful when you want to create a pointer to an integer value.
-func ToIntPtr(i int) *int {
-	return &i
-}
-
-// ToStringPtr is a helper function that takes a string 's' as input and returns a pointer to 's'.
-// This can be useful when you want to create a pointer to a string value.
-func ToStringPtr(s string) *string {
-	return &s
-}
-
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',
 // uses 'def' as a default if 'ptr' is nil, and returns a new pointer to the resulting bool.
 func BoolDerefToPointer(ptr *bool, def bool) *bool {

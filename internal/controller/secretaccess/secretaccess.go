@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 )
@@ -61,7 +62,7 @@ func VisibilityMismatch(ghVisibility, specVisibility string) xpv1.Condition {
 
 // SecretNotFoundError is the Create error: the secret must exist on GitHub first.
 func SecretNotFoundError(name string) error {
-	return fmt.Errorf("secret %s not found on GitHub; create it there first", name)
+	return errors.Errorf("secret %s not found on GitHub; create it there first", name)
 }
 
 func notReady(reason xpv1.ConditionReason, message string) xpv1.Condition {
@@ -135,7 +136,7 @@ func RenamedRepoError(known map[string]int64, added []string, addedIDs []int64) 
 	}
 	for i, n := range added {
 		if current, ok := byID[addedIDs[i]]; ok {
-			return fmt.Errorf("repository %s is named %s on GitHub; update selectedRepositories to the new name", n, current)
+			return errors.Errorf("repository %s is named %s on GitHub; update selectedRepositories to the new name", n, current)
 		}
 	}
 	return nil

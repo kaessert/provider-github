@@ -51,6 +51,9 @@ const (
 	errNewClient = "cannot create new Service"
 )
 
+// roleDirectMember is the GitHub API name of the plain organization member role.
+const roleDirectMember = "direct_member"
+
 // Setup adds a controller that reconciles Membership managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
 	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
@@ -171,11 +174,11 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	role := cr.Spec.ForProvider.Role
-	if role == "direct_member" {
+	if role == roleDirectMember {
 		return managed.ExternalCreation{}, errors.New("Don't use `direct_member`, use `member` instead!")
 	}
 	if role == "member" {
-		role = "direct_member"
+		role = roleDirectMember
 	}
 
 	inv := &github.CreateOrgInvitationOptions{
