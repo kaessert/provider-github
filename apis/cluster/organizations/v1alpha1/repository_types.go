@@ -32,12 +32,15 @@ type RepositoryParameters struct {
 	Description string                `json:"description,omitempty"`
 	Permissions RepositoryPermissions `json:"permissions,omitempty"`
 
-	Webhooks []RepositoryWebhook `json:"webhooks,omitempty"`
+	// +optional
+	Webhooks []RepositoryWebhook `json:"webhooks"`
 
-	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules,omitempty"`
+	// +optional
+	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules"`
 
 	// RepositoryRules are the rules for the repository
-	RepositoryRules []RepositoryRuleset `json:"repositoryRules,omitempty"`
+	// +optional
+	RepositoryRules []RepositoryRuleset `json:"repositoryRules"`
 
 	// Creates a new repository using a repository template
 	CreateFromTemplate *TemplateRepo `json:"createFromTemplate,omitempty"`
@@ -77,7 +80,7 @@ type RepositoryParameters struct {
 	// Topics help categorize and discover repositories.
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
-	Topics []string `json:"topics,omitempty"`
+	Topics []string `json:"topics"`
 
 	// DefaultBranch is the name of the default branch.
 	// +optional
@@ -153,8 +156,10 @@ type RepositoryParameters struct {
 
 // RepositoryParameters are the configurable fields of a Repository.
 type RepositoryPermissions struct {
-	Users []RepositoryUser `json:"users,omitempty"`
-	Teams []RepositoryTeam `json:"teams,omitempty"`
+	// +optional
+	Users []RepositoryUser `json:"users"`
+	// +optional
+	Teams []RepositoryTeam `json:"teams"`
 }
 
 type RepositoryUser struct {
@@ -338,29 +343,29 @@ type RequiredPullRequestReviews struct {
 type BypassPullRequestAllowancesRequest struct {
 	// The list of user logins allowed to bypass pull request requirements.
 	// +optional
-	Users []string `json:"users,omitempty"`
+	Users []string `json:"users"`
 
 	// The list of team slugs allowed to bypass pull request requirements.
 	// +optional
-	Teams []string `json:"teams,omitempty"`
+	Teams []string `json:"teams"`
 
 	// The list of app slugs allowed to bypass pull request requirements.
 	// +optional
-	Apps []string `json:"apps,omitempty"`
+	Apps []string `json:"apps"`
 }
 
 type DismissalRestrictionsRequest struct {
 	// The list of user logins with dismissal access.
 	// +optional
-	Users *[]string `json:"users,omitempty"`
+	Users *[]string `json:"users"`
 
 	// The list of team slugs with dismissal access.
 	// +optional
-	Teams *[]string `json:"teams,omitempty"`
+	Teams *[]string `json:"teams"`
 
 	// The list of app slugs with dismissal access.
 	// +optional
-	Apps *[]string `json:"apps,omitempty"`
+	Apps *[]string `json:"apps"`
 }
 
 // BranchProtectionRestrictions defines the restrictions to apply to a branch protection rule.
@@ -373,15 +378,15 @@ type BranchProtectionRestrictions struct {
 
 	// Only people allowed to push will be able to create new branches matching this rule.
 	// +optional
-	Users []string `json:"users,omitempty"`
+	Users []string `json:"users"`
 
 	// Only teams allowed to push will be able to create new branches matching this rule.
 	// +optional
-	Teams []string `json:"teams,omitempty"`
+	Teams []string `json:"teams"`
 
 	// Only apps allowed to push will be able to create new branches matching this rule.
 	// +optional
-	Apps []string `json:"apps,omitempty"`
+	Apps []string `json:"apps"`
 }
 
 // RepositoryRuleset represents the rules for a repository
@@ -461,7 +466,7 @@ type Rules struct {
 type RulesRequiredDeployments struct {
 	// Environments is the list of environments that are required to be deployed to before merging
 	// +optional
-	Environments []string `json:"environments,omitempty"`
+	Environments []string `json:"environments"`
 }
 
 type RulesPullRequest struct {
@@ -485,7 +490,7 @@ type RulesPullRequest struct {
 type RulesRequiredStatusChecks struct {
 	// RequiredStatusChecks is the list of status checks to require in order to merge into this branch.
 	// +optional
-	RequiredStatusChecks []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks,omitempty"`
+	RequiredStatusChecks []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks"`
 	// StrictRequiredStatusChecksPolicy requires branches to be up-to-date before merging.
 	// +optional
 	StrictRequiredStatusChecksPolicy *bool `json:"strictRequiredStatusChecksPolicy,omitempty"`
@@ -522,15 +527,436 @@ type RepoFork struct {
 	DefaultBranchOnly bool `json:"defaultBranchOnly"`
 }
 
+// RepositoryUserObservation is a direct collaborator of a repository and the role GitHub reports for them.
+type RepositoryUserObservation struct {
+	// User is the login of the collaborator.
+	User string `json:"user,omitempty"`
+
+	// Role is the role of the collaborator.
+	Role string `json:"role,omitempty"`
+}
+
+// RepositoryTeamObservation is a team with access to a repository and the role GitHub reports for it.
+type RepositoryTeamObservation struct {
+	// Team is the slug of the team.
+	Team string `json:"team,omitempty"`
+
+	// Role is the role of the team.
+	Role string `json:"role,omitempty"`
+}
+
+// RepositoryPermissionsObservation is the observed access to a repository.
+type RepositoryPermissionsObservation struct {
+	// Users lists the direct collaborators of the repository.
+	// +optional
+	Users []RepositoryUserObservation `json:"users"`
+
+	// Teams lists the teams with access to the repository.
+	// +optional
+	Teams []RepositoryTeamObservation `json:"teams"`
+}
+
+// RepositoryWebhookObservation is a webhook of a repository. The webhook
+// secret is write-only material that GitHub never returns, so it is not
+// part of the observation.
+type RepositoryWebhookObservation struct {
+	// URL to which the payloads are delivered.
+	URL string `json:"url,omitempty"`
+
+	// InsecureSSL is whether the SSL certificate of the host for url is not verified.
+	InsecureSSL *bool `json:"insecureSsl,omitempty"`
+
+	// ContentType is the media type used to serialize the payloads.
+	ContentType string `json:"contentType,omitempty"`
+
+	// Events lists what the hook is triggered for.
+	// +optional
+	Events []string `json:"events"`
+
+	// Active is whether notifications are sent when the webhook is triggered.
+	Active *bool `json:"active,omitempty"`
+}
+
+// BranchProtectionRuleObservation is the observed protection of a branch.
+type BranchProtectionRuleObservation struct {
+	// Branch is the name of the protected branch.
+	Branch string `json:"branch,omitempty"`
+
+	// RequiredStatusChecks is the observed status checks requirement.
+	RequiredStatusChecks *RequiredStatusChecksObservation `json:"requiredStatusChecks,omitempty"`
+
+	// RequiredPullRequestReviews is the observed pull request requirement.
+	RequiredPullRequestReviews *RequiredPullRequestReviewsObservation `json:"requiredPullRequestReviews,omitempty"`
+
+	// BranchProtectionRestrictions is the observed push restriction.
+	BranchProtectionRestrictions *BranchProtectionRestrictionsObservation `json:"branchProtectionRestrictions,omitempty"`
+
+	// EnforceAdmins is whether the rule is enforced for administrators.
+	EnforceAdmins *bool `json:"enforceAdmins,omitempty"`
+
+	// RequireLinearHistory is whether merge commits are prevented.
+	RequireLinearHistory *bool `json:"requireLinearHistory,omitempty"`
+
+	// AllowForcePushes is whether force pushes are permitted.
+	AllowForcePushes *bool `json:"allowForcePushes,omitempty"`
+
+	// AllowDeletions is whether the branch can be deleted.
+	AllowDeletions *bool `json:"allowDeletions,omitempty"`
+
+	// RequiredConversationResolution is whether conversations must be resolved before merging.
+	RequiredConversationResolution *bool `json:"requiredConversationResolution,omitempty"`
+
+	// LockBranch is whether the branch is read-only.
+	LockBranch *bool `json:"lockBranch,omitempty"`
+
+	// AllowForkSyncing is whether users can pull changes from upstream while the branch is locked.
+	AllowForkSyncing *bool `json:"allowForkSyncing,omitempty"`
+
+	// RequireSignedCommits is whether commits must have verified signatures.
+	RequireSignedCommits *bool `json:"requireSignedCommits,omitempty"`
+}
+
+// RequiredStatusChecksObservation is the observed status checks requirement of a branch.
+type RequiredStatusChecksObservation struct {
+	// Strict is whether branches must be up-to-date before merging.
+	Strict *bool `json:"strict,omitempty"`
+
+	// Checks lists the status checks required to merge.
+	// +optional
+	Checks []RequiredStatusCheckObservation `json:"checks"`
+}
+
+// RequiredStatusCheckObservation is a single required status check.
+type RequiredStatusCheckObservation struct {
+	// Context is the name of the required check.
+	Context string `json:"context,omitempty"`
+
+	// AppID is the ID of the GitHub App that must provide the check.
+	AppID *int64 `json:"appId,omitempty"`
+}
+
+// RequiredPullRequestReviewsObservation is the observed pull request requirement of a branch.
+type RequiredPullRequestReviewsObservation struct {
+	// DismissStaleReviews is whether approving reviews are dismissed on a new commit.
+	DismissStaleReviews *bool `json:"dismissStaleReviews,omitempty"`
+
+	// RequireCodeOwnerReviews is whether code owners must review.
+	RequireCodeOwnerReviews *bool `json:"requireCodeOwnerReviews,omitempty"`
+
+	// RequiredApprovingReviewCount is the number of approving reviews required.
+	RequiredApprovingReviewCount *int `json:"requiredApprovingReviewCount,omitempty"`
+
+	// RequireLastPushApproval is whether the most recent push must be approved by someone else.
+	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
+
+	// BypassPullRequestAllowances is who can bypass the pull request requirements.
+	BypassPullRequestAllowances *BypassPullRequestAllowancesObservation `json:"bypassPullRequestAllowances,omitempty"`
+
+	// DismissalRestrictions is who can dismiss pull request reviews.
+	DismissalRestrictions *DismissalRestrictionsObservation `json:"dismissalRestrictions,omitempty"`
+}
+
+// BypassPullRequestAllowancesObservation lists who can bypass pull request requirements.
+type BypassPullRequestAllowancesObservation struct {
+	// Users lists the user logins.
+	// +optional
+	Users []string `json:"users"`
+
+	// Teams lists the team slugs.
+	// +optional
+	Teams []string `json:"teams"`
+
+	// Apps lists the app slugs.
+	// +optional
+	Apps []string `json:"apps"`
+}
+
+// DismissalRestrictionsObservation lists who can dismiss pull request reviews.
+type DismissalRestrictionsObservation struct {
+	// Users lists the user logins.
+	// +optional
+	Users []string `json:"users"`
+
+	// Teams lists the team slugs.
+	// +optional
+	Teams []string `json:"teams"`
+
+	// Apps lists the app slugs.
+	// +optional
+	Apps []string `json:"apps"`
+}
+
+// BranchProtectionRestrictionsObservation lists who can push to a protected branch.
+type BranchProtectionRestrictionsObservation struct {
+	// BlockCreations is whether pushes that create new branches are blocked
+	// unless initiated by an actor allowed to push.
+	BlockCreations *bool `json:"blockCreations,omitempty"`
+
+	// Users lists the user logins allowed to push.
+	// +optional
+	Users []string `json:"users"`
+
+	// Teams lists the team slugs allowed to push.
+	// +optional
+	Teams []string `json:"teams"`
+
+	// Apps lists the app slugs allowed to push.
+	// +optional
+	Apps []string `json:"apps"`
+}
+
+// RepositoryRulesetObservation is an observed ruleset of a repository.
+type RepositoryRulesetObservation struct {
+	// Name is the name of the ruleset.
+	Name string `json:"name,omitempty"`
+
+	// Enforcement is the enforcement level of the ruleset.
+	Enforcement *string `json:"enforcement,omitempty"`
+
+	// Target is the target of the ruleset.
+	Target *string `json:"target,omitempty"`
+
+	// BypassActors lists the actors that can bypass the ruleset.
+	// +optional
+	BypassActors []RulesetByPassActorsObservation `json:"bypassActors"`
+
+	// Conditions selects the branches or tags the ruleset applies to.
+	Conditions *RulesetConditionsObservation `json:"conditions,omitempty"`
+
+	// Rules is the observed rules of the ruleset.
+	Rules *RulesObservation `json:"rules,omitempty"`
+}
+
+// RulesetByPassActorsObservation is an actor that can bypass a ruleset.
+type RulesetByPassActorsObservation struct {
+	// ActorID is the ID of the actor.
+	ActorID *int64 `json:"actorId,omitempty"`
+
+	// ActorType is the type of the actor.
+	ActorType *string `json:"actorType,omitempty"`
+
+	// BypassMode is the bypass mode of the actor.
+	BypassMode *string `json:"bypassMode,omitempty"`
+}
+
+// RulesetConditionsObservation selects the branches or tags a ruleset applies to.
+type RulesetConditionsObservation struct {
+	// RefName is the observed ref name condition.
+	RefName *RulesetRefNameObservation `json:"refName,omitempty"`
+}
+
+// RulesetRefNameObservation lists the refs included in and excluded from a ruleset.
+type RulesetRefNameObservation struct {
+	// Include lists the branches or tags included.
+	// +optional
+	Include []string `json:"include"`
+
+	// Exclude lists the branches or tags excluded.
+	// +optional
+	Exclude []string `json:"exclude"`
+}
+
+// RulesObservation is the observed rules of a ruleset.
+type RulesObservation struct {
+	// Creation is whether creating matching refs is restricted.
+	Creation *bool `json:"creation,omitempty"`
+
+	// Deletion is whether deleting matching refs is restricted.
+	Deletion *bool `json:"deletion,omitempty"`
+
+	// Update is whether updating matching refs is restricted.
+	Update *bool `json:"update,omitempty"`
+
+	// RequiredLinearHistory is whether a linear commit history is required.
+	RequiredLinearHistory *bool `json:"requiredLinearHistory,omitempty"`
+
+	// RequiredDeployments is the observed deployments requirement.
+	RequiredDeployments *RulesRequiredDeploymentsObservation `json:"requiredDeployments,omitempty"`
+
+	// RequiredSignatures is whether signed commits are required.
+	RequiredSignatures *bool `json:"requiredSignatures,omitempty"`
+
+	// PullRequest is the observed pull request rules.
+	PullRequest *RulesPullRequestObservation `json:"pullRequest,omitempty"`
+
+	// RequiredStatusChecks is the observed status checks requirement.
+	RequiredStatusChecks *RulesStatusChecksObservation `json:"requiredStatusChecks,omitempty"`
+
+	// NonFastForward is whether force pushes to matching refs are restricted.
+	NonFastForward *bool `json:"nonFastForward,omitempty"`
+}
+
+// RulesRequiredDeploymentsObservation lists the environments that must be deployed to before merging.
+type RulesRequiredDeploymentsObservation struct {
+	// Environments lists the required environments.
+	// +optional
+	Environments []string `json:"environments"`
+}
+
+// RulesPullRequestObservation is the observed pull request rules of a ruleset.
+type RulesPullRequestObservation struct {
+	// DismissStaleReviewsOnPush is whether approving reviews are dismissed on a new commit.
+	DismissStaleReviewsOnPush *bool `json:"dismissStaleReviewsOnPush,omitempty"`
+
+	// RequireCodeOwnerReview is whether a code owner must approve.
+	RequireCodeOwnerReview *bool `json:"requireCodeOwnerReview,omitempty"`
+
+	// RequireLastPushApproval is whether the most recent push must be approved by someone else.
+	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
+
+	// RequiredApprovingReviewCount is the number of approving reviews required.
+	RequiredApprovingReviewCount *int `json:"requiredApprovingReviewCount,omitempty"`
+
+	// RequiredReviewThreadResolution is whether conversations must be resolved before merging.
+	RequiredReviewThreadResolution *bool `json:"requiredReviewThreadResolution,omitempty"`
+}
+
+// RulesStatusChecksObservation is the observed status checks requirement of a ruleset.
+type RulesStatusChecksObservation struct {
+	// RequiredStatusChecks lists the status checks required to merge.
+	// +optional
+	RequiredStatusChecks []RulesRequiredStatusChecksParametersObservation `json:"requiredStatusChecks"`
+
+	// StrictRequiredStatusChecksPolicy is whether branches must be up-to-date before merging.
+	StrictRequiredStatusChecksPolicy *bool `json:"strictRequiredStatusChecksPolicy,omitempty"`
+}
+
+// RulesRequiredStatusChecksParametersObservation is a single status check required by a ruleset.
+type RulesRequiredStatusChecksParametersObservation struct {
+	// Context is the name of the required check.
+	Context string `json:"context,omitempty"`
+
+	// IntegrationID is the ID of the integration that must provide the check.
+	IntegrationID *int64 `json:"integrationId,omitempty"`
+}
+
+// TemplateRepoObservation is the template a repository was created from.
+type TemplateRepoObservation struct {
+	// Owner is the account owner of the template repository.
+	Owner string `json:"owner,omitempty"`
+
+	// Repo is the name of the template repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// RepoForkObservation is the repository a repository was forked from.
+type RepoForkObservation struct {
+	// Owner is the account owner of the parent repository.
+	Owner string `json:"owner,omitempty"`
+
+	// Repo is the name of the parent repository.
+	Repo string `json:"repo,omitempty"`
+}
+
 // RepositoryObservation are the observable fields of a Repository.
 type RepositoryObservation struct {
 	// ID is the external name of the repository on GitHub.
 	ID string `json:"id,omitempty"`
 
+	// Description is the description GitHub reports for the repository.
+	Description string `json:"description,omitempty"`
+
+	// Permissions is the observed access to the repository. Collaborators
+	// and teams are listed only while the repository is read for them.
+	Permissions RepositoryPermissionsObservation `json:"permissions,omitempty"`
+
+	// Webhooks lists the webhooks of the repository. GitHub is queried for
+	// them only while forProvider.webhooks is set, so the field is empty otherwise.
+	// +optional
+	Webhooks []RepositoryWebhookObservation `json:"webhooks"`
+
+	// BranchProtectionRules lists the protection of every protected branch.
+	// GitHub is queried for it only while forProvider.branchProtectionRules
+	// is set, so the field is empty otherwise.
+	// +optional
+	BranchProtectionRules []BranchProtectionRuleObservation `json:"branchProtectionRules"`
+
+	// RepositoryRules lists the rulesets of the repository. GitHub is queried
+	// for them only while forProvider.repositoryRules is set, so the field is
+	// empty otherwise.
+	// +optional
+	RepositoryRules []RepositoryRulesetObservation `json:"repositoryRules"`
+
+	// CreateFromTemplate is the template the repository was created from, when
+	// GitHub reports one. Whether all branches were included is not reported.
+	CreateFromTemplate *TemplateRepoObservation `json:"createFromTemplate,omitempty"`
+
+	// CreateFork is the repository this repository is a fork of, when GitHub
+	// reports one. Whether only the default branch was forked is not reported.
+	CreateFork *RepoForkObservation `json:"createFork,omitempty"`
+
+	// Org is the organization that owns the repository.
+	Org string `json:"org,omitempty"`
+
+	// Archived is whether the repository is archived.
+	Archived *bool `json:"archived,omitempty"`
+
+	// ForceDelete is the provider-side deletion safeguard. GitHub has no such
+	// setting and never returns it, so the field is not populated.
+	ForceDelete *bool `json:"forceDelete,omitempty"`
+
+	// Private is whether the repository is private.
+	Private *bool `json:"private,omitempty"`
+
+	// IsTemplate is whether the repository is a template repository.
+	IsTemplate *bool `json:"isTemplate,omitempty"`
+
+	// Topics is the list of topics of the repository.
+	// +optional
+	Topics []string `json:"topics"`
+
+	// DefaultBranch is the name of the default branch.
+	DefaultBranch *string `json:"defaultBranch,omitempty"`
+
+	// AllowMergeCommit is whether merge commits are allowed.
+	AllowMergeCommit *bool `json:"allowMergeCommit,omitempty"`
+
+	// AllowSquashMerge is whether squash merging is allowed.
+	AllowSquashMerge *bool `json:"allowSquashMerge,omitempty"`
+
+	// AllowRebaseMerge is whether rebase merging is allowed.
+	AllowRebaseMerge *bool `json:"allowRebaseMerge,omitempty"`
+
+	// AllowAutoMerge is whether auto-merge is allowed.
+	AllowAutoMerge *bool `json:"allowAutoMerge,omitempty"`
+
+	// AllowUpdateBranch is whether users can update pull request branches from the base branch.
+	AllowUpdateBranch *bool `json:"allowUpdateBranch,omitempty"`
+
+	// DeleteBranchOnMerge is whether head branches are deleted when pull requests merge.
+	DeleteBranchOnMerge *bool `json:"deleteBranchOnMerge,omitempty"`
+
+	// HasIssues is whether the Issues feature is enabled.
+	HasIssues *bool `json:"hasIssues,omitempty"`
+
+	// HasProjects is whether the Projects feature is enabled.
+	HasProjects *bool `json:"hasProjects,omitempty"`
+
+	// HasWiki is whether the Wiki feature is enabled.
+	HasWiki *bool `json:"hasWiki,omitempty"`
+
+	// HasDiscussions is whether the Discussions feature is enabled.
+	HasDiscussions *bool `json:"hasDiscussions,omitempty"`
+
+	// MergeCommitTitle is the default title format for merge commits.
+	MergeCommitTitle *string `json:"mergeCommitTitle,omitempty"`
+
+	// MergeCommitMessage is the default body format for merge commits.
+	MergeCommitMessage *string `json:"mergeCommitMessage,omitempty"`
+
+	// SquashMergeCommitTitle is the default title format for squash-merge commits.
+	SquashMergeCommitTitle *string `json:"squashMergeCommitTitle,omitempty"`
+
+	// SquashMergeCommitMessage is the default body format for squash-merge commits.
+	SquashMergeCommitMessage *string `json:"squashMergeCommitMessage,omitempty"`
+
 	// Branch protection items GitHub did not apply on the last push, per declared rule.
-	UnappliedBranchProtection []UnappliedBranchProtection `json:"unappliedBranchProtection,omitempty"`
+	// +optional
+	UnappliedBranchProtection []UnappliedBranchProtection `json:"unappliedBranchProtection"`
+
 	// Repository settings GitHub did not apply on the last push, with the value that was declared.
-	UnappliedSettings []UnappliedSetting `json:"unappliedSettings,omitempty"`
+	// +optional
+	UnappliedSettings []UnappliedSetting `json:"unappliedSettings"`
 }
 
 // UnappliedBranchProtection records the items GitHub left out when the provider pushed a branch protection rule.

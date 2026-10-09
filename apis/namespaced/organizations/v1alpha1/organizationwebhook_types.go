@@ -80,6 +80,30 @@ type OrganizationWebhookParameters struct {
 type OrganizationWebhookObservation struct {
 	// ID is the GitHub webhook ID.
 	ID int64 `json:"id,omitempty"`
+
+	// Org is the organization the webhook was found under.
+	Org string `json:"org,omitempty"`
+
+	// URL is the URL to which GitHub delivers payloads.
+	URL string `json:"url,omitempty"`
+
+	// ContentType is the media type GitHub uses to serialize payloads.
+	ContentType string `json:"contentType,omitempty"`
+
+	// Events lists what the hook is triggered for.
+	// +optional
+	Events []string `json:"events"`
+
+	// Active is whether notifications are sent when the webhook is triggered.
+	Active *bool `json:"active,omitempty"`
+
+	// InsecureSSL is whether GitHub skips verifying the SSL certificate of
+	// the host for url.
+	InsecureSSL *bool `json:"insecureSsl,omitempty"`
+
+	// SecretKeyRef is excluded from the observation: the webhook secret is
+	// write-only material that GitHub never returns, and the reference to it
+	// is a spec input.
 }
 
 // An OrganizationWebhookSpec defines the desired state of an OrganizationWebhook.

@@ -64,6 +64,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	cr.Status.AtProvider.ID = name
+	cr.Status.AtProvider.Role = m.GetRole()
+	cr.Status.AtProvider.Org = m.GetOrganization().GetLogin()
+	if cr.Status.AtProvider.Org == "" {
+		cr.Status.AtProvider.Org = cr.Spec.ForProvider.Org
+	}
 
 	// An omitted role (an Observe-only import) is not compared.
 	if cr.Spec.ForProvider.Role != "" && *m.Role != cr.Spec.ForProvider.Role {

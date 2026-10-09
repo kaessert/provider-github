@@ -71,7 +71,7 @@ type RunnerGroupParameters struct {
 	// SelectedRepositories lists repositories that can use the runner
 	// group. Only used when Visibility is "selected".
 	// +optional
-	SelectedRepositories []RunnerGroupSelectedRepo `json:"selectedRepositories,omitempty"`
+	SelectedRepositories []RunnerGroupSelectedRepo `json:"selectedRepositories"`
 
 	// AllowsPublicRepositories lets public repositories use the runner group.
 	// Default: false
@@ -83,13 +83,44 @@ type RunnerGroupParameters struct {
 	// refs/heads/<branch>, refs/tags/<tag> or a full 40-character commit
 	// SHA. Setting it restricts the runner group to these workflows.
 	// +optional
-	SelectedWorkflows []WorkflowRef `json:"selectedWorkflows,omitempty"`
+	SelectedWorkflows []WorkflowRef `json:"selectedWorkflows"`
 }
+
+// RunnerGroupSelectedRepoObservation is a repository that has access to a
+// runner group whose visibility is "selected".
+type RunnerGroupSelectedRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// WorkflowRefObservation is a workflow allowed to use a runner group, as
+// owner/repo/.github/workflows/file.yml@ref.
+type WorkflowRefObservation string
 
 // RunnerGroupObservation are the observable fields of a RunnerGroup.
 type RunnerGroupObservation struct {
 	// ID is the GitHub runner group ID.
 	ID int64 `json:"id,omitempty"`
+
+	// Org is the organization the runner group was found under.
+	Org string `json:"org,omitempty"`
+
+	// Visibility is the visibility GitHub reports for the runner group.
+	Visibility string `json:"visibility,omitempty"`
+
+	// SelectedRepositories lists the repositories that can use the runner
+	// group on GitHub. GitHub is queried for the list only while
+	// forProvider.visibility is "selected", so the field is empty otherwise.
+	// +optional
+	SelectedRepositories []RunnerGroupSelectedRepoObservation `json:"selectedRepositories"`
+
+	// AllowsPublicRepositories is whether GitHub lets public repositories
+	// use the runner group.
+	AllowsPublicRepositories *bool `json:"allowsPublicRepositories,omitempty"`
+
+	// SelectedWorkflows lists the workflows GitHub restricts the runner group to.
+	// +optional
+	SelectedWorkflows []WorkflowRefObservation `json:"selectedWorkflows"`
 }
 
 // A RunnerGroupSpec defines the desired state of a RunnerGroup.

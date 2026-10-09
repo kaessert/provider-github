@@ -290,6 +290,13 @@ spec:
                     type: string
                   observableField:
                     type: string
+                  org:
+                    description: Org is the organization the membership was found
+                      under.
+                    type: string
+                  role:
+                    description: Role is the role GitHub reports for the membership.
+                    type: string
                 type: object
               conditions:
                 description: Conditions of the resource.

@@ -37,7 +37,7 @@ type ProviderConfigSpec struct {
 	// recently exhausted (HTTP 429), giving the GitHub apps time to
 	// reset before being tried again.
 	// +optional
-	AdditionalCredentials []ProviderCredentials `json:"additionalCredentials,omitempty"`
+	AdditionalCredentials []ProviderCredentials `json:"additionalCredentials"`
 }
 
 // ProviderCredentials required to authenticate.

@@ -21,7 +21,6 @@ package secretaccess
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -93,35 +92,51 @@ func RepoNames(refs []v1alpha1.SecretSelectedRepo) []string {
 	return names
 }
 
-// ListRepoNames returns the names of all repositories that can use the secret on GitHub.
+// ListRepoNames returns the names of all repositories that can use the secret
+// on GitHub, spelled as GitHub reports them.
 func ListRepoNames(ctx context.Context, l RepoLister, org, name string) ([]string, error) {
-	ids, err := ListRepoIDs(ctx, l, org, name)
+	repos, err := listRepos(ctx, l, org, name)
 	if err != nil {
 		return nil, err
 	}
-	return slices.Collect(maps.Keys(ids)), nil
+	names := make([]string, 0, len(repos))
+	for _, r := range repos {
+		names = append(names, r.GetName())
+	}
+	return names, nil
 }
 
 // ListRepoIDs returns the ID of every repository that can use the secret on
 // GitHub, keyed by lowercased name: GitHub repository names are
 // case-insensitive, so callers must look names up lowercased.
 func ListRepoIDs(ctx context.Context, l RepoLister, org, name string) (map[string]int64, error) {
+	repos, err := listRepos(ctx, l, org, name)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]int64, len(repos))
+	for _, r := range repos {
+		ids[strings.ToLower(r.GetName())] = r.GetID()
+	}
+	return ids, nil
+}
+
+// listRepos pages through the repositories that can use the secret on GitHub.
+func listRepos(ctx context.Context, l RepoLister, org, name string) ([]*github.Repository, error) {
 	opts := &github.ListOptions{PerPage: 100}
-	ids := map[string]int64{}
+	var repos []*github.Repository
 	for {
 		list, resp, err := l.ListSelectedReposForOrgSecret(ctx, org, name, opts)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range list.Repositories {
-			ids[strings.ToLower(r.GetName())] = r.GetID()
-		}
+		repos = append(repos, list.Repositories...)
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
 	}
-	return ids, nil
+	return repos, nil
 }
 
 // RenamedRepoError returns an error if a declared name absent from the list
@@ -157,4 +172,14 @@ func SameRepos(spec []v1alpha1.SecretSelectedRepo, ghNames []string) bool {
 	slices.Sort(specNames)
 	slices.Sort(gh)
 	return slices.Equal(specNames, gh)
+}
+
+// RepoObservations returns names as observed repositories, sorted.
+func RepoObservations(names []string) []v1alpha1.SecretSelectedRepoObservation {
+	out := make([]v1alpha1.SecretSelectedRepoObservation, 0, len(names))
+	for _, n := range names {
+		out = append(out, v1alpha1.SecretSelectedRepoObservation{Repo: n})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.SecretSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
 }

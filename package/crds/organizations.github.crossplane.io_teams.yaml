@@ -454,10 +454,41 @@ spec:
               atProvider:
                 description: TeamObservation are the observable fields of a Team.
                 properties:
+                  description:
+                    description: Description is the description GitHub reports for
+                      the team.
+                    type: string
                   id:
                     description: ID is the external name of the team on GitHub.
                     type: string
+                  members:
+                    description: |-
+                      Members lists the direct members of the team and their roles. Members
+                      that the team only inherits from its child teams are not listed.
+                    items:
+                      description: TeamMemberUserObservation is a member of a team
+                        and the role GitHub reports for them.
+                      properties:
+                        role:
+                          description: Role is the role of the member on the team.
+                          type: string
+                        user:
+                          description: User is the login of the member.
+                          type: string
+                      type: object
+                    type: array
                   observableField:
+                    type: string
+                  org:
+                    description: Org is the organization the team was found under.
+                    type: string
+                  parent:
+                    description: Parent is the name of the parent team, when the team
+                      has one.
+                    type: string
+                  privacy:
+                    description: Privacy represents the visibility of the team (secret,
+                      closed)
                     type: string
                 type: object
               conditions:

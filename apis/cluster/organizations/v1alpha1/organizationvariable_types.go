@@ -69,13 +69,35 @@ type OrganizationVariableParameters struct {
 	// SelectedRepositories lists repositories that have access to the
 	// variable. Only used (and required) when Visibility is "selected".
 	// +optional
-	SelectedRepositories []VariableSelectedRepo `json:"selectedRepositories,omitempty"`
+	SelectedRepositories []VariableSelectedRepo `json:"selectedRepositories"`
+}
+
+// VariableSelectedRepoObservation is a repository that has access to an
+// organization variable whose visibility is "selected".
+type VariableSelectedRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
 }
 
 // OrganizationVariableObservation are the observable fields of a OrganizationVariable.
 type OrganizationVariableObservation struct {
 	// ID is the external name of the variable on GitHub.
 	ID string `json:"id,omitempty"`
+
+	// Org is the organization the variable was found under.
+	Org string `json:"org,omitempty"`
+
+	// Value of the variable.
+	Value string `json:"value,omitempty"`
+
+	// Visibility is the visibility GitHub reports for the variable.
+	Visibility string `json:"visibility,omitempty"`
+
+	// SelectedRepositories lists the repositories that have access to the
+	// variable on GitHub. GitHub is queried for the list only while
+	// forProvider.visibility is "selected", so the field is empty otherwise.
+	// +optional
+	SelectedRepositories []VariableSelectedRepoObservation `json:"selectedRepositories"`
 }
 
 // A OrganizationVariableSpec defines the desired state of a OrganizationVariable.
