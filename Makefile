@@ -128,6 +128,24 @@ xpkg.push.up: xpkg.check.base-layer ## Push the built xpkg to xpkg.upbound.io us
 .PHONY: xpkg.push.up xpkg.check.base-layer xpkg.normalize.base-layer
 
 # ====================================================================================
+# Registration
+#
+# Regenerates apis/zz_generated_register.go (scheme registration) and
+# internal/controller/zz_generated_register.go (controller registration and the
+# CRD-gated variant) from the directory structure. Both files are committed.
+
+generate-registration: ## Regenerate the scheme and controller registration files
+	@$(INFO) generating registration files
+	@go run hack/generate-registration.go $(PROJECT_REPO) || $(FAIL)
+	@$(OK) generating registration files
+
+# Wire generate-registration into the generate chain so it runs alongside
+# go.generate (controller-gen deepcopy + CRD generation).
+generate.run: generate-registration
+
+.PHONY: generate-registration
+
+# ====================================================================================
 # Convention checks
 
 check-conventions: ## Detect convention violations (test names, error wrapping, kubectl usage)

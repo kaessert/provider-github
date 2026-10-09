@@ -174,6 +174,34 @@ The existing cluster-scoped resources are unchanged. For the namespaced variants
 Examples for both scopes are in `examples/`; the namespaced ones end in
 `-namespaced.yaml`.
 
+### Safe start and Secret reads
+
+The provider declares the `safe-start` capability in its package metadata. On
+Crossplane v2 the package manager then installs only the CRDs that the
+`ManagedResourceActivationPolicy` objects in the cluster activate, and the
+provider starts the controller of a kind once that kind's CRD exists. Activate
+the kinds you use, for example with a `ManagedResourceActivationPolicy` whose
+`activate` list names `*.organizations.github.crossplane.io` and
+`*.organizations.github.m.crossplane.io` (or individual kinds such as
+`repositories.organizations.github.crossplane.io`). A kind that is not
+activated has no CRD and no controller; the provider does not need a restart
+when you activate one later. The `ProviderConfig`, `ClusterProviderConfig` and
+`ProviderConfigUsage` controllers always start.
+
+At startup the provider checks, for up to 30 seconds, that its service account
+may get, list and watch `CustomResourceDefinitions`. If it may not (some
+Crossplane distributions grant no CRD access), it logs a warning and starts all
+controllers immediately, without the CRD gate. The provider's cache of
+`CustomResourceDefinitions` holds only the fields the gate reads, not their
+OpenAPI schemas.
+
+Secrets are point-read, not cached: the credentials Secret of a
+`ProviderConfig`, and the Secrets that repository and organization webhook
+settings reference, are fetched from the API server when a reconcile needs them
+rather than served from a cluster-wide Secret informer. The provider therefore
+needs `get` on Secrets but does not list or watch them, and its memory use does
+not grow with the number of Secrets in the cluster.
+
 ### crossplane-runtime v2: removed features and always-on management policies
 
 The provider is built on crossplane-runtime v2. Compared with earlier releases:
