@@ -1,0 +1,13 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Membership
+metadata:
+  name: pgh-mig-adopt-membership
+  annotations:
+    crossplane.io/external-name: __MEMBER__
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+  providerConfigRef:
+    name: default

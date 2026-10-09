@@ -1,0 +1,79 @@
+# OrganizationWebhook fixtures. The webhook secret is read from the Secret in
+# 00-prerequisites.yaml and published as a connection detail.
+#
+# pgh-mig-hook-wcs    writeConnectionSecretToRef
+# pgh-mig-hook-ess    publishConnectionDetailsTo (external secret stores) next
+#                     to writeConnectionSecretToRef
+# pgh-mig-hook-plain  no secret, form content type, inactive
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationWebhook
+metadata:
+  name: pgh-mig-hook-wcs
+spec:
+  forProvider:
+    org: __ORG__
+    url: https://example.com/pgh-mig/org-hook-wcs
+    contentType: json
+    insecureSsl: false
+    active: true
+    events:
+      - repository
+    secretKeyRef:
+      name: pgh-mig-hook-secret
+      namespace: crossplane-system
+      key: secret
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: pgh-mig-hook-wcs-conn
+    namespace: crossplane-system
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationWebhook
+metadata:
+  name: pgh-mig-hook-ess
+spec:
+  forProvider:
+    org: __ORG__
+    url: https://example.com/pgh-mig/org-hook-ess
+    contentType: json
+    insecureSsl: false
+    active: true
+    events:
+      - repository
+    secretKeyRef:
+      name: pgh-mig-hook-secret
+      namespace: crossplane-system
+      key: secret
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: pgh-mig-hook-ess-wcs-conn
+    namespace: crossplane-system
+  publishConnectionDetailsTo:
+    name: pgh-mig-hook-ess-conn
+    configRef:
+      name: default
+    metadata:
+      labels:
+        pgh-mig: "true"
+      annotations:
+        pgh-mig/purpose: connection-details
+      type: Opaque
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationWebhook
+metadata:
+  name: pgh-mig-hook-plain
+spec:
+  forProvider:
+    org: __ORG__
+    url: https://example.com/pgh-mig/org-hook-plain
+    contentType: form
+    insecureSsl: false
+    active: false
+    events:
+      - repository
+      - team
+  providerConfigRef:
+    name: default

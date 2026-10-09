@@ -1,0 +1,1 @@
+{"url":"https://api.github.test/p","required_status_checks":{"url":"u","strict":true,"checks":[{"context":"pgh-mig/ci","app_id":null}]},"enforce_admins":{"url":"u","enabled":false},"required_signatures":{"url":"u","enabled":true}}

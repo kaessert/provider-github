@@ -1,0 +1,83 @@
+# OrganizationVariable fixtures: every visibility, plus two that carry the
+# lifecycle fields the run needs to see once.
+#
+# GitHub variable names are upper-case, so the external name is set explicitly.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-var-all
+  annotations:
+    crossplane.io/external-name: PGH_MIG_VAR_ALL
+spec:
+  forProvider:
+    org: __ORG__
+    value: all-value
+    visibility: all
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-var-private
+  annotations:
+    crossplane.io/external-name: PGH_MIG_VAR_PRIVATE
+spec:
+  forProvider:
+    org: __ORG__
+    value: private-value
+    visibility: private
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-var-selected
+  annotations:
+    crossplane.io/external-name: PGH_MIG_VAR_SELECTED
+spec:
+  forProvider:
+    org: __ORG__
+    value: selected-value
+    visibility: selected
+    selectedRepositories:
+      - repo: pgh-mig-repo-main
+  providerConfigRef:
+    name: default
+---
+# Non-default management policies: no Delete, so removing the managed resource
+# leaves the variable on GitHub for the cleanup sweep to remove.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-var-policies
+  annotations:
+    crossplane.io/external-name: PGH_MIG_VAR_POLICIES
+spec:
+  managementPolicies:
+    - Observe
+    - Create
+    - Update
+    - LateInitialize
+  forProvider:
+    org: __ORG__
+    value: policies-value
+    visibility: all
+  providerConfigRef:
+    name: default
+---
+# The deprecated spec.providerRef instead of providerConfigRef.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: pgh-mig-var-providerref
+  annotations:
+    crossplane.io/external-name: PGH_MIG_VAR_PROVIDERREF
+spec:
+  providerRef:
+    name: default
+  forProvider:
+    org: __ORG__
+    value: providerref-value
+    visibility: all

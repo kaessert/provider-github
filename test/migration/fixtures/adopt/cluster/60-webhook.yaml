@@ -1,0 +1,15 @@
+# The external name of an OrganizationWebhook is the numeric hook ID, which the
+# setup step reads back after creating the webhook.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: OrganizationWebhook
+metadata:
+  name: pgh-mig-adopt-hook
+  annotations:
+    crossplane.io/external-name: "__ADOPT_HOOK_ID__"
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+  providerConfigRef:
+    name: default

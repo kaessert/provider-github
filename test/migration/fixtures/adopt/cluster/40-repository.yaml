@@ -1,0 +1,23 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-mig-adopt-repo
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    org: __ORG__
+    description: pgh-mig adopted repository
+    private: true
+    topics:
+      - crossplane
+      - pgh-mig
+    allowMergeCommit: true
+    allowSquashMerge: true
+    allowRebaseMerge: false
+    deleteBranchOnMerge: true
+    hasIssues: true
+    hasProjects: false
+    hasWiki: false
+  providerConfigRef:
+    name: default

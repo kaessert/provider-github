@@ -1,0 +1,29 @@
+# RunnerGroup fixtures. The workflow restriction is on its own group so that an
+# organization plan that does not support it affects one managed resource only.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: RunnerGroup
+metadata:
+  name: pgh-mig-rg-selected
+spec:
+  forProvider:
+    org: __ORG__
+    visibility: selected
+    allowsPublicRepositories: false
+    selectedRepositories:
+      - repo: pgh-mig-repo-main
+  providerConfigRef:
+    name: default
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: RunnerGroup
+metadata:
+  name: pgh-mig-rg-workflows
+spec:
+  forProvider:
+    org: __ORG__
+    visibility: all
+    allowsPublicRepositories: false
+    selectedWorkflows:
+      - __ORG__/pgh-mig-repo-main/.github/workflows/ci.yml@refs/heads/main
+  providerConfigRef:
+    name: default
