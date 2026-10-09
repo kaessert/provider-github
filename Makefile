@@ -382,13 +382,11 @@ space := $(empty) $(empty)
 # Sorted alphabetically by resource name so a new resource's addition lands at a
 # distinct diff hunk instead of colliding with a concurrent addition.
 #
-# GATED: ActionsSecretAccess manages access to an organization Actions secret that
-# must already exist; the provider never creates it and the test organization
-# carries no disposable one.
+# ActionsSecretAccess manages access to an organization Actions secret that must
+# already exist; test/setup.sh creates a disposable one (see E2E_ORG_SECRETS below).
 UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS := examples/actions-secret-access/actions-secret-access.yaml,examples/actions-secret-access/actions-secret-access-namespaced.yaml
-# GATED: DependabotSecretAccess manages access to an organization Dependabot secret
-# that must already exist; the provider never creates it and the test organization
-# carries no disposable one.
+# DependabotSecretAccess manages access to an organization Dependabot secret that
+# must already exist; test/setup.sh creates a disposable one (see E2E_ORG_SECRETS below).
 UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS := examples/dependabot-secret-access/dependabot-secret-access.yaml,examples/dependabot-secret-access/dependabot-secret-access-namespaced.yaml
 # GATED: Membership invites a real GitHub user to the organization, which the
 # credentials alone cannot do for a throwaway account.
@@ -406,10 +404,10 @@ UPTEST_MANIFESTS_TEAM := examples/team/team.yaml,examples/team/team-namespaced.y
 
 # E2E manifest tiers
 # CORE: resources that need nothing beyond the GitHub App credentials and the test organization.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
-# GATED: resources that need an out-of-band prerequisite (an existing organization secret,
-# an inviteable user, the shared organization itself).
-UPTEST_MANIFESTS_GATED = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_MEMBERSHIP),$(UPTEST_MANIFESTS_ORGANIZATION),$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
+# GATED: resources that need an out-of-band prerequisite (an inviteable user, the
+# shared organization itself).
+UPTEST_MANIFESTS_GATED = $(UPTEST_MANIFESTS_MEMBERSHIP),$(UPTEST_MANIFESTS_ORGANIZATION),$(UPTEST_MANIFESTS_ORGANIZATION_NS)
 
 # ALL: every resource example, discovered via wildcard (excludes examples/provider/).
 # Diagnostic only, never a gate.
@@ -420,6 +418,15 @@ UPTEST_MANIFESTS_ALL := $(subst $(space),$(comma),$(_UPTEST_MANIFESTS_ALL_RAW))
 UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
 
 UPTEST_SETUP_SCRIPT ?= test/setup.sh
+
+# The SecretAccess kinds manage access to an organization secret the provider
+# never creates. When a run includes one, test/setup.sh creates the disposable
+# secrets PGH_E2E_ACTIONS_SECRET and PGH_E2E_DEPENDABOT_SECRET in $(E2E_ORG) and
+# test/teardown.sh removes them after the delete step, so a run that addresses
+# no SecretAccess example never writes to the organization's secrets. The value
+# stays recursive (`=`) so a per-resource target's UPTEST_INPUT_MANIFESTS is seen.
+export E2E_ORG_SECRETS = $(if $(findstring secret-access,$(UPTEST_INPUT_MANIFESTS)),true)
+UPTEST_ARGS += --teardown-script=$(abspath test/teardown.sh)
 
 # Per-run uptest test-directory isolation (each concurrent E2E run gets its own
 # staging directory) -- without this, concurrent E2E runs share /tmp/uptest-e2e
@@ -486,11 +493,9 @@ e2e e2e.%: VERSION := v0.0.0-e2e
 
 # Per-resource E2E target blocks, sorted alphabetically by resource name.
 
-# GATED: requires an existing organization Actions secret named in the example.
 e2e.actions-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS)
 e2e.actions-secret-access: e2e
 
-# GATED: requires an existing organization Dependabot secret named in the example.
 e2e.dependabot-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS)
 e2e.dependabot-secret-access: e2e
 
