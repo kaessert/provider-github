@@ -17,13 +17,24 @@ limitations under the License.
 
 package v1alpha1
 
-import resource "github.com/crossplane/crossplane-runtime/pkg/resource"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-// GetItems of this ProviderConfigUsageList.
-func (p *ProviderConfigUsageList) GetItems() []resource.ProviderConfigUsage {
-	items := make([]resource.ProviderConfigUsage, len(p.Items))
-	for i := range p.Items {
-		items[i] = &p.Items[i]
-	}
-	return items
+// GetCondition of this ProviderConfig.
+func (p *ProviderConfig) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
+	return p.Status.GetCondition(ct)
+}
+
+// GetUsers of this ProviderConfig.
+func (p *ProviderConfig) GetUsers() int64 {
+	return p.Status.Users
+}
+
+// SetConditions of this ProviderConfig.
+func (p *ProviderConfig) SetConditions(c ...xpv2.Condition) {
+	p.Status.SetConditions(c...)
+}
+
+// SetUsers of this ProviderConfig.
+func (p *ProviderConfig) SetUsers(i int64) {
+	p.Status.Users = i
 }

@@ -71,18 +71,18 @@ Then register the new API in `apis/github.go` (or the appropriate group aggregat
 
 ### Entry point and wiring
 
-- `cmd/provider/main.go` — kingpin CLI; constructs the controller-runtime manager, wires feature flags (external secret stores, management policies), starts a *second* HTTP server on `:8081` for custom Prometheus metrics (`/metrics`), and starts a 15-minute ticker that calls `ghclient.CleanupExpiredServices()` to evict expired GitHub App tokens. Two setup paths: `Setup` (no per-reconcile timeout) vs `SetupWithTimeout` (uses `--reconcile-timeout`, default `1m`).
+- `cmd/provider/main.go` — kingpin CLI; constructs the controller-runtime manager, starts a *second* HTTP server on `:8081` for custom Prometheus metrics (`/metrics`), and starts a 15-minute ticker that calls `ghclient.CleanupExpiredServices()` to evict expired GitHub App tokens. Two setup paths: `Setup` (no per-reconcile timeout) vs `SetupWithTimeout` (uses `--reconcile-timeout`, default `1m`).
 - `internal/controller/github.go` — registers each resource's `Setup`/`SetupWithTimeout` with the manager. **Adding a new controller requires editing this file.**
 
 ### API types (CRDs)
 
-- `apis/v1alpha1/` — `ProviderConfig`, `ProviderConfigUsage`, `StoreConfig` (provider-level config).
-- `apis/organizations/v1alpha1/` — managed resources: `Organization`, `Team`, `Repository`, `Membership`, `ActionsSecretAccess`, `DependabotSecretAccess`. Hand-written `*_types.go` plus generated `zz_generated_*.go` (deepcopy, managed, managedlist, resolvers).
+- `apis/cluster/v1alpha1/` — `ProviderConfig`, `ProviderConfigUsage` (provider-level config).
+- `apis/cluster/organizations/v1alpha1/` — managed resources: `Organization`, `Team`, `Repository`, `Membership`, `ActionsSecretAccess`, `DependabotSecretAccess`. Hand-written `*_types.go` plus generated `zz_generated_*.go` (deepcopy, managed, managedlist, resolvers).
 - `apis/generate.go` drives codegen with `controller-gen` (CRDs → `package/crds/`) and `angryjet` (crossplane-runtime methodsets). Always run `make generate` after editing `*_types.go`.
 
 ### Controllers
 
-Each managed resource lives in `internal/controller/<resource>/` with a `<resource>.go` and `<resource>_test.go`. They follow the standard `crossplane-runtime/pkg/reconciler/managed` pattern: a `connector` builds the GitHub client from `ProviderConfig` credentials and produces an `external` that implements `Observe`/`Create`/`Update`/`Delete`.
+Each managed resource lives in `internal/controller/<resource>/` with a `<resource>.go` (the Observe/Create/Update/Delete logic), a `cluster.go` (Setup, connector and ProviderConfig resolution for the cluster-scoped kind) and `<resource>_test.go`. They follow the standard `crossplane-runtime/pkg/reconciler/managed` pattern: a `connector` builds the GitHub client from `ProviderConfig` credentials and produces an `external` that implements `Observe`/`Create`/`Update`/`Delete`.
 
 Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube, pc, metrics, orgName)` to get a ready-to-use `*Client`. That helper resolves every credential entry on the `ProviderConfig` (the primary `credentials` plus any `additionalCredentials`), consults the global per-app quota pool to pick the credential with the most remaining rate-limit headroom, builds a cached client via `NewCachedServices`, and wraps it with rate-limit tracking — so every controller automatically benefits from token caching, per-app quota selection, and 429-aware cooldowns. **Don't re-implement the inline secret extraction + client wrapping pattern in a new controller; call `ResolveAndConnect`.**
 

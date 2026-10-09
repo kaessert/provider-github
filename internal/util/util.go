@@ -25,7 +25,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
 	pointer "k8s.io/utils/ptr"
 )
@@ -216,7 +216,7 @@ func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksP
 // by the ActorId field in ascending order.
 func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 	sort.Slice(actors, func(i, j int) bool {
-		return *actors[i].ActorId < *actors[j].ActorId
+		return *actors[i].ActorID < *actors[j].ActorID
 	})
 
 }

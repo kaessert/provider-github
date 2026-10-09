@@ -17,9 +17,9 @@ import (
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
 )
 
 // resolveAllCredentials extracts every credential entry on pc (the primary

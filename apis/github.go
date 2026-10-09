@@ -20,15 +20,15 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
-	organizationsv1alpha1 "github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	githubv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	clusterorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
+	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
 )
 
 func init() {
 	// Register the types with the Scheme so the components can map objects to GroupVersionKinds and back
 	AddToSchemes = append(AddToSchemes,
-		githubv1alpha1.SchemeBuilder.AddToScheme,
-		organizationsv1alpha1.SchemeBuilder.AddToScheme,
+		clusterv1alpha1.SchemeBuilder.AddToScheme,
+		clusterorganizationsv1alpha1.SchemeBuilder.AddToScheme,
 	)
 }
 

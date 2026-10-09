@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // ActionsConfiguration are the configurable fields of an Organization Actions.
@@ -54,11 +54,11 @@ type ActionEnabledRepo struct {
 
 	// RepoRef is a reference to the Repositories
 	// +optional
-	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+	RepoRef *xpv2.Reference `json:"repoRef,omitempty"`
 
 	// RepoSelector selects a reference to an Repositories
 	// +optional
-	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
+	RepoSelector *xpv2.Selector `json:"repoSelector,omitempty"`
 }
 
 type SecretSelectedRepo struct {
@@ -68,11 +68,11 @@ type SecretSelectedRepo struct {
 
 	// RepoRef is a reference to the Repositories
 	// +optional
-	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+	RepoRef *xpv2.Reference `json:"repoRef,omitempty"`
 
 	// RepoSelector selects a reference to a Repository
 	// +optional
-	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
+	RepoSelector *xpv2.Selector `json:"repoSelector,omitempty"`
 }
 
 type OrgSecret struct {
@@ -114,14 +114,14 @@ type OrganizationObservation struct {
 
 // A OrganizationSpec defines the desired state of a Organization.
 type OrganizationSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       OrganizationParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     OrganizationParameters `json:"forProvider"`
 }
 
 // A OrganizationStatus represents the observed state of a Organization.
 type OrganizationStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          OrganizationObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 OrganizationObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

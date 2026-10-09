@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // TeamParameters are the configurable fields of a Team.
@@ -37,11 +37,11 @@ type TeamParameters struct {
 
 	// OrgRef is a reference to an Organization
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSlector selects a reference to an Organization
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Parent is the parent team of a Team
 	// +crossplane:generate:reference:type=Team
@@ -49,11 +49,11 @@ type TeamParameters struct {
 
 	// ParentRef is a reference to a parent team
 	// +optional
-	ParentRef *xpv1.Reference `json:"parentRef,omitempty"`
+	ParentRef *xpv2.Reference `json:"parentRef,omitempty"`
 
 	// ParentSlector selects a reference to an a parent team
 	// +optional
-	ParentSelector *xpv1.Selector `json:"parentSelector,omitempty"`
+	ParentSelector *xpv2.Selector `json:"parentSelector,omitempty"`
 
 	// Privacy represents the visibility of the team (secret, closed)
 	Privacy *string `json:"privacy,omitempty"`
@@ -66,11 +66,11 @@ type TeamMemberUser struct {
 
 	// Name is a reference to an Membership
 	// +optional
-	UserRef *xpv1.Reference `json:"userRef,omitempty"`
+	UserRef *xpv2.Reference `json:"userRef,omitempty"`
 
 	// NameSelector selects a reference to an Organization
 	// +optional
-	UserSelector *xpv1.Selector `json:"userSelector,omitempty"`
+	UserSelector *xpv2.Selector `json:"userSelector,omitempty"`
 
 	// Role is the role of the user
 	Role string `json:"role"`
@@ -83,11 +83,11 @@ type TeamMemberTeam struct {
 
 	// TeamRef is a reference to a Team
 	// +optional
-	TeamRef *xpv1.Reference `json:"teamRef,omitempty"`
+	TeamRef *xpv2.Reference `json:"teamRef,omitempty"`
 
 	// TeamSelector selects a reference to a Team
 	// +optional
-	TeamSelector *xpv1.Selector `json:"teamSelector,omitempty"`
+	TeamSelector *xpv2.Selector `json:"teamSelector,omitempty"`
 
 	// Role is the role of the team
 	Role string `json:"role"`
@@ -100,14 +100,14 @@ type TeamObservation struct {
 
 // A TeamSpec defines the desired state of a Team.
 type TeamSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       TeamParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     TeamParameters `json:"forProvider"`
 }
 
 // A TeamStatus represents the observed state of a Team.
 type TeamStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          TeamObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 TeamObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

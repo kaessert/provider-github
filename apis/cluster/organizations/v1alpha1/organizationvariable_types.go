@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // VariableSelectedRepo references a repository that has access to an
@@ -34,11 +34,11 @@ type VariableSelectedRepo struct {
 
 	// RepoRef is a reference to a Repository.
 	// +optional
-	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+	RepoRef *xpv2.Reference `json:"repoRef,omitempty"`
 
 	// RepoSelector selects a reference to a Repository.
 	// +optional
-	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
+	RepoSelector *xpv2.Selector `json:"repoSelector,omitempty"`
 }
 
 // OrganizationVariableParameters are the configurable fields of a OrganizationVariable.
@@ -49,11 +49,11 @@ type OrganizationVariableParameters struct {
 
 	// OrgRef is a reference to an Organization.
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSelector selects a reference to an Organization.
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Value of the variable.
 	Value string `json:"value"`
@@ -74,14 +74,14 @@ type OrganizationVariableObservation struct {
 
 // A OrganizationVariableSpec defines the desired state of a OrganizationVariable.
 type OrganizationVariableSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       OrganizationVariableParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     OrganizationVariableParameters `json:"forProvider"`
 }
 
 // A OrganizationVariableStatus represents the observed state of a OrganizationVariable.
 type OrganizationVariableStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          OrganizationVariableObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 OrganizationVariableObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

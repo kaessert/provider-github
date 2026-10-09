@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // RepositoryParameters are the configurable fields of a Repository.
@@ -50,11 +50,11 @@ type RepositoryParameters struct {
 
 	// OrgRef is a reference to an Organization
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSlector selects a reference to an Organization
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Archived sets if a repository should be archived on delete
 	// +optional
@@ -162,11 +162,11 @@ type RepositoryUser struct {
 
 	// Name is a reference to an Membership
 	// +optional
-	UserRef *xpv1.Reference `json:"userRef,omitempty"`
+	UserRef *xpv2.Reference `json:"userRef,omitempty"`
 
 	// NameSelector selects a reference to an Organization
 	// +optional
-	UserSelector *xpv1.Selector `json:"userSelector,omitempty"`
+	UserSelector *xpv2.Selector `json:"userSelector,omitempty"`
 
 	// Role is the role of the user
 	Role string `json:"role"`
@@ -179,11 +179,11 @@ type RepositoryTeam struct {
 
 	// TeamRef is a reference to a Team
 	// +optional
-	TeamRef *xpv1.Reference `json:"teamRef,omitempty"`
+	TeamRef *xpv2.Reference `json:"teamRef,omitempty"`
 
 	// TeamSelector selects a reference to a Team
 	// +optional
-	TeamSelector *xpv1.Selector `json:"teamSelector,omitempty"`
+	TeamSelector *xpv2.Selector `json:"teamSelector,omitempty"`
 
 	// Role is the role of the team
 	Role string `json:"role"`
@@ -193,13 +193,13 @@ type RepositoryTeam struct {
 // https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks
 type RepositoryWebhook struct {
 	// The URL to which the payloads will be delivered.
-	Url string `json:"url"`
+	URL string `json:"url"`
 
 	// Determines whether the SSL certificate of the host for url will be verified when delivering payloads.
 	// We strongly recommend not setting this to true as you are subject to man-in-the-middle and other attacks.
 	// Default: false
 	// +optional
-	InsecureSsl *bool `json:"insecureSsl,omitempty"`
+	InsecureSSL *bool `json:"insecureSsl,omitempty"`
 
 	// The media type used to serialize the payloads. Supported values include json and form.
 	// +kubebuilder:validation:Enum=json;form
@@ -213,7 +213,7 @@ type RepositoryWebhook struct {
 	// You can use the webhook secret to limit incoming requests to only those originating from GitHub.
 	// For more information, see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
 	// +optional
-	SecretKeyRef *xpv1.SecretKeySelector `json:"secretKeyRef,omitempty"`
+	SecretKeyRef *xpv2.SecretKeySelector `json:"secretKeyRef,omitempty"`
 
 	// Determines what events the hook is triggered for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
 	Events []string `json:"events"`
@@ -406,7 +406,7 @@ type RepositoryRuleset struct {
 type RulesetByPassActors struct {
 	// ActorId is the ID of the actor
 	// +optional
-	ActorId *int64 `json:"actorId,omitempty"`
+	ActorID *int64 `json:"actorId,omitempty"`
 	// ActorType is the type of the actor, can be one of: Integration, OrganizationAdmin, RepositoryRole, Team
 	// +optional
 	ActorType *string `json:"actorType,omitempty"`
@@ -493,7 +493,7 @@ type RulesRequiredStatusChecksParameters struct {
 	Context string `json:"context"`
 	// IntegrationId is the ID of integration that must provide this check.
 	// +optional
-	IntegrationId *int64 `json:"integrationId,omitempty"`
+	IntegrationID *int64 `json:"integrationId,omitempty"`
 }
 
 // TemplateRepo represents the configuration for creating a new repository from a template.
@@ -547,14 +547,14 @@ type UnappliedSetting struct {
 
 // A RepositorySpec defines the desired state of a Repository.
 type RepositorySpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       RepositoryParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     RepositoryParameters `json:"forProvider"`
 }
 
 // A RepositoryStatus represents the observed state of a Repository.
 type RepositoryStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          RepositoryObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 RepositoryObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

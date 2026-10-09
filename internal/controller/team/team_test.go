@@ -23,15 +23,15 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -132,7 +132,7 @@ func TestObserve(t *testing.T) {
 		o   managed.ExternalObservation
 		err error
 		// partialReason: if non-empty, asserts TeamMembershipPartial reason after Observe.
-		partialReason xpv1.ConditionReason
+		partialReason xpv2.ConditionReason
 	}
 
 	cases := map[string]struct {
@@ -723,7 +723,7 @@ func TestObserve(t *testing.T) {
 			}
 			if tc.want.partialReason != "" {
 				teamCR := tc.args.mg.(*v1alpha1.Team)
-				var found *xpv1.Condition
+				var found *xpv2.Condition
 				for i := range teamCR.Status.Conditions {
 					if teamCR.Status.Conditions[i].Type == "TeamMembershipPartial" {
 						found = &teamCR.Status.Conditions[i]

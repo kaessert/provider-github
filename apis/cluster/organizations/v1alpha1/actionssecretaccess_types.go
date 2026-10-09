@@ -22,23 +22,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
-// DependabotSecretAccessParameters are the configurable fields of a DependabotSecretAccess.
+// ActionsSecretAccessParameters are the configurable fields of an ActionsSecretAccess.
 // +kubebuilder:validation:XValidation:rule="self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
-type DependabotSecretAccessParameters struct {
+type ActionsSecretAccessParameters struct {
 	// Org is the name of the GitHub organization that owns this secret.
 	// +crossplane:generate:reference:type=Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSelector selects a reference to an Organization.
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Visibility declares which repositories may use the secret: all, private,
 	// or the selected list. The provider enforces the list when visibility is
@@ -53,56 +53,56 @@ type DependabotSecretAccessParameters struct {
 	SelectedRepositories []SecretSelectedRepo `json:"selectedRepositories,omitempty"`
 }
 
-// DependabotSecretAccessObservation are the observable fields of a DependabotSecretAccess.
-type DependabotSecretAccessObservation struct {
+// ActionsSecretAccessObservation are the observable fields of an ActionsSecretAccess.
+type ActionsSecretAccessObservation struct {
 }
 
-// A DependabotSecretAccessSpec defines the desired state of a DependabotSecretAccess.
-type DependabotSecretAccessSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       DependabotSecretAccessParameters `json:"forProvider"`
+// An ActionsSecretAccessSpec defines the desired state of an ActionsSecretAccess.
+type ActionsSecretAccessSpec struct {
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     ActionsSecretAccessParameters `json:"forProvider"`
 }
 
-// A DependabotSecretAccessStatus represents the observed state of a DependabotSecretAccess.
-type DependabotSecretAccessStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          DependabotSecretAccessObservation `json:"atProvider,omitempty"`
+// An ActionsSecretAccessStatus represents the observed state of an ActionsSecretAccess.
+type ActionsSecretAccessStatus struct {
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 ActionsSecretAccessObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// A DependabotSecretAccess manages which repositories can use an existing Dependabot organization secret.
+// An ActionsSecretAccess manages which repositories can use an existing GitHub Actions organization secret.
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,github}
-type DependabotSecretAccess struct {
+type ActionsSecretAccess struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   DependabotSecretAccessSpec   `json:"spec"`
-	Status DependabotSecretAccessStatus `json:"status,omitempty"`
+	Spec   ActionsSecretAccessSpec   `json:"spec"`
+	Status ActionsSecretAccessStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// DependabotSecretAccessList contains a list of DependabotSecretAccess
-type DependabotSecretAccessList struct {
+// ActionsSecretAccessList contains a list of ActionsSecretAccess
+type ActionsSecretAccessList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []DependabotSecretAccess `json:"items"`
+	Items           []ActionsSecretAccess `json:"items"`
 }
 
-// DependabotSecretAccess type metadata.
+// ActionsSecretAccess type metadata.
 var (
-	DependabotSecretAccessKind             = reflect.TypeOf(DependabotSecretAccess{}).Name()
-	DependabotSecretAccessGroupKind        = schema.GroupKind{Group: Group, Kind: DependabotSecretAccessKind}.String()
-	DependabotSecretAccessKindAPIVersion   = DependabotSecretAccessKind + "." + SchemeGroupVersion.String()
-	DependabotSecretAccessGroupVersionKind = SchemeGroupVersion.WithKind(DependabotSecretAccessKind)
+	ActionsSecretAccessKind             = reflect.TypeOf(ActionsSecretAccess{}).Name()
+	ActionsSecretAccessGroupKind        = schema.GroupKind{Group: Group, Kind: ActionsSecretAccessKind}.String()
+	ActionsSecretAccessKindAPIVersion   = ActionsSecretAccessKind + "." + SchemeGroupVersion.String()
+	ActionsSecretAccessGroupVersionKind = SchemeGroupVersion.WithKind(ActionsSecretAccessKind)
 )
 
 func init() {
-	SchemeBuilder.Register(&DependabotSecretAccess{}, &DependabotSecretAccessList{})
+	SchemeBuilder.Register(&ActionsSecretAccess{}, &ActionsSecretAccessList{})
 }

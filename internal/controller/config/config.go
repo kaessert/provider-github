@@ -17,14 +17,14 @@ limitations under the License.
 package config
 
 import (
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/providerconfig"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/providerconfig"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/crossplane/provider-github/apis/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/v1alpha1"
 	"github.com/crossplane/provider-github/internal/telemetry"
 )
 
@@ -40,7 +40,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 
 	r := providerconfig.NewReconciler(mgr, of,
 		providerconfig.WithLogger(o.Logger.WithValues("controller", name)),
-		providerconfig.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))))
+		providerconfig.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))) //nolint:staticcheck // crossplane-runtime's event.NewAPIRecorder still takes the record.EventRecorder that GetEventRecorderFor returns; the replacement events API is not accepted by it yet.
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).

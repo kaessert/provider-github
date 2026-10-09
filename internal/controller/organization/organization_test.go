@@ -22,15 +22,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-github/v90/github"
 )
 

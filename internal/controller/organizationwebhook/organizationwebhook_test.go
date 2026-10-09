@@ -28,11 +28,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	kubefake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 )
@@ -62,8 +62,8 @@ func withExternalName(n string) modifier {
 
 func withSecretRef() modifier {
 	return func(cr *v1alpha1.OrganizationWebhook) {
-		cr.Spec.ForProvider.SecretKeyRef = &xpv1.SecretKeySelector{
-			SecretReference: xpv1.SecretReference{Name: testSourceName, Namespace: testNamespace},
+		cr.Spec.ForProvider.SecretKeyRef = &xpv2.SecretKeySelector{
+			SecretReference: xpv2.SecretReference{Name: testSourceName, Namespace: testNamespace},
 			Key:             testSourceKey,
 		}
 	}
@@ -71,7 +71,7 @@ func withSecretRef() modifier {
 
 func withConnSecretRef() modifier {
 	return func(cr *v1alpha1.OrganizationWebhook) {
-		cr.Spec.WriteConnectionSecretToReference = &xpv1.SecretReference{Name: testConnName, Namespace: testNamespace}
+		cr.Spec.WriteConnectionSecretToReference = &xpv2.SecretReference{Name: testConnName, Namespace: testNamespace}
 	}
 }
 
@@ -79,7 +79,7 @@ func newCR(m ...modifier) *v1alpha1.OrganizationWebhook {
 	cr := &v1alpha1.OrganizationWebhook{}
 	cr.Name = testCRName
 	cr.Spec.ForProvider.Org = testOrg
-	cr.Spec.ForProvider.Url = testURL
+	cr.Spec.ForProvider.URL = testURL
 	cr.Spec.ForProvider.ContentType = "json"
 	cr.Spec.ForProvider.Events = []string{"push", "pull_request"}
 	meta.SetExternalName(cr, testCRName)
@@ -168,8 +168,8 @@ func TestObserve_ByID_UpToDate(t *testing.T) {
 	if cr.Status.AtProvider.ID != testHookID {
 		t.Errorf("status.atProvider.id = %d, want %d", cr.Status.AtProvider.ID, testHookID)
 	}
-	if c := cr.GetCondition(xpv1.TypeReady); c.Reason != xpv1.Available().Reason {
-		t.Errorf("Ready reason = %q, want %q", c.Reason, xpv1.Available().Reason)
+	if c := cr.GetCondition(xpv2.TypeReady); c.Reason != xpv2.Available().Reason {
+		t.Errorf("Ready reason = %q, want %q", c.Reason, xpv2.Available().Reason)
 	}
 }
 
@@ -461,7 +461,7 @@ func TestDelete_404IsNotAnError(t *testing.T) {
 	}
 	e := newExternal(orgs, newKube(t))
 
-	if err := e.Delete(context.Background(), newCR(withExternalName(testHookIDStr))); err != nil {
+	if _, err := e.Delete(context.Background(), newCR(withExternalName(testHookIDStr))); err != nil {
 		t.Errorf("Delete returned %v on 404, want nil", err)
 	}
 }
