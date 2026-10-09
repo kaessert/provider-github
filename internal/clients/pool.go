@@ -11,12 +11,12 @@ You may obtain a copy of the License at
 package clients
 
 import (
-	"errors"
 	"math/rand"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/google/go-github/v90/github"
 )
 
@@ -249,12 +249,13 @@ func (p *quotaPool) pick(cacheKeys []string) (string, string, error) {
 	}
 
 	best := candidates[0].remaining
-	bestKeys := []string{candidates[0].key}
+	bestKeys := make([]string, 1, len(candidates))
+	bestKeys[0] = candidates[0].key
 	for _, c := range candidates[1:] {
 		switch {
 		case c.remaining > best:
 			best = c.remaining
-			bestKeys = []string{c.key}
+			bestKeys = append(bestKeys[:0], c.key)
 		case c.remaining == best:
 			bestKeys = append(bestKeys, c.key)
 		}

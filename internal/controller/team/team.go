@@ -50,6 +50,12 @@ import (
 	"github.com/crossplane/provider-github/internal/telemetry"
 )
 
+// GitHub team membership roles.
+const (
+	roleMember     = "member"
+	roleMaintainer = "maintainer"
+)
+
 const (
 	errNotTeam      = "managed resource is not a Team custom resource"
 	errTrackPCUsage = "cannot track ProviderConfig usage"
@@ -312,7 +318,7 @@ func classifyRollupUser(ctx context.Context, gh *ghclient.Client, org, user, ghR
 		// rogue direct grant layered on the inherited membership (DELETE demotes it to
 		// inherited member → converges) or an org admin (maintainer of every team;
 		// DELETE can't strip it → would loop). Remove only the former.
-		if ghRole != "maintainer" {
+		if ghRole != roleMaintainer {
 			return verdictNone, nil
 		}
 		admin, err := isOrgAdmin(ctx, gh, org, user)
@@ -330,7 +336,7 @@ func classifyRollupUser(ctx context.Context, gh *ghclient.Client, org, user, ghR
 	}
 	// Role mismatch. Only (GH=maintainer, CR=else) can be GitHub-enforced: GitHub
 	// force-applies maintainer to org admins regardless of the declared role.
-	if ghRole == "maintainer" {
+	if ghRole == roleMaintainer {
 		enforced, err := isOrgAdmin(ctx, gh, org, user)
 		if err != nil {
 			return verdictNone, err
@@ -465,7 +471,7 @@ func getPendingTeamInviteeLogins(ctx context.Context, gh *ghclient.Client, org, 
 func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, slug string) (map[string]string, error) {
 	mToPermission := make(map[string]string)
 	// maintainer last: a user can be both an inherited member and a direct maintainer; querying maintainer last makes it win.
-	roles := []string{"member", "maintainer"}
+	roles := []string{roleMember, roleMaintainer}
 
 	for _, role := range roles {
 		opt := &github.TeamListTeamMembersOptions{
