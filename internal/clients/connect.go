@@ -16,7 +16,7 @@ import (
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
 	"github.com/crossplane/provider-github/internal/telemetry"
 )
 

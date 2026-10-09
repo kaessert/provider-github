@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // OrganizationWebhookParameters are the configurable fields of an OrganizationWebhook.
@@ -33,15 +33,15 @@ type OrganizationWebhookParameters struct {
 
 	// OrgRef is a reference to an Organization.
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSelector selects a reference to an Organization.
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// The URL to which the payloads will be delivered. An existing
 	// webhook with this URL is adopted.
-	Url string `json:"url"`
+	URL string `json:"url"`
 
 	// The media type used to serialize the payloads. Supported values include json and form.
 	// +kubebuilder:validation:Enum=json;form
@@ -60,14 +60,14 @@ type OrganizationWebhookParameters struct {
 	// We strongly recommend not setting this to true as you are subject to man-in-the-middle and other attacks.
 	// Default: false
 	// +optional
-	InsecureSsl *bool `json:"insecureSsl,omitempty"`
+	InsecureSSL *bool `json:"insecureSsl,omitempty"`
 
 	// Reference to a secret key containing the webhook secret.
 	// You can use the webhook secret to limit incoming requests to only those originating from GitHub.
 	// For more information, see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
 	// Requires spec.writeConnectionSecretToRef, where the applied secret is recorded.
 	// +optional
-	SecretKeyRef *xpv1.SecretKeySelector `json:"secretKeyRef,omitempty"`
+	SecretKeyRef *xpv2.SecretKeySelector `json:"secretKeyRef,omitempty"`
 }
 
 // OrganizationWebhookObservation are the observable fields of an OrganizationWebhook.
@@ -78,14 +78,14 @@ type OrganizationWebhookObservation struct {
 
 // An OrganizationWebhookSpec defines the desired state of an OrganizationWebhook.
 type OrganizationWebhookSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       OrganizationWebhookParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     OrganizationWebhookParameters `json:"forProvider"`
 }
 
 // An OrganizationWebhookStatus represents the observed state of an OrganizationWebhook.
 type OrganizationWebhookStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          OrganizationWebhookObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 OrganizationWebhookObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

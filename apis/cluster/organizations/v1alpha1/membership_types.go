@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // MembershipParameters are the configurable fields of a Membership.
@@ -36,11 +36,11 @@ type MembershipParameters struct {
 
 	// OrgRef is a reference to an Organization
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSlector selects a reference to an Organization
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 }
 
 // MembershipObservation are the observable fields of a Membership.
@@ -50,14 +50,14 @@ type MembershipObservation struct {
 
 // A MembershipSpec defines the desired state of a Membership.
 type MembershipSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       MembershipParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     MembershipParameters `json:"forProvider"`
 }
 
 // A MembershipStatus represents the observed state of a Membership.
 type MembershipStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          MembershipObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 MembershipObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

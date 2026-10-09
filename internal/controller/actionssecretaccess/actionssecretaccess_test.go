@@ -26,11 +26,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 )
@@ -93,9 +93,9 @@ func newExternal(actions *fake.MockActionsClient, repos *fake.MockRepositoriesCl
 	return &external{github: &ghclient.Client{Services: s}}
 }
 
-func assertReady(t *testing.T, cr *v1alpha1.ActionsSecretAccess, status corev1.ConditionStatus, reason xpv1.ConditionReason) xpv1.Condition {
+func assertReady(t *testing.T, cr *v1alpha1.ActionsSecretAccess, status corev1.ConditionStatus, reason xpv2.ConditionReason) xpv2.Condition {
 	t.Helper()
-	c := cr.GetCondition(xpv1.TypeReady)
+	c := cr.GetCondition(xpv2.TypeReady)
 	if c.Status != status || c.Reason != reason {
 		t.Errorf("Ready = %s/%s, want %s/%s", c.Status, c.Reason, status, reason)
 	}
@@ -164,7 +164,7 @@ func TestObserve_Selected_SameReposDifferentOrder_UpToDate(t *testing.T) {
 	if diff := cmp.Diff(upToDate, got); diff != "" {
 		t.Errorf("Observe: -want, +got:\n%s", diff)
 	}
-	assertReady(t, cr, corev1.ConditionTrue, xpv1.ReasonAvailable)
+	assertReady(t, cr, corev1.ConditionTrue, xpv2.ReasonAvailable)
 }
 
 // An extra repository on GitHub is drift that Update must remove.
@@ -201,7 +201,7 @@ func TestObserve_Selected_NameCaseDiffers_UpToDate(t *testing.T) {
 	if diff := cmp.Diff(upToDate, got); diff != "" {
 		t.Errorf("Observe: -want, +got:\n%s", diff)
 	}
-	assertReady(t, cr, corev1.ConditionTrue, xpv1.ReasonAvailable)
+	assertReady(t, cr, corev1.ConditionTrue, xpv2.ReasonAvailable)
 }
 
 // The declared list is a set: a repository listed twice in spec, in any case,
@@ -221,7 +221,7 @@ func TestObserve_Selected_DuplicateSpecRepo_UpToDate(t *testing.T) {
 	if diff := cmp.Diff(upToDate, got); diff != "" {
 		t.Errorf("Observe: -want, +got:\n%s", diff)
 	}
-	assertReady(t, cr, corev1.ConditionTrue, xpv1.ReasonAvailable)
+	assertReady(t, cr, corev1.ConditionTrue, xpv2.ReasonAvailable)
 }
 
 // Repositories beyond the first page must be compared; otherwise a secret with
@@ -272,7 +272,7 @@ func TestObserve_NotSelected_VisibilityMatches_ReadyAndNoList(t *testing.T) {
 			if diff := cmp.Diff(upToDate, got); diff != "" {
 				t.Errorf("Observe: -want, +got:\n%s", diff)
 			}
-			assertReady(t, cr, corev1.ConditionTrue, xpv1.ReasonAvailable)
+			assertReady(t, cr, corev1.ConditionTrue, xpv2.ReasonAvailable)
 		})
 	}
 }
@@ -522,7 +522,7 @@ func TestObserve_Deleting_NotExistsAndNoClientCall(t *testing.T) {
 func TestDelete_NoClientCall(t *testing.T) {
 	e := &external{github: &ghclient.Client{Services: &ghclient.Services{}}}
 
-	if err := e.Delete(context.Background(), newCR(visibilitySelected, testRepoA)); err != nil {
+	if _, err := e.Delete(context.Background(), newCR(visibilitySelected, testRepoA)); err != nil {
 		t.Errorf("Delete returned %v, want nil", err)
 	}
 }

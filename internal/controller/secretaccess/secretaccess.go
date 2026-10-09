@@ -29,18 +29,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 )
 
 // VisibilitySelected is the visibility under which a secret has a repository list.
 const VisibilitySelected = "selected"
 
 const (
-	reasonSecretNotFound     xpv1.ConditionReason = "SecretNotFound"
-	reasonVisibilityMismatch xpv1.ConditionReason = "VisibilityMismatch"
+	reasonSecretNotFound     xpv2.ConditionReason = "SecretNotFound"
+	reasonVisibilityMismatch xpv2.ConditionReason = "VisibilityMismatch"
 )
 
 // RepoLister lists the repositories that can use an organization secret.
@@ -49,13 +49,13 @@ type RepoLister interface {
 }
 
 // SecretNotFound is the Ready condition for a secret missing on GitHub.
-func SecretNotFound(name string) xpv1.Condition {
+func SecretNotFound(name string) xpv2.Condition {
 	return notReady(reasonSecretNotFound,
 		fmt.Sprintf("secret %s not found on GitHub; create it there first (this resource only manages repository access)", name))
 }
 
 // VisibilityMismatch is the Ready condition for a visibility the provider cannot change.
-func VisibilityMismatch(ghVisibility, specVisibility string) xpv1.Condition {
+func VisibilityMismatch(ghVisibility, specVisibility string) xpv2.Condition {
 	return notReady(reasonVisibilityMismatch,
 		fmt.Sprintf("visibility is %q on GitHub but %q in spec; change it on GitHub (the API cannot change visibility without the secret value)", ghVisibility, specVisibility))
 }
@@ -65,9 +65,9 @@ func SecretNotFoundError(name string) error {
 	return errors.Errorf("secret %s not found on GitHub; create it there first", name)
 }
 
-func notReady(reason xpv1.ConditionReason, message string) xpv1.Condition {
-	return xpv1.Condition{
-		Type:               xpv1.TypeReady,
+func notReady(reason xpv2.ConditionReason, message string) xpv2.Condition {
+	return xpv2.Condition{
+		Type:               xpv2.TypeReady,
 		Status:             corev1.ConditionFalse,
 		Reason:             reason,
 		Message:            message,

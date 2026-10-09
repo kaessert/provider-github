@@ -19,7 +19,7 @@ package clients
 import (
 	"context"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/google/go-github/v90/github"
 )
 

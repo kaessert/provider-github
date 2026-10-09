@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // RunnerGroupSelectedRepo references a repository that has access to a
@@ -34,11 +34,11 @@ type RunnerGroupSelectedRepo struct {
 
 	// RepoRef is a reference to a Repository.
 	// +optional
-	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+	RepoRef *xpv2.Reference `json:"repoRef,omitempty"`
 
 	// RepoSelector selects a reference to a Repository.
 	// +optional
-	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
+	RepoSelector *xpv2.Selector `json:"repoSelector,omitempty"`
 }
 
 // WorkflowRef is a workflow allowed to use a runner group, as
@@ -55,11 +55,11 @@ type RunnerGroupParameters struct {
 
 	// OrgRef is a reference to an Organization.
 	// +optional
-	OrgRef *xpv1.Reference `json:"orgRef,omitempty"`
+	OrgRef *xpv2.Reference `json:"orgRef,omitempty"`
 
 	// OrgSelector selects a reference to an Organization.
 	// +optional
-	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Visibility controls which repositories can use this runner group.
 	// +kubebuilder:validation:Enum=all;selected;private
@@ -91,14 +91,14 @@ type RunnerGroupObservation struct {
 
 // A RunnerGroupSpec defines the desired state of a RunnerGroup.
 type RunnerGroupSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       RunnerGroupParameters `json:"forProvider"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
+	ForProvider                     RunnerGroupParameters `json:"forProvider"`
 }
 
 // A RunnerGroupStatus represents the observed state of a RunnerGroup.
 type RunnerGroupStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          RunnerGroupObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 RunnerGroupObservation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true

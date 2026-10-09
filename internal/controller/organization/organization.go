@@ -22,29 +22,18 @@ import (
 	"slices"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
 
 	"github.com/google/go-github/v90/github"
 )
@@ -136,78 +125,6 @@ const (
 	errNewClient = "cannot create new Service"
 )
 
-// Setup adds a controller that reconciles Organization managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
-}
-
-// SetupWithTimeout adds a controller that reconciles Organization managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.OrganizationGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-	}
-
-	// Add timeout if specified
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.OrganizationGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.Organization{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-// Initializes external client
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.Organization)
-	if !ok {
-		return nil, errors.New(errNotOrganization)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, meta.GetExternalName(cr))
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{github: gh}, nil
-}
-
 type external struct {
 	// A 'client' used to connect to the external resource API. In practice this
 	// would be something like an AWS SDK client.
@@ -288,7 +205,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return notUpToDate, nil
 	}
 
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 
 	return managed.ExternalObservation{
 		ResourceExists:   true,
@@ -348,14 +265,14 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.Organization)
 	if !ok {
-		return errors.New(errNotOrganization)
+		return managed.ExternalDelete{}, errors.New(errNotOrganization)
 	}
-	cr.Status.SetConditions(xpv1.Deleting())
+	cr.Status.SetConditions(xpv2.Deleting())
 
-	return nil
+	return managed.ExternalDelete{}, nil
 }
 
 func getSortedEnabledReposFromCr(repos []v1alpha1.ActionEnabledRepo) []string {
@@ -559,5 +476,11 @@ func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, se
 			return err
 		}
 	}
+	return nil
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
 	return nil
 }

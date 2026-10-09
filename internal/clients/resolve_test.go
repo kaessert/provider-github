@@ -20,9 +20,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
 )
 
 func newFakeKubeWithSecret(t *testing.T, name, namespace string, data map[string][]byte) *fake.ClientBuilder {
@@ -43,10 +43,10 @@ func pcWithSecretRef(secretName, namespace, key string) *apisv1alpha1.ProviderCo
 	return &apisv1alpha1.ProviderConfig{
 		Spec: apisv1alpha1.ProviderConfigSpec{
 			Credentials: apisv1alpha1.ProviderCredentials{
-				Source: xpv1.CredentialsSourceSecret,
-				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-					SecretRef: &xpv1.SecretKeySelector{
-						SecretReference: xpv1.SecretReference{Name: secretName, Namespace: namespace},
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: secretName, Namespace: namespace},
 						Key:             key,
 					},
 				},

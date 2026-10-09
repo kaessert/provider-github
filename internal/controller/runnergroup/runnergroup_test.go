@@ -23,10 +23,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 )
@@ -406,7 +406,7 @@ func TestDelete_404IsNotAnError(t *testing.T) {
 	}
 	e := newExternal(actions, nil)
 
-	if err := e.Delete(context.Background(), newCR(withID(testGroupID))); err != nil {
+	if _, err := e.Delete(context.Background(), newCR(withID(testGroupID))); err != nil {
 		t.Errorf("Delete returned %v on 404, want nil", err)
 	}
 }

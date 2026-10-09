@@ -141,6 +141,37 @@ CR declares the description you want — otherwise the next reconcile
 will clear it.
 
 
+### crossplane-runtime v2: removed features and always-on management policies
+
+The provider is built on crossplane-runtime v2. Compared with earlier releases:
+
+* **External Secret Stores are gone.** The `StoreConfig` kind, the
+  `--enable-external-secret-stores` flag and every managed resource's
+  `spec.publishConnectionDetailsTo` field are removed. Connection details are
+  published only through `spec.writeConnectionSecretToRef`. Remove
+  `publishConnectionDetailsTo` from existing manifests and delete any
+  `StoreConfig` objects before upgrading.
+* **Management policies are always on.** `spec.managementPolicies` is honored
+  on every managed resource, and the `--enable-management-policies` flag (and
+  its `ENABLE_MANAGEMENT_POLICIES` environment variable) no longer exists.
+  Remove the flag from any `DeploymentRuntimeConfig` or Deployment arguments,
+  because an unknown flag stops the provider from starting. The same holds for
+  `--enable-external-secret-stores` and `--namespace`.
+* **The deprecated `spec.providerRef` field is gone** from every managed
+  resource. Use `spec.providerConfigRef`.
+* Managed resources report `status.observedGeneration` and
+  `status.lastHandledReconcileAt`, and `status.conditions` entries report
+  `observedGeneration`.
+* `ProviderConfig` carries the `crossplane`, `provider` and `github`
+  categories, so `kubectl get crossplane` also lists it.
+* The Go API packages moved to `apis/cluster/...`
+  (`github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1`
+  and `.../apis/cluster/v1alpha1`) and four exported fields were renamed to Go
+  initialism style: `Url` to `URL`, `InsecureSsl` to `InsecureSSL`, `ActorId`
+  to `ActorID` and `IntegrationId` to `IntegrationID`. Their JSON names are
+  unchanged.
+
+
 ## Developing
 
 To add a new resource follow these steps:
