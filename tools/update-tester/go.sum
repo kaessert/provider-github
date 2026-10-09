@@ -32,6 +32,8 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/kaessert/crossplane-update-tester v0.47.0 h1:xmNxiVU7aHgw1wboeDKkHLcZvi0C/XjD8eh4aB/XrR4=
 github.com/kaessert/crossplane-update-tester v0.47.0/go.mod h1:qWmrWt9EihMw1OqBjNW4gvAJYI4vrR3Oef3jS4cffcE=
+github.com/kaessert/crossplane-update-tester v0.48.0 h1:eQozZIhonzR7NmYISCSCI3g2mipkYDDMdoBPC/zagYM=
+github.com/kaessert/crossplane-update-tester v0.48.0/go.mod h1:qWmrWt9EihMw1OqBjNW4gvAJYI4vrR3Oef3jS4cffcE=
 github.com/kaessert/crossplane-update-tester/sidecar v0.2.0 h1:DSwwJvDorG0dITlVcU2EmMnJXnf1Y7i3jdZXML6JlMQ=
 github.com/kaessert/crossplane-update-tester/sidecar v0.2.0/go.mod h1:CA5PJj/rBCfdEEHDi8XrxEVrkbc2Wtwq5nQ/KpLayDY=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
