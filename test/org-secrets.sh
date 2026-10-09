@@ -9,11 +9,12 @@
 # with an installation token minted from the three GitHub App credentials.
 #
 # Usage:
-#   test/org-secrets.sh create   create (or overwrite) both secrets, visibility all
-#   test/org-secrets.sh delete   delete both secrets; a missing secret is fine
+#   test/org-secrets.sh create   create (or overwrite) the four secrets, visibility selected,
+#                                with the repository SELECTED_REPO as the initial selection
+#   test/org-secrets.sh delete   delete the four secrets; a missing secret is fine
 #   test/org-secrets.sh watch    block until the Kubernetes cluster named by the
 #                                kubeconfig file in WATCH_KUBECONFIG is gone, then
-#                                delete both secrets (the net for a run that ends
+#                                delete the four secrets (the net for a run that ends
 #                                without reaching the teardown script)
 #
 # Required environment:
@@ -23,6 +24,8 @@
 #   E2E_ORG                              the test organization login
 #
 # Optional environment:
+#   SELECTED_REPO     existing repository of E2E_ORG the secrets are initially
+#                     shared with (default: demo-repository-1)
 #   KUBECTL           path to the kubectl binary (watch only; default: kubectl)
 #   WATCH_KUBECONFIG  kubeconfig file for the cluster to watch (watch only; removed on exit)
 #   GITHUB_API_URL    API base (default: https://api.github.com)
@@ -31,10 +34,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API="${GITHUB_API_URL:-https://api.github.com}"
 
+# All four secrets are created with visibility selected: the SecretAccess controllers
+# enforce (and write) the repository list only while the visibility is selected,
+# and the provider cannot change the visibility itself.
+SELECTED_REPO="${SELECTED_REPO:-demo-repository-1}"
+
 # The names are the external names the secret-access examples carry. Nothing
-# else in the organization is ever touched.
+# else in the organization is ever touched. The cluster-scoped and the
+# namespaced example each manage a secret of their own: they run in the same
+# job, and two managed resources sharing one GitHub secret would rewrite each
+# other's repository list.
 ACTIONS_SECRET=PGH_E2E_ACTIONS_SECRET
+ACTIONS_SECRET_NS=PGH_E2E_ACTIONS_SECRET_NS
 DEPENDABOT_SECRET=PGH_E2E_DEPENDABOT_SECRET
+DEPENDABOT_SECRET_NS=PGH_E2E_DEPENDABOT_SECRET_NS
 
 fail() {
   echo "org-secrets.sh: ERROR: $*" >&2
@@ -81,7 +94,12 @@ gh_api() {
 }
 
 create_secret() {
-  local token="$1" kind="$2" name="$3" resp status body key_id key sealed
+  local token="$1" kind="$2" name="$3" resp status body key_id key sealed repo_id
+  resp="$(gh_api "${token}" GET "/repos/${E2E_ORG}/${SELECTED_REPO}")"
+  status="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  [ "${status}" = 200 ] || fail "reading repository ${E2E_ORG}/${SELECTED_REPO} returned HTTP ${status}: ${body}"
+  repo_id="$(printf '%s' "${body}" | jq -r '.id')"
   resp="$(gh_api "${token}" GET "/orgs/${E2E_ORG}/${kind}/secrets/public-key")"
   status="${resp##*$'\n'}"
   body="${resp%$'\n'*}"
@@ -90,7 +108,7 @@ create_secret() {
   key="$(printf '%s' "${body}" | jq -r '.key')"
   sealed="$(openssl rand -hex 16 | tr -d '\n' | go -C "${ROOT}" run ./test/sealedbox "${key}")" \
     || fail "could not encrypt the ${kind} secret value"
-  resp="$(jq -n --arg v "${sealed}" --arg k "${key_id}" '{encrypted_value: $v, key_id: $k, visibility: "all"}' \
+  resp="$(jq -n --arg v "${sealed}" --arg k "${key_id}" --argjson r "${repo_id}" '{encrypted_value: $v, key_id: $k, visibility: "selected", selected_repository_ids: [$r]}' \
     | gh_api "${token}" PUT "/orgs/${E2E_ORG}/${kind}/secrets/${name}" -H "Content-Type: application/json" --data @-)"
   status="${resp##*$'\n'}"
   case "${status}" in
@@ -114,7 +132,9 @@ delete_both() {
   local token rc=0
   token="$(mint_token)"
   delete_secret "${token}" actions "${ACTIONS_SECRET}" || rc=1
+  delete_secret "${token}" actions "${ACTIONS_SECRET_NS}" || rc=1
   delete_secret "${token}" dependabot "${DEPENDABOT_SECRET}" || rc=1
+  delete_secret "${token}" dependabot "${DEPENDABOT_SECRET_NS}" || rc=1
   return "${rc}"
 }
 
@@ -122,7 +142,9 @@ case "${1:-}" in
   create)
     token="$(mint_token)"
     create_secret "${token}" actions "${ACTIONS_SECRET}"
+    create_secret "${token}" actions "${ACTIONS_SECRET_NS}"
     create_secret "${token}" dependabot "${DEPENDABOT_SECRET}"
+    create_secret "${token}" dependabot "${DEPENDABOT_SECRET_NS}"
     ;;
   delete)
     delete_both
