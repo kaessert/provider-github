@@ -196,11 +196,7 @@ check-conventions: ## Detect convention violations (test names, error wrapping, 
 
 .PHONY: check-conventions
 
-# check-conventions is not yet a prerequisite of reviewable: non-test code has no
-# fmt.Errorf calls or stdlib "errors" imports left, but the test files still
-# contain underscore test names (func Test...), which the check flags. Wire it in
-# (reviewable: check-conventions) once those are renamed and it passes on a clean
-# tree.
+reviewable: check-conventions
 
 # ====================================================================================
 # Breaking-change gate
