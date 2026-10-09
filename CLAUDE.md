@@ -76,15 +76,19 @@ Then register the new API in `apis/github.go` (or the appropriate group aggregat
 
 ### API types (CRDs)
 
-- `apis/cluster/v1alpha1/` — `ProviderConfig`, `ProviderConfigUsage` (provider-level config).
+- `apis/cluster/v1alpha1/` — `ProviderConfig`, `ProviderConfigUsage` (provider-level config, group `github.crossplane.io`).
+- `apis/namespaced/v1alpha1/` — namespaced `ProviderConfig`, `ClusterProviderConfig` and the one `ProviderConfigUsage` that tracks both (group `github.m.crossplane.io`).
 - `apis/cluster/organizations/v1alpha1/` — managed resources: `Organization`, `Team`, `Repository`, `Membership`, `ActionsSecretAccess`, `DependabotSecretAccess`. Hand-written `*_types.go` plus generated `zz_generated_*.go` (deepcopy, managed, managedlist, resolvers).
+- `apis/namespaced/organizations/v1alpha1/` — the namespaced twins of those kinds (group `organizations.github.m.crossplane.io`), embedding `xpv2.ManagedResourceSpec` and using `NamespacedReference`/`NamespacedSelector`. Hand-written copies of the cluster `*_types.go`: the `forProvider`/`atProvider` shape must stay identical (`internal/controller/scopebridge` has a test that compares the generated CRDs), so change both scopes together.
 - `apis/generate.go` drives codegen with `controller-gen` (CRDs → `package/crds/`) and `angryjet` (crossplane-runtime methodsets). Always run `make generate` after editing `*_types.go`.
 
 ### Controllers
 
-Each managed resource lives in `internal/controller/<resource>/` with a `<resource>.go` (the Observe/Create/Update/Delete logic), a `cluster.go` (Setup, connector and ProviderConfig resolution for the cluster-scoped kind) and `<resource>_test.go`. They follow the standard `crossplane-runtime/pkg/reconciler/managed` pattern: a `connector` builds the GitHub client from `ProviderConfig` credentials and produces an `external` that implements `Observe`/`Create`/`Update`/`Delete`.
+Each managed resource lives in `internal/controller/<resource>/` with a `<resource>.go` (the Observe/Create/Update/Delete logic), a `cluster.go` (Setup, connector and ProviderConfig resolution for the cluster-scoped kind), a `namespaced.go` (the same for the namespaced kind) and `<resource>_test.go`. They follow the standard `crossplane-runtime/pkg/reconciler/managed` pattern: a `connector` builds the GitHub client from `ProviderConfig` credentials and produces an `external` that implements `Observe`/`Create`/`Update`/`Delete`.
 
 Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube, pc, metrics, orgName)` to get a ready-to-use `*Client`. That helper resolves every credential entry on the `ProviderConfig` (the primary `credentials` plus any `additionalCredentials`), consults the global per-app quota pool to pick the credential with the most remaining rate-limit headroom, builds a cached client via `NewCachedServices`, and wraps it with rate-limit tracking — so every controller automatically benefits from token caching, per-app quota selection, and 429-aware cooldowns. **Don't re-implement the inline secret extraction + client wrapping pattern in a new controller; call `ResolveAndConnect`.**
+
+**One external client serves both scopes.** `namespaced.go` builds the same `external` as `cluster.go` and wraps it with `scopebridge.New`, which converts the namespaced resource to its cluster-scoped form for each call and copies metadata and status back. The external client may read the spec but must not write it. Namespaced controllers resolve their config with `ghclient.ResolveAndConnectNamespaced` (which switches on `providerConfigRef.kind`, pins a namespaced `ProviderConfig`'s credential Secret to the resource's namespace) and track usage with `resource.NewProviderConfigUsageTracker`.
 
 `config.Setup` (provider config controller) is set up unconditionally; resource controllers vary based on `--reconcile-timeout`.
 

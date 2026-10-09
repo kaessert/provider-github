@@ -29,7 +29,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
 type DependabotSecretAccessParameters struct {
 	// Org is the name of the GitHub organization that owns this secret.
-	// +crossplane:generate:reference:type=Organization
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.

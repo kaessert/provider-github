@@ -1,0 +1,39 @@
+---
+# Variable available to all repositories in the organization.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: sample-variable-all-ns
+  namespace: default
+  annotations:
+    crossplane.io/external-name: SAMPLE_VAR_ALL-ns
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    orgRef:
+      name: pgh-sample-organization-ns
+    value: hello-all
+    visibility: all
+---
+# Variable available only to selected repositories.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: OrganizationVariable
+metadata:
+  name: sample-variable-selected-ns
+  namespace: default
+  annotations:
+    crossplane.io/external-name: SAMPLE_VAR_SELECTED-ns
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    orgRef:
+      name: pgh-sample-organization-ns
+    value: hello-some
+    visibility: selected
+    selectedRepositories:
+    - repoRef:
+        name: sample-repository-ns

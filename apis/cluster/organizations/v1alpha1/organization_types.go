@@ -49,7 +49,7 @@ type ActionsConfiguration struct {
 
 type ActionEnabledRepo struct {
 	// Name of the repository
-	// +crossplane:generate:reference:type=Repository
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Repository
 	Repo string `json:"repo,omitempty"`
 
 	// RepoRef is a reference to the Repositories
@@ -63,7 +63,7 @@ type ActionEnabledRepo struct {
 
 type SecretSelectedRepo struct {
 	// Name of the repository
-	// +crossplane:generate:reference:type=Repository
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Repository
 	Repo string `json:"repo,omitempty"`
 
 	// RepoRef is a reference to the Repositories

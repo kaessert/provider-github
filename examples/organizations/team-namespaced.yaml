@@ -1,0 +1,40 @@
+---
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: sample-team-ns
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    description: This is a sample team
+    orgRef: 
+      name: pgh-sample-organization-ns
+    members:
+    - userRef:
+        name: pgh-sample-user-ns
+      role: maintainer # GitHub forces ORG admins to maintainer regardless of declared role
+    privacy: closed
+---
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: sample-sub-team-ns
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: example
+  forProvider:
+    description: This is a sample team with a parent
+    parentRef:
+      name: sample-team-ns
+    orgRef: 
+      name: pgh-sample-organization-ns
+    members:
+    - userRef:
+        name: pgh-sample-user-ns
+      role: maintainer # GitHub forces ORG admins to maintainer regardless of declared role
+    privacy: closed

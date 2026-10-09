@@ -28,7 +28,7 @@ import (
 // OrganizationWebhookParameters are the configurable fields of an OrganizationWebhook.
 type OrganizationWebhookParameters struct {
 	// Org is the name of the GitHub organization that owns this webhook.
-	// +crossplane:generate:reference:type=Organization
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.

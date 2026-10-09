@@ -29,7 +29,7 @@ import (
 // organization variable whose visibility is "selected".
 type VariableSelectedRepo struct {
 	// Name of the repository.
-	// +crossplane:generate:reference:type=Repository
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Repository
 	Repo string `json:"repo,omitempty"`
 
 	// RepoRef is a reference to a Repository.
@@ -44,7 +44,7 @@ type VariableSelectedRepo struct {
 // OrganizationVariableParameters are the configurable fields of a OrganizationVariable.
 type OrganizationVariableParameters struct {
 	// Org is the name of the GitHub organization that owns this variable.
-	// +crossplane:generate:reference:type=Organization
+	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.

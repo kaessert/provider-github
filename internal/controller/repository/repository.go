@@ -50,6 +50,7 @@ import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/crossplane/provider-github/internal/util"
@@ -78,12 +79,16 @@ func (f *forgettingFinalizer) RemoveFinalizer(ctx context.Context, obj resource.
 		return err
 	}
 
-	cr, ok := obj.(*v1alpha1.Repository)
-	if !ok || f.metrics == nil {
+	if f.metrics == nil {
 		return nil
 	}
 
-	f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	switch cr := obj.(type) {
+	case *v1alpha1.Repository:
+		f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	case *namespacedv1alpha1.Repository:
+		f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	}
 	return nil
 }
 
@@ -91,6 +96,11 @@ type external struct {
 	kube    client.Client
 	github  *ghclient.Client
 	metrics *telemetry.RateLimitMetrics
+
+	// secretNamespace, when set, is the only namespace webhook secrets are read
+	// from, whatever namespace the spec names. Namespaced resources set it to
+	// their own namespace.
+	secretNamespace string
 }
 
 //nolint:gocyclo
@@ -427,6 +437,9 @@ func (c *external) getRepoWebhookSecretFromRef(ctx context.Context, webhook *v1a
 	secretKey := webhook.SecretKeyRef.Key
 	secretName := webhook.SecretKeyRef.Name
 	secretNamespace := webhook.SecretKeyRef.Namespace
+	if c.secretNamespace != "" {
+		secretNamespace = c.secretNamespace
+	}
 
 	nn := types.NamespacedName{
 		Name:      secretName,

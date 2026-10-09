@@ -141,6 +141,39 @@ CR declares the description you want — otherwise the next reconcile
 will clear it.
 
 
+### Namespaced API scope
+
+Every managed resource exists in two API groups with the same Kind and the same
+`forProvider` and `atProvider` schema:
+
+| Scope | Group | Provider config it references |
+|---|---|---|
+| cluster-scoped | `organizations.github.crossplane.io` | `ProviderConfig` in `github.crossplane.io` |
+| namespaced | `organizations.github.m.crossplane.io` | `ProviderConfig` (same namespace) or `ClusterProviderConfig` in `github.m.crossplane.io` |
+
+The existing cluster-scoped resources are unchanged. For the namespaced variants:
+
+* `spec.providerConfigRef` takes a `kind` (`ProviderConfig` or
+  `ClusterProviderConfig`) and a `name`. It defaults to the
+  `ClusterProviderConfig` named `default`. A namespaced `ProviderConfig` is only
+  reachable from managed resources in its own namespace.
+* The credentials Secret of a namespaced `ProviderConfig` is always read from
+  that namespace, whatever `secretRef.namespace` says. A `ClusterProviderConfig`
+  names its Secret by an explicit namespace.
+* `spec.writeConnectionSecretToRef` takes a name only; the Secret is written to
+  the resource's namespace.
+* `spec.deletionPolicy` does not exist. Use `spec.managementPolicies` without
+  `Delete` to keep the external object.
+* Cross-resource references (`orgRef`, `repoRef`, ...) and selectors resolve to
+  resources in the referencing resource's namespace unless the reference names
+  another one.
+* `secretKeyRef` on `Repository` webhooks and on `OrganizationWebhook` is always
+  read from the resource's own namespace, whatever `secretKeyRef.namespace`
+  says.
+
+Examples for both scopes are in `examples/`; the namespaced ones end in
+`-namespaced.yaml`.
+
 ### crossplane-runtime v2: removed features and always-on management policies
 
 The provider is built on crossplane-runtime v2. Compared with earlier releases:

@@ -53,7 +53,13 @@ func pickCredsForPool(resolvedCreds []string) (string, string, error) {
 // On a fully-exhausted pool the returned error wraps ErrAllAppsInCooldown
 // so callers can decide whether to requeue or surface the error.
 func ResolveAndConnect(ctx context.Context, kube client.Client, pc *apisv1alpha1.ProviderConfig, metrics *telemetry.RateLimitMetrics, org string) (*Client, error) {
-	resolved, err := resolveAllCredentials(ctx, kube, pc)
+	return resolveAndConnect(ctx, kube, pc.Spec, metrics, org)
+}
+
+// resolveAndConnect is ResolveAndConnect for a bare ProviderConfigSpec, which
+// the cluster-scoped and namespaced configs share.
+func resolveAndConnect(ctx context.Context, kube client.Client, spec apisv1alpha1.ProviderConfigSpec, metrics *telemetry.RateLimitMetrics, org string) (*Client, error) {
+	resolved, err := resolveCredentials(ctx, kube, spec)
 	if err != nil {
 		return nil, err
 	}
