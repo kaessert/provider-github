@@ -23,15 +23,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-
-	"github.com/google/go-cmp/cmp"
 
 	pointer "k8s.io/utils/ptr"
 
@@ -52,6 +49,7 @@ import (
 	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/controller/driftcmp"
 	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/crossplane/provider-github/internal/util"
 )
@@ -158,7 +156,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTToPermission)
 
-	if !reflect.DeepEqual(util.SortByKey(ghTToPermission), util.SortByKey(crTToPermission)) {
+	if !driftcmp.Equal(ghTToPermission, crTToPermission) {
 		return drifted(cr), nil
 	}
 
@@ -181,7 +179,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 
-		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
+		if !driftcmp.Equal(ghWToConfig, crWToConfig) {
 			return drifted(cr), nil
 		}
 	} else {
@@ -232,7 +230,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		dropped := slices.Concat(enforced, remembered)
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
-		if !cmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
+		if !driftcmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
 			return drifted(cr), nil
 		}
 	} else {
@@ -254,7 +252,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 
-		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
+		if !driftcmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 			return drifted(cr), nil
 		}
 	} else {
@@ -281,7 +279,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		crTopics := util.SortAndReturn(cr.Spec.ForProvider.Topics)
 		ghTopics := util.SortAndReturn(repo.Topics)
 
-		if !reflect.DeepEqual(crTopics, ghTopics) {
+		if !driftcmp.Equal(crTopics, ghTopics) {
 			return drifted(cr), nil
 		}
 	}
@@ -391,11 +389,11 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 		return managed.ExternalObservation{}, err
 	}
 	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTeams)
-	teamsDrift := !reflect.DeepEqual(util.SortByKey(ghTeams), util.SortByKey(crTeams))
+	teamsDrift := !driftcmp.Equal(ghTeams, crTeams)
 
 	topicsDrift := false
 	if cr.Spec.ForProvider.Topics != nil {
-		topicsDrift = !reflect.DeepEqual(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
+		topicsDrift = !driftcmp.Equal(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
 	}
 
 	if len(removable) > 0 || teamsDrift || topicsDrift {
