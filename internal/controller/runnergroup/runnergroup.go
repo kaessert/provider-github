@@ -64,6 +64,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cr.Status.AtProvider.ID = g.GetID()
+	mirrorGroup(&cr.Status.AtProvider, g, org)
 
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
@@ -81,6 +82,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
+		cr.Status.AtProvider.SelectedRepositories = mirrorRepos(ghRepos)
 		upToDate, err := repoAccessUpToDate(ctx, c.github, org, repoNamesFromCR(p.SelectedRepositories), ghRepos)
 		if err != nil {
 			return managed.ExternalObservation{}, err
@@ -180,6 +182,36 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
+}
+
+// mirrorGroup records in status.atProvider what GitHub reports for the runner
+// group g, which was read under org. The repositories with access are not part
+// of the group response and are recorded where they are listed.
+func mirrorGroup(ap *v1alpha1.RunnerGroupObservation, g *github.RunnerGroup, org string) {
+	ap.Org = org
+	ap.Visibility = g.GetVisibility()
+	if g.AllowsPublicRepositories != nil {
+		allows := g.GetAllowsPublicRepositories()
+		ap.AllowsPublicRepositories = &allows
+	} else {
+		ap.AllowsPublicRepositories = nil
+	}
+	ap.SelectedWorkflows = nil
+	for _, w := range g.SelectedWorkflows {
+		ap.SelectedWorkflows = append(ap.SelectedWorkflows, v1alpha1.WorkflowRefObservation(w))
+	}
+	slices.Sort(ap.SelectedWorkflows)
+	ap.SelectedRepositories = nil
+}
+
+// mirrorRepos lists the names of repos, sorted.
+func mirrorRepos(repos []*github.Repository) []v1alpha1.RunnerGroupSelectedRepoObservation {
+	out := make([]v1alpha1.RunnerGroupSelectedRepoObservation, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, v1alpha1.RunnerGroupSelectedRepoObservation{Repo: r.GetName()})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.RunnerGroupSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
 }
 
 // findRunnerGroup pages through the organization's runner groups and

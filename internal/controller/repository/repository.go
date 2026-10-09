@@ -124,6 +124,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	cr.Status.AtProvider.ID = name
+	mirrorRepository(&cr.Status.AtProvider, repo, cr.Spec.ForProvider.Org)
 
 	// Archived repos freeze settings, branch protection, rulesets and webhooks on
 	// GitHub; only team access, topics and collaborator removals stay writable. They
@@ -145,6 +146,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
+	cr.Status.AtProvider.Permissions.Users = mirrorUsers(collaborators.observed)
 	if collaborators.hasDrift() {
 		return drifted(cr), nil
 	}
@@ -154,6 +156,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTToPermission)
 
 	if !reflect.DeepEqual(util.SortByKey(ghTToPermission), util.SortByKey(crTToPermission)) {
 		return drifted(cr), nil
@@ -174,10 +177,15 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
+		if cr.Status.AtProvider.Webhooks, err = mirrorWebhooks(ghWToConfig); err != nil {
+			return managed.ExternalObservation{}, err
+		}
 
 		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
 			return drifted(cr), nil
 		}
+	} else {
+		cr.Status.AtProvider.Webhooks = nil
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
@@ -196,6 +204,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
 		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		if cr.Status.AtProvider.BranchProtectionRules, err = mirrorBranchProtection(ghBPRToConfig); err != nil {
 			return managed.ExternalObservation{}, err
 		}
 
@@ -226,6 +237,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
+		cr.Status.AtProvider.BranchProtectionRules = nil
 		setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	}
@@ -238,10 +250,15 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
+		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
+			return managed.ExternalObservation{}, err
+		}
 
 		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 			return drifted(cr), nil
 		}
+	} else {
+		cr.Status.AtProvider.RepositoryRules = nil
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
@@ -345,6 +362,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Permissions.Users = mirrorUsers(ghUsers)
 	removable, toAdd, toUpdate := util.DiffPermissions(ghUsers, crUsers)
 	skippedAdds := make([]string, 0, len(toAdd)+len(toUpdate))
 	for u := range util.MergeMaps(toAdd, toUpdate) {
@@ -355,6 +373,9 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	setCollaboratorPartialCondition(cr, nil, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
 	cr.Status.AtProvider.UnappliedBranchProtection = nil
+	cr.Status.AtProvider.BranchProtectionRules = nil
+	cr.Status.AtProvider.Webhooks = nil
+	cr.Status.AtProvider.RepositoryRules = nil
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	cr.Status.AtProvider.UnappliedSettings = nil
@@ -369,6 +390,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTeams)
 	teamsDrift := !reflect.DeepEqual(util.SortByKey(ghTeams), util.SortByKey(crTeams))
 
 	topicsDrift := false
@@ -1076,10 +1098,91 @@ func removeActorsPtr(actors *[]string, branch, field string, dropSet map[branchP
 const itemAllowForcePushes = "allowForcePushes"
 
 // ruleHash fingerprints a declared rule so a record only applies to the rule it was observed against.
+// The fingerprint is taken over hashedRule rather than the rule itself, so that it stays what it was
+// when a record written by an earlier release was hashed.
 func ruleHash(rule v1alpha1.BranchProtectionRule) string {
-	encoded, _ := json.Marshal(rule) // a plain struct always encodes
+	encoded, _ := json.Marshal(newHashedRule(rule)) // a plain struct always encodes
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:8])
+}
+
+// hashedRule is the encoding of a BranchProtectionRule that ruleHash fingerprints: the rule as it
+// was encoded before its actor lists were encoded as null when unset. Do not add fields or change
+// tags, or every stored fingerprint stops matching.
+type hashedRule struct {
+	Branch                         string                         `json:"branch"`
+	RequiredStatusChecks           *v1alpha1.RequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
+	RequiredPullRequestReviews     *hashedReviews                 `json:"requiredPullRequestReviews,omitempty"`
+	BranchProtectionRestrictions   *hashedRestrictions            `json:"branchProtectionRestrictions,omitempty"`
+	EnforceAdmins                  bool                           `json:"enforceAdmins"`
+	RequireLinearHistory           *bool                          `json:"requireLinearHistory,omitempty"`
+	AllowForcePushes               *bool                          `json:"allowForcePushes,omitempty"`
+	AllowDeletions                 *bool                          `json:"allowDeletions,omitempty"`
+	RequiredConversationResolution *bool                          `json:"requiredConversationResolution,omitempty"`
+	LockBranch                     *bool                          `json:"lockBranch,omitempty"`
+	AllowForkSyncing               *bool                          `json:"allowForkSyncing,omitempty"`
+	RequireSignedCommits           *bool                          `json:"requireSignedCommits,omitempty"`
+}
+
+type hashedReviews struct {
+	DismissStaleReviews          bool             `json:"dismissStaleReviews"`
+	RequireCodeOwnerReviews      bool             `json:"requireCodeOwnerReviews"`
+	RequiredApprovingReviewCount int              `json:"requiredApprovingReviewCount"`
+	RequireLastPushApproval      *bool            `json:"requireLastPushApproval,omitempty"`
+	BypassPullRequestAllowances  *hashedActors    `json:"bypassPullRequestAllowances,omitempty"`
+	DismissalRestrictions        *hashedDismissal `json:"dismissalRestrictions,omitempty"`
+}
+
+type hashedActors struct {
+	Users []string `json:"users,omitempty"`
+	Teams []string `json:"teams,omitempty"`
+	Apps  []string `json:"apps,omitempty"`
+}
+
+type hashedDismissal struct {
+	Users *[]string `json:"users,omitempty"`
+	Teams *[]string `json:"teams,omitempty"`
+	Apps  *[]string `json:"apps,omitempty"`
+}
+
+type hashedRestrictions struct {
+	BlockCreations *bool    `json:"blockCreations,omitempty"`
+	Users          []string `json:"users,omitempty"`
+	Teams          []string `json:"teams,omitempty"`
+	Apps           []string `json:"apps,omitempty"`
+}
+
+func newHashedRule(r v1alpha1.BranchProtectionRule) hashedRule {
+	h := hashedRule{
+		Branch:                         r.Branch,
+		RequiredStatusChecks:           r.RequiredStatusChecks,
+		EnforceAdmins:                  r.EnforceAdmins,
+		RequireLinearHistory:           r.RequireLinearHistory,
+		AllowForcePushes:               r.AllowForcePushes,
+		AllowDeletions:                 r.AllowDeletions,
+		RequiredConversationResolution: r.RequiredConversationResolution,
+		LockBranch:                     r.LockBranch,
+		AllowForkSyncing:               r.AllowForkSyncing,
+		RequireSignedCommits:           r.RequireSignedCommits,
+	}
+	if rr := r.BranchProtectionRestrictions; rr != nil {
+		h.BranchProtectionRestrictions = &hashedRestrictions{BlockCreations: rr.BlockCreations, Users: rr.Users, Teams: rr.Teams, Apps: rr.Apps}
+	}
+	if pr := r.RequiredPullRequestReviews; pr != nil {
+		h.RequiredPullRequestReviews = &hashedReviews{
+			DismissStaleReviews:          pr.DismissStaleReviews,
+			RequireCodeOwnerReviews:      pr.RequireCodeOwnerReviews,
+			RequiredApprovingReviewCount: pr.RequiredApprovingReviewCount,
+			RequireLastPushApproval:      pr.RequireLastPushApproval,
+		}
+		if b := pr.BypassPullRequestAllowances; b != nil {
+			h.RequiredPullRequestReviews.BypassPullRequestAllowances = &hashedActors{Users: b.Users, Teams: b.Teams, Apps: b.Apps}
+		}
+		if d := pr.DismissalRestrictions; d != nil {
+			h.RequiredPullRequestReviews.DismissalRestrictions = &hashedDismissal{Users: d.Users, Teams: d.Teams, Apps: d.Apps}
+		}
+	}
+	return h
 }
 
 func isAppField(field string) bool {
@@ -1798,6 +1901,7 @@ func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite, rol
 
 // collaboratorCategorization buckets the union of declared and actual direct collaborators.
 type collaboratorCategorization struct {
+	observed      map[string]string // direct collaborators GitHub lists, with their roles
 	toRemove      map[string]string // direct collaborators absent from the CR
 	toUpsert      map[string]string // declared collaborators to add or change role
 	pendingInvite []string          // declared collaborators with an unaccepted invitation
@@ -1820,6 +1924,7 @@ func categorizeCollaborators(ctx context.Context, gh *ghclient.Client, org, repo
 	}
 
 	cc := &collaboratorCategorization{
+		observed: ghM,
 		toRemove: make(map[string]string),
 		toUpsert: make(map[string]string),
 	}

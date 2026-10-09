@@ -51,6 +51,12 @@ type MembershipObservation struct {
 	// ID is the external name of the membership (the user's login) on GitHub.
 	ID string `json:"id,omitempty"`
 
+	// Role is the role GitHub reports for the membership.
+	Role string `json:"role,omitempty"`
+
+	// Org is the organization the membership was found under.
+	Org string `json:"org,omitempty"`
+
 	ObservableField string `json:"observableField,omitempty"`
 }
 

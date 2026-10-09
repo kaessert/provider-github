@@ -301,10 +301,34 @@ spec:
                 description: OrganizationWebhookObservation are the observable fields
                   of an OrganizationWebhook.
                 properties:
+                  active:
+                    description: Active is whether notifications are sent when the
+                      webhook is triggered.
+                    type: boolean
+                  contentType:
+                    description: ContentType is the media type GitHub uses to serialize
+                      payloads.
+                    type: string
+                  events:
+                    description: Events lists what the hook is triggered for.
+                    items:
+                      type: string
+                    type: array
                   id:
                     description: ID is the GitHub webhook ID.
                     format: int64
                     type: integer
+                  insecureSsl:
+                    description: |-
+                      InsecureSSL is whether GitHub skips verifying the SSL certificate of
+                      the host for url.
+                    type: boolean
+                  org:
+                    description: Org is the organization the webhook was found under.
+                    type: string
+                  url:
+                    description: URL is the URL to which GitHub delivers payloads.
+                    type: string
                 type: object
               conditions:
                 description: Conditions of the resource.

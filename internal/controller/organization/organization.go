@@ -154,6 +154,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	cr.Status.AtProvider.ID = name
+	cr.Status.AtProvider.Description = pointer.Deref(org.Description, "")
+	cr.Status.AtProvider.Actions.EnabledRepos = nil
+	cr.Status.AtProvider.Secrets = nil
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
@@ -164,6 +167,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 		crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 		aRepos := getSortedRepoNames(repos)
+		cr.Status.AtProvider.Actions.EnabledRepos = enabledRepoObservations(aRepos)
 
 		if !reflect.DeepEqual(aRepos, crARepos) {
 			return drifted(cr), nil
@@ -171,15 +175,17 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if cr.Spec.ForProvider.Secrets != nil {
+		cr.Status.AtProvider.Secrets = &v1alpha1.SecretConfigurationObservation{}
 		if cr.Spec.ForProvider.Secrets.ActionsSecrets != nil {
 			crActionsSecretsToConfig, err := getOrgSecretsMapFromCr(ctx, c.github, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
-			ghActionsSecretsToConfig, err := getOrgSecretsWithConfig(ctx, c.github.Actions, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
+			ghActionsSecretsToConfig, ghActionsSecretRepos, err := getOrgSecretsWithConfig(ctx, c.github.Actions, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
+			cr.Status.AtProvider.Secrets.ActionsSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.ActionsSecrets, ghActionsSecretRepos)
 			if !cmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
 				return drifted(cr), nil
 			}
@@ -189,10 +195,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
-			ghDependabotSecretsToConfig, err := getOrgSecretsWithConfig(ctx, c.github.Dependabot, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
+			ghDependabotSecretsToConfig, ghDependabotSecretRepos, err := getOrgSecretsWithConfig(ctx, c.github.Dependabot, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
+			cr.Status.AtProvider.Secrets.DependabotSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.DependabotSecrets, ghDependabotSecretRepos)
 			if !cmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
 				return drifted(cr), nil
 			}
@@ -396,37 +403,40 @@ type OrgSecretGetter interface {
 	ListSelectedReposForOrgSecret(ctx context.Context, owner, secretName string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 }
 
-func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
+func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner string, secrets []v1alpha1.OrgSecret) (map[string][]int64, map[string][]string, error) {
 	orgSecretsToConfig := make(map[string][]int64, len(secrets))
+	orgSecretRepos := make(map[string][]string, len(secrets))
 	for _, secret := range secrets {
 		// Check for context timeout before processing each secret
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		default:
 		}
 
 		ghSecret, _, err := c.GetOrgSecret(ctx, owner, secret.Name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		repoIds := make([]int64, 0)
+		repoNames := make([]string, 0)
 		if ghSecret != nil && ghSecret.Visibility == "selected" {
 			opts := &github.ListOptions{PerPage: 100}
 			for {
 				// Check for context timeout in pagination loop
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, nil, ctx.Err()
 				default:
 				}
 
 				ghRepo, resp, err := c.ListSelectedReposForOrgSecret(ctx, owner, secret.Name, opts)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				for _, selectedRepo := range ghRepo.Repositories {
 					repoIds = append(repoIds, selectedRepo.GetID())
+					repoNames = append(repoNames, selectedRepo.GetName())
 				}
 				if resp.NextPage == 0 {
 					break
@@ -438,8 +448,34 @@ func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner strin
 			})
 		}
 		orgSecretsToConfig[secret.Name] = repoIds
+		orgSecretRepos[secret.Name] = repoNames
 	}
-	return orgSecretsToConfig, nil
+	return orgSecretsToConfig, orgSecretRepos, nil
+}
+
+// enabledRepoObservations lists the repositories named in names.
+func enabledRepoObservations(names []string) []v1alpha1.ActionEnabledRepoObservation {
+	out := make([]v1alpha1.ActionEnabledRepoObservation, 0, len(names))
+	for _, n := range names {
+		out = append(out, v1alpha1.ActionEnabledRepoObservation{Repo: n})
+	}
+	return out
+}
+
+// orgSecretObservations lists the declared secrets with the names of the
+// repositories GitHub gives access to each, sorted.
+func orgSecretObservations(declared []v1alpha1.OrgSecret, repos map[string][]string) []v1alpha1.OrgSecretObservation {
+	out := make([]v1alpha1.OrgSecretObservation, 0, len(declared))
+	for _, s := range declared {
+		names := slices.Clone(repos[s.Name])
+		slices.Sort(names)
+		access := make([]v1alpha1.SecretSelectedRepoObservation, 0, len(names))
+		for _, n := range names {
+			access = append(access, v1alpha1.SecretSelectedRepoObservation{Repo: n})
+		}
+		out = append(out, v1alpha1.OrgSecretObservation{Name: s.Name, RepositoryAccessList: access})
+	}
+	return out
 }
 
 type OrgSecretSetter interface {

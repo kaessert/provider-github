@@ -53,13 +53,25 @@ type DependabotSecretAccessParameters struct {
 	// SelectedRepositories lists the repositories that may use the secret.
 	// Only used (and required) when Visibility is "selected".
 	// +optional
-	SelectedRepositories []SecretSelectedRepo `json:"selectedRepositories,omitempty"`
+	SelectedRepositories []SecretSelectedRepo `json:"selectedRepositories"`
 }
 
 // DependabotSecretAccessObservation are the observable fields of a DependabotSecretAccess.
 type DependabotSecretAccessObservation struct {
 	// ID is the external name of the secret on GitHub.
 	ID string `json:"id,omitempty"`
+
+	// Org is the organization the secret was found under.
+	Org string `json:"org,omitempty"`
+
+	// Visibility is the visibility GitHub reports for the secret.
+	Visibility string `json:"visibility,omitempty"`
+
+	// SelectedRepositories lists the repositories that may use the secret on
+	// GitHub. GitHub is queried for the list only while
+	// forProvider.visibility is "selected", so the field is empty otherwise.
+	// +optional
+	SelectedRepositories []SecretSelectedRepoObservation `json:"selectedRepositories"`
 }
 
 // A DependabotSecretAccessSpec defines the desired state of a DependabotSecretAccess.

@@ -19,6 +19,7 @@ package organizationvariable
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
@@ -63,12 +64,16 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	cr.Status.AtProvider.ID = name
-
 	ghVisibility := ""
 	if v.Visibility != nil {
 		ghVisibility = *v.Visibility
 	}
+
+	cr.Status.AtProvider.ID = name
+	cr.Status.AtProvider.Org = org
+	cr.Status.AtProvider.Value = v.Value
+	cr.Status.AtProvider.Visibility = ghVisibility
+	cr.Status.AtProvider.SelectedRepositories = nil
 	// An omitted visibility, or an omitted value under an Observe-only policy,
 	// is not compared.
 	p := cr.Spec.ForProvider
@@ -85,10 +90,15 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		ghIDs, err := listSelectedRepoIDs(ctx, c.github, org, name)
+		ghRepos, err := listSelectedRepos(ctx, c.github, org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
+		ghIDs := make([]int64, 0, len(ghRepos))
+		for _, r := range ghRepos {
+			ghIDs = append(ghIDs, r.GetID())
+		}
+		cr.Status.AtProvider.SelectedRepositories = repoObservations(ghRepos)
 		ghclient.SortInt64(crIDs)
 		ghclient.SortInt64(ghIDs)
 		if !slices.Equal(crIDs, ghIDs) {
@@ -189,25 +199,33 @@ func repoNamesFromCR(refs []v1alpha1.VariableSelectedRepo) []string {
 	return names
 }
 
-// listSelectedRepoIDs paginates through all repositories that have
-// access to the variable on GitHub's side, returning their numeric IDs.
-func listSelectedRepoIDs(ctx context.Context, gh *ghclient.Client, org, name string) ([]int64, error) {
+// listSelectedRepos paginates through all repositories that have
+// access to the variable on GitHub's side.
+func listSelectedRepos(ctx context.Context, gh *ghclient.Client, org, name string) ([]*github.Repository, error) {
 	opts := &github.ListOptions{PerPage: 100}
-	var ids []int64
+	var repos []*github.Repository
 	for {
 		list, resp, err := gh.Actions.ListSelectedReposForOrgVariable(ctx, org, name, opts)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range list.Repositories {
-			ids = append(ids, r.GetID())
-		}
+		repos = append(repos, list.Repositories...)
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
 	}
-	return ids, nil
+	return repos, nil
+}
+
+// repoObservations lists the names of repos, sorted.
+func repoObservations(repos []*github.Repository) []v1alpha1.VariableSelectedRepoObservation {
+	out := make([]v1alpha1.VariableSelectedRepoObservation, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, v1alpha1.VariableSelectedRepoObservation{Repo: r.GetName()})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.VariableSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
 }
 
 // Disconnect is a no-op: the GitHub client is cached and shared across

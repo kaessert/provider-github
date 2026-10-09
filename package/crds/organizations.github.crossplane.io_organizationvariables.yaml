@@ -387,6 +387,31 @@ spec:
                   id:
                     description: ID is the external name of the variable on GitHub.
                     type: string
+                  org:
+                    description: Org is the organization the variable was found under.
+                    type: string
+                  selectedRepositories:
+                    description: |-
+                      SelectedRepositories lists the repositories that have access to the
+                      variable on GitHub. GitHub is queried for the list only while
+                      forProvider.visibility is "selected", so the field is empty otherwise.
+                    items:
+                      description: |-
+                        VariableSelectedRepoObservation is a repository that has access to an
+                        organization variable whose visibility is "selected".
+                      properties:
+                        repo:
+                          description: Repo is the name of the repository.
+                          type: string
+                      type: object
+                    type: array
+                  value:
+                    description: Value of the variable.
+                    type: string
+                  visibility:
+                    description: Visibility is the visibility GitHub reports for the
+                      variable.
+                    type: string
                 type: object
               conditions:
                 description: Conditions of the resource.

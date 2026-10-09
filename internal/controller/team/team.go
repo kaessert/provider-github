@@ -128,6 +128,38 @@ type memberCategorization struct {
 	pendingTeam []string
 	// roleEnforced: members whose role GitHub force-applies (org admins → maintainer).
 	roleEnforced []string
+	// direct: the team's members that are not merely inherited from a child team, with their roles.
+	direct map[string]string
+}
+
+// observedMembers lists the direct members of the team, sorted by login.
+func (c *memberCategorization) observedMembers() []v1alpha1.TeamMemberUserObservation {
+	out := make([]v1alpha1.TeamMemberUserObservation, 0, len(c.direct))
+	for user, role := range c.direct {
+		out = append(out, v1alpha1.TeamMemberUserObservation{User: user, Role: role})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].User < out[j].User })
+	return out
+}
+
+// mirrorTeam records in status.atProvider what GitHub reports for the team t,
+// which was read under org.
+func mirrorTeam(ap *v1alpha1.TeamObservation, t *github.Team, org string) {
+	ap.Org = org
+	ap.Description = t.GetDescription()
+	ap.Privacy = nil
+	if t.Privacy != nil {
+		privacy := t.GetPrivacy()
+		ap.Privacy = &privacy
+	}
+	ap.Parent = nil
+	if t.Parent != nil {
+		parent := t.Parent.GetName()
+		if parent == "" {
+			parent = t.Parent.GetSlug()
+		}
+		ap.Parent = &parent
+	}
 }
 
 func (c *memberCategorization) hasMemberDrift() bool {
@@ -165,9 +197,13 @@ func categorizeMembers(ctx context.Context, gh *ghclient.Client, org, slug strin
 		toRemove:   make(map[string]string),
 		roleUpdate: make(map[string]string),
 		inviteable: make(map[string]string),
+		direct:     make(map[string]string),
 	}
 
 	for user, ghRole := range rollup {
+		if !inheritedSet[user] || ghRole == roleMaintainer {
+			out.direct[user] = ghRole
+		}
 		crRole, inCR := crMToPermission[user]
 		verdict, err := classifyRollupUser(ctx, gh, org, user, ghRole, crRole, inCR, inheritedSet[user])
 		if err != nil {
@@ -321,11 +357,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 	cr.Status.AtProvider.ID = name
+	mirrorTeam(&cr.Status.AtProvider, t, cr.Spec.ForProvider.Org)
 
 	categorized, err := categorizeMembers(ctx, c.github, cr.Spec.ForProvider.Org, teamSlug, cr.Spec.ForProvider.Members)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Members = categorized.observedMembers()
 
 	crParentTeamSlug := slug.Make(pointer.Deref(cr.Spec.ForProvider.Parent, ""))
 	ghParentTeamSlug := ""

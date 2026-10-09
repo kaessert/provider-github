@@ -514,11 +514,86 @@ spec:
                 description: OrganizationObservation are the observable fields of
                   a Organization.
                 properties:
+                  actions:
+                    description: Actions is the observed GitHub Actions configuration
+                      of the organization.
+                    properties:
+                      enabledRepos:
+                        description: |-
+                          EnabledRepos lists the repositories enabled to run GitHub Actions at
+                          the organization level. GitHub is queried for the list only while
+                          forProvider.actions.enabledRepos is set, so the field is empty otherwise.
+                        items:
+                          description: ActionEnabledRepoObservation is a repository
+                            enabled for GitHub Actions.
+                          properties:
+                            repo:
+                              description: Repo is the name of the repository.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
                   description:
                     type: string
                   id:
                     description: ID is the external name of the organization on GitHub.
                     type: string
+                  secrets:
+                    description: |-
+                      Secrets is the observed state of the organization secrets named in
+                      forProvider.secrets. GitHub is queried for them only while that field is set.
+                    properties:
+                      actionsSecrets:
+                        description: |-
+                          ActionsSecrets lists the GitHub Actions secrets named in
+                          forProvider.secrets.actionsSecrets and their repository access.
+                        items:
+                          description: OrgSecretObservation is an organization secret
+                            and the repositories that have access to it.
+                          properties:
+                            name:
+                              description: Name of the GitHub secret.
+                              type: string
+                            repositoryAccessList:
+                              description: RepositoryAccessList lists the repositories
+                                that have access to the secret.
+                              items:
+                                description: SecretSelectedRepoObservation is a repository
+                                  that has access to a secret.
+                                properties:
+                                  repo:
+                                    description: Repo is the name of the repository.
+                                    type: string
+                                type: object
+                              type: array
+                          type: object
+                        type: array
+                      dependabotSecrets:
+                        description: |-
+                          DependabotSecrets lists the Dependabot secrets named in
+                          forProvider.secrets.dependabotSecrets and their repository access.
+                        items:
+                          description: OrgSecretObservation is an organization secret
+                            and the repositories that have access to it.
+                          properties:
+                            name:
+                              description: Name of the GitHub secret.
+                              type: string
+                            repositoryAccessList:
+                              description: RepositoryAccessList lists the repositories
+                                that have access to the secret.
+                              items:
+                                description: SecretSelectedRepoObservation is a repository
+                                  that has access to a secret.
+                                properties:
+                                  repo:
+                                    description: Repo is the name of the repository.
+                                    type: string
+                                type: object
+                              type: array
+                          type: object
+                        type: array
+                    type: object
                 type: object
               conditions:
                 description: Conditions of the resource.

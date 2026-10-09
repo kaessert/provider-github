@@ -1006,9 +1006,458 @@ spec:
                 description: RepositoryObservation are the observable fields of a
                   Repository.
                 properties:
+                  allowAutoMerge:
+                    description: AllowAutoMerge is whether auto-merge is allowed.
+                    type: boolean
+                  allowMergeCommit:
+                    description: AllowMergeCommit is whether merge commits are allowed.
+                    type: boolean
+                  allowRebaseMerge:
+                    description: AllowRebaseMerge is whether rebase merging is allowed.
+                    type: boolean
+                  allowSquashMerge:
+                    description: AllowSquashMerge is whether squash merging is allowed.
+                    type: boolean
+                  allowUpdateBranch:
+                    description: AllowUpdateBranch is whether users can update pull
+                      request branches from the base branch.
+                    type: boolean
+                  archived:
+                    description: Archived is whether the repository is archived.
+                    type: boolean
+                  branchProtectionRules:
+                    description: |-
+                      BranchProtectionRules lists the protection of every protected branch.
+                      GitHub is queried for it only while forProvider.branchProtectionRules
+                      is set, so the field is empty otherwise.
+                    items:
+                      description: BranchProtectionRuleObservation is the observed
+                        protection of a branch.
+                      properties:
+                        allowDeletions:
+                          description: AllowDeletions is whether the branch can be
+                            deleted.
+                          type: boolean
+                        allowForcePushes:
+                          description: AllowForcePushes is whether force pushes are
+                            permitted.
+                          type: boolean
+                        allowForkSyncing:
+                          description: AllowForkSyncing is whether users can pull
+                            changes from upstream while the branch is locked.
+                          type: boolean
+                        branch:
+                          description: Branch is the name of the protected branch.
+                          type: string
+                        branchProtectionRestrictions:
+                          description: BranchProtectionRestrictions is the observed
+                            push restriction.
+                          properties:
+                            apps:
+                              description: Apps lists the app slugs allowed to push.
+                              items:
+                                type: string
+                              type: array
+                            blockCreations:
+                              description: |-
+                                BlockCreations is whether pushes that create new branches are blocked
+                                unless initiated by an actor allowed to push.
+                              type: boolean
+                            teams:
+                              description: Teams lists the team slugs allowed to push.
+                              items:
+                                type: string
+                              type: array
+                            users:
+                              description: Users lists the user logins allowed to
+                                push.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        enforceAdmins:
+                          description: EnforceAdmins is whether the rule is enforced
+                            for administrators.
+                          type: boolean
+                        lockBranch:
+                          description: LockBranch is whether the branch is read-only.
+                          type: boolean
+                        requireLinearHistory:
+                          description: RequireLinearHistory is whether merge commits
+                            are prevented.
+                          type: boolean
+                        requireSignedCommits:
+                          description: RequireSignedCommits is whether commits must
+                            have verified signatures.
+                          type: boolean
+                        requiredConversationResolution:
+                          description: RequiredConversationResolution is whether conversations
+                            must be resolved before merging.
+                          type: boolean
+                        requiredPullRequestReviews:
+                          description: RequiredPullRequestReviews is the observed
+                            pull request requirement.
+                          properties:
+                            bypassPullRequestAllowances:
+                              description: BypassPullRequestAllowances is who can
+                                bypass the pull request requirements.
+                              properties:
+                                apps:
+                                  description: Apps lists the app slugs.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: Teams lists the team slugs.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: Users lists the user logins.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            dismissStaleReviews:
+                              description: DismissStaleReviews is whether approving
+                                reviews are dismissed on a new commit.
+                              type: boolean
+                            dismissalRestrictions:
+                              description: DismissalRestrictions is who can dismiss
+                                pull request reviews.
+                              properties:
+                                apps:
+                                  description: Apps lists the app slugs.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: Teams lists the team slugs.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: Users lists the user logins.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requireCodeOwnerReviews:
+                              description: RequireCodeOwnerReviews is whether code
+                                owners must review.
+                              type: boolean
+                            requireLastPushApproval:
+                              description: RequireLastPushApproval is whether the
+                                most recent push must be approved by someone else.
+                              type: boolean
+                            requiredApprovingReviewCount:
+                              description: RequiredApprovingReviewCount is the number
+                                of approving reviews required.
+                              type: integer
+                          type: object
+                        requiredStatusChecks:
+                          description: RequiredStatusChecks is the observed status
+                            checks requirement.
+                          properties:
+                            checks:
+                              description: Checks lists the status checks required
+                                to merge.
+                              items:
+                                description: RequiredStatusCheckObservation is a single
+                                  required status check.
+                                properties:
+                                  appId:
+                                    description: AppID is the ID of the GitHub App
+                                      that must provide the check.
+                                    format: int64
+                                    type: integer
+                                  context:
+                                    description: Context is the name of the required
+                                      check.
+                                    type: string
+                                type: object
+                              type: array
+                            strict:
+                              description: Strict is whether branches must be up-to-date
+                                before merging.
+                              type: boolean
+                          type: object
+                      type: object
+                    type: array
+                  createFork:
+                    description: |-
+                      CreateFork is the repository this repository is a fork of, when GitHub
+                      reports one. Whether only the default branch was forked is not reported.
+                    properties:
+                      owner:
+                        description: Owner is the account owner of the parent repository.
+                        type: string
+                      repo:
+                        description: Repo is the name of the parent repository.
+                        type: string
+                    type: object
+                  createFromTemplate:
+                    description: |-
+                      CreateFromTemplate is the template the repository was created from, when
+                      GitHub reports one. Whether all branches were included is not reported.
+                    properties:
+                      owner:
+                        description: Owner is the account owner of the template repository.
+                        type: string
+                      repo:
+                        description: Repo is the name of the template repository.
+                        type: string
+                    type: object
+                  defaultBranch:
+                    description: DefaultBranch is the name of the default branch.
+                    type: string
+                  deleteBranchOnMerge:
+                    description: DeleteBranchOnMerge is whether head branches are
+                      deleted when pull requests merge.
+                    type: boolean
+                  description:
+                    description: Description is the description GitHub reports for
+                      the repository.
+                    type: string
+                  forceDelete:
+                    description: |-
+                      ForceDelete is the provider-side deletion safeguard. GitHub has no such
+                      setting and never returns it, so the field is not populated.
+                    type: boolean
+                  hasDiscussions:
+                    description: HasDiscussions is whether the Discussions feature
+                      is enabled.
+                    type: boolean
+                  hasIssues:
+                    description: HasIssues is whether the Issues feature is enabled.
+                    type: boolean
+                  hasProjects:
+                    description: HasProjects is whether the Projects feature is enabled.
+                    type: boolean
+                  hasWiki:
+                    description: HasWiki is whether the Wiki feature is enabled.
+                    type: boolean
                   id:
                     description: ID is the external name of the repository on GitHub.
                     type: string
+                  isTemplate:
+                    description: IsTemplate is whether the repository is a template
+                      repository.
+                    type: boolean
+                  mergeCommitMessage:
+                    description: MergeCommitMessage is the default body format for
+                      merge commits.
+                    type: string
+                  mergeCommitTitle:
+                    description: MergeCommitTitle is the default title format for
+                      merge commits.
+                    type: string
+                  org:
+                    description: Org is the organization that owns the repository.
+                    type: string
+                  permissions:
+                    description: |-
+                      Permissions is the observed access to the repository. Collaborators
+                      and teams are listed only while the repository is read for them.
+                    properties:
+                      teams:
+                        description: Teams lists the teams with access to the repository.
+                        items:
+                          description: RepositoryTeamObservation is a team with access
+                            to a repository and the role GitHub reports for it.
+                          properties:
+                            role:
+                              description: Role is the role of the team.
+                              type: string
+                            team:
+                              description: Team is the slug of the team.
+                              type: string
+                          type: object
+                        type: array
+                      users:
+                        description: Users lists the direct collaborators of the repository.
+                        items:
+                          description: RepositoryUserObservation is a direct collaborator
+                            of a repository and the role GitHub reports for them.
+                          properties:
+                            role:
+                              description: Role is the role of the collaborator.
+                              type: string
+                            user:
+                              description: User is the login of the collaborator.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
+                  private:
+                    description: Private is whether the repository is private.
+                    type: boolean
+                  repositoryRules:
+                    description: |-
+                      RepositoryRules lists the rulesets of the repository. GitHub is queried
+                      for them only while forProvider.repositoryRules is set, so the field is
+                      empty otherwise.
+                    items:
+                      description: RepositoryRulesetObservation is an observed ruleset
+                        of a repository.
+                      properties:
+                        bypassActors:
+                          description: BypassActors lists the actors that can bypass
+                            the ruleset.
+                          items:
+                            description: RulesetByPassActorsObservation is an actor
+                              that can bypass a ruleset.
+                            properties:
+                              actorId:
+                                description: ActorID is the ID of the actor.
+                                format: int64
+                                type: integer
+                              actorType:
+                                description: ActorType is the type of the actor.
+                                type: string
+                              bypassMode:
+                                description: BypassMode is the bypass mode of the
+                                  actor.
+                                type: string
+                            type: object
+                          type: array
+                        conditions:
+                          description: Conditions selects the branches or tags the
+                            ruleset applies to.
+                          properties:
+                            refName:
+                              description: RefName is the observed ref name condition.
+                              properties:
+                                exclude:
+                                  description: Exclude lists the branches or tags
+                                    excluded.
+                                  items:
+                                    type: string
+                                  type: array
+                                include:
+                                  description: Include lists the branches or tags
+                                    included.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                          type: object
+                        enforcement:
+                          description: Enforcement is the enforcement level of the
+                            ruleset.
+                          type: string
+                        name:
+                          description: Name is the name of the ruleset.
+                          type: string
+                        rules:
+                          description: Rules is the observed rules of the ruleset.
+                          properties:
+                            creation:
+                              description: Creation is whether creating matching refs
+                                is restricted.
+                              type: boolean
+                            deletion:
+                              description: Deletion is whether deleting matching refs
+                                is restricted.
+                              type: boolean
+                            nonFastForward:
+                              description: NonFastForward is whether force pushes
+                                to matching refs are restricted.
+                              type: boolean
+                            pullRequest:
+                              description: PullRequest is the observed pull request
+                                rules.
+                              properties:
+                                dismissStaleReviewsOnPush:
+                                  description: DismissStaleReviewsOnPush is whether
+                                    approving reviews are dismissed on a new commit.
+                                  type: boolean
+                                requireCodeOwnerReview:
+                                  description: RequireCodeOwnerReview is whether a
+                                    code owner must approve.
+                                  type: boolean
+                                requireLastPushApproval:
+                                  description: RequireLastPushApproval is whether
+                                    the most recent push must be approved by someone
+                                    else.
+                                  type: boolean
+                                requiredApprovingReviewCount:
+                                  description: RequiredApprovingReviewCount is the
+                                    number of approving reviews required.
+                                  type: integer
+                                requiredReviewThreadResolution:
+                                  description: RequiredReviewThreadResolution is whether
+                                    conversations must be resolved before merging.
+                                  type: boolean
+                              type: object
+                            requiredDeployments:
+                              description: RequiredDeployments is the observed deployments
+                                requirement.
+                              properties:
+                                environments:
+                                  description: Environments lists the required environments.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requiredLinearHistory:
+                              description: RequiredLinearHistory is whether a linear
+                                commit history is required.
+                              type: boolean
+                            requiredSignatures:
+                              description: RequiredSignatures is whether signed commits
+                                are required.
+                              type: boolean
+                            requiredStatusChecks:
+                              description: RequiredStatusChecks is the observed status
+                                checks requirement.
+                              properties:
+                                requiredStatusChecks:
+                                  description: RequiredStatusChecks lists the status
+                                    checks required to merge.
+                                  items:
+                                    description: RulesRequiredStatusChecksParametersObservation
+                                      is a single status check required by a ruleset.
+                                    properties:
+                                      context:
+                                        description: Context is the name of the required
+                                          check.
+                                        type: string
+                                      integrationId:
+                                        description: IntegrationID is the ID of the
+                                          integration that must provide the check.
+                                        format: int64
+                                        type: integer
+                                    type: object
+                                  type: array
+                                strictRequiredStatusChecksPolicy:
+                                  description: StrictRequiredStatusChecksPolicy is
+                                    whether branches must be up-to-date before merging.
+                                  type: boolean
+                              type: object
+                            update:
+                              description: Update is whether updating matching refs
+                                is restricted.
+                              type: boolean
+                          type: object
+                        target:
+                          description: Target is the target of the ruleset.
+                          type: string
+                      type: object
+                    type: array
+                  squashMergeCommitMessage:
+                    description: SquashMergeCommitMessage is the default body format
+                      for squash-merge commits.
+                    type: string
+                  squashMergeCommitTitle:
+                    description: SquashMergeCommitTitle is the default title format
+                      for squash-merge commits.
+                    type: string
+                  topics:
+                    description: Topics is the list of topics of the repository.
+                    items:
+                      type: string
+                    type: array
                   unappliedBranchProtection:
                     description: Branch protection items GitHub did not apply on the
                       last push, per declared rule.
@@ -1051,6 +1500,38 @@ spec:
                       required:
                       - declared
                       - field
+                      type: object
+                    type: array
+                  webhooks:
+                    description: |-
+                      Webhooks lists the webhooks of the repository. GitHub is queried for
+                      them only while forProvider.webhooks is set, so the field is empty otherwise.
+                    items:
+                      description: |-
+                        RepositoryWebhookObservation is a webhook of a repository. The webhook
+                        secret is write-only material that GitHub never returns, so it is not
+                        part of the observation.
+                      properties:
+                        active:
+                          description: Active is whether notifications are sent when
+                            the webhook is triggered.
+                          type: boolean
+                        contentType:
+                          description: ContentType is the media type used to serialize
+                            the payloads.
+                          type: string
+                        events:
+                          description: Events lists what the hook is triggered for.
+                          items:
+                            type: string
+                          type: array
+                        insecureSsl:
+                          description: InsecureSSL is whether the SSL certificate
+                            of the host for url is not verified.
+                          type: boolean
+                        url:
+                          description: URL to which the payloads are delivered.
+                          type: string
                       type: object
                     type: array
                 type: object

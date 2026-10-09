@@ -18,6 +18,7 @@ package organizationwebhook
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	"github.com/google/go-github/v90/github"
@@ -78,6 +79,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cr.Status.AtProvider.ID = h.GetID()
+	mirrorHook(&cr.Status.AtProvider, h, p.Org)
 
 	// Persist the adopted hook ID as the external name.
 	id := strconv.FormatInt(h.GetID(), 10)
@@ -101,6 +103,22 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	cr.SetConditions(xpv2.Available())
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true, ResourceLateInitialized: lateInit}, nil
+}
+
+// mirrorHook records in status.atProvider what GitHub reports for the hook h,
+// which was read under org. The webhook secret is never returned by GitHub.
+func mirrorHook(ap *v1alpha1.OrganizationWebhookObservation, h *github.Hook, org string) {
+	ap.Org = org
+	ap.URL = h.Config.GetURL()
+	ap.ContentType = h.Config.GetContentType()
+	ap.Events = slices.Sorted(slices.Values(h.Events))
+	ap.Active = nil
+	if h.Active != nil {
+		active := h.GetActive()
+		ap.Active = &active
+	}
+	insecure := h.Config.GetInsecureSSL() == "1"
+	ap.InsecureSSL = &insecure
 }
 
 // configUpToDate compares every hook field except the secret. A url,

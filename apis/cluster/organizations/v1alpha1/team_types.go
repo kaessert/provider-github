@@ -29,8 +29,10 @@ import (
 
 // TeamParameters are the configurable fields of a Team.
 type TeamParameters struct {
-	Description string           `json:"description,omitempty"`
-	Members     []TeamMemberUser `json:"members,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// +optional
+	Members []TeamMemberUser `json:"members"`
 
 	// Org is the Organization for the Membership
 	// +immutable
@@ -95,10 +97,36 @@ type TeamMemberTeam struct {
 	Role string `json:"role"`
 }
 
+// TeamMemberUserObservation is a member of a team and the role GitHub reports for them.
+type TeamMemberUserObservation struct {
+	// User is the login of the member.
+	User string `json:"user,omitempty"`
+
+	// Role is the role of the member on the team.
+	Role string `json:"role,omitempty"`
+}
+
 // TeamObservation are the observable fields of a Team.
 type TeamObservation struct {
 	// ID is the external name of the team on GitHub.
 	ID string `json:"id,omitempty"`
+
+	// Description is the description GitHub reports for the team.
+	Description string `json:"description,omitempty"`
+
+	// Members lists the direct members of the team and their roles. Members
+	// that the team only inherits from its child teams are not listed.
+	// +optional
+	Members []TeamMemberUserObservation `json:"members"`
+
+	// Org is the organization the team was found under.
+	Org string `json:"org,omitempty"`
+
+	// Parent is the name of the parent team, when the team has one.
+	Parent *string `json:"parent,omitempty"`
+
+	// Privacy represents the visibility of the team (secret, closed)
+	Privacy *string `json:"privacy,omitempty"`
 
 	ObservableField string `json:"observableField,omitempty"`
 }

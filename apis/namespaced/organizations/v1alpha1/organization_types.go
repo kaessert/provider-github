@@ -46,7 +46,7 @@ type ActionsConfiguration struct {
 	// To stop managing the list, remove the field. Setting it to [] is
 	// an explicit "wipe" and will affect every repo in the org.
 	// +optional
-	EnabledRepos []ActionEnabledRepo `json:"enabledRepos,omitempty"`
+	EnabledRepos []ActionEnabledRepo `json:"enabledRepos"`
 }
 
 type ActionEnabledRepo struct {
@@ -82,7 +82,8 @@ type OrgSecret struct {
 	Name string `json:"name"`
 
 	// List of repositories that have access to the secret.
-	RepositoryAccessList []SecretSelectedRepo `json:"repositoryAccessList,omitempty"`
+	// +optional
+	RepositoryAccessList []SecretSelectedRepo `json:"repositoryAccessList"`
 }
 
 type SecretConfiguration struct {
@@ -90,13 +91,59 @@ type SecretConfiguration struct {
 	//
 	// DEPRECATED, use ActionsSecretAccess instead.
 	// +optional
-	ActionsSecrets []OrgSecret `json:"actionsSecrets,omitempty"`
+	ActionsSecrets []OrgSecret `json:"actionsSecrets"`
 
 	// List of Dependabot secrets
 	//
 	// DEPRECATED, use DependabotSecretAccess instead.
 	// +optional
-	DependabotSecrets []OrgSecret `json:"dependabotSecrets,omitempty"`
+	DependabotSecrets []OrgSecret `json:"dependabotSecrets"`
+}
+
+// ActionEnabledRepoObservation is a repository enabled for GitHub Actions.
+type ActionEnabledRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// ActionsConfigurationObservation is the observed Actions configuration of an Organization.
+type ActionsConfigurationObservation struct {
+	// EnabledRepos lists the repositories enabled to run GitHub Actions at
+	// the organization level. GitHub is queried for the list only while
+	// forProvider.actions.enabledRepos is set, so the field is empty otherwise.
+	// +optional
+	EnabledRepos []ActionEnabledRepoObservation `json:"enabledRepos"`
+}
+
+// SecretSelectedRepoObservation is a repository that has access to a secret.
+type SecretSelectedRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// OrgSecretObservation is an organization secret and the repositories that have access to it.
+type OrgSecretObservation struct {
+	// Name of the GitHub secret.
+	Name string `json:"name,omitempty"`
+
+	// RepositoryAccessList lists the repositories that have access to the secret.
+	// +optional
+	RepositoryAccessList []SecretSelectedRepoObservation `json:"repositoryAccessList"`
+}
+
+// SecretConfigurationObservation is the observed state of the organization
+// secrets listed in forProvider.secrets. Secret values are never returned by
+// GitHub and are not part of the observation.
+type SecretConfigurationObservation struct {
+	// ActionsSecrets lists the GitHub Actions secrets named in
+	// forProvider.secrets.actionsSecrets and their repository access.
+	// +optional
+	ActionsSecrets []OrgSecretObservation `json:"actionsSecrets"`
+
+	// DependabotSecrets lists the Dependabot secrets named in
+	// forProvider.secrets.dependabotSecrets and their repository access.
+	// +optional
+	DependabotSecrets []OrgSecretObservation `json:"dependabotSecrets"`
 }
 
 // OrganizationParameters are the configurable fields of a Organization.
@@ -116,6 +163,13 @@ type OrganizationObservation struct {
 	ID string `json:"id,omitempty"`
 
 	Description string `json:"description,omitempty"`
+
+	// Actions is the observed GitHub Actions configuration of the organization.
+	Actions ActionsConfigurationObservation `json:"actions,omitempty"`
+
+	// Secrets is the observed state of the organization secrets named in
+	// forProvider.secrets. GitHub is queried for them only while that field is set.
+	Secrets *SecretConfigurationObservation `json:"secrets,omitempty"`
 }
 
 // A OrganizationSpec defines the desired state of a Organization.
