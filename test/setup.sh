@@ -13,7 +13,11 @@
 #   PROVIDER_GITHUB_APP_PRIVATE_KEY_B64  the App's PEM private key, base64-encoded
 #
 # Optional environment:
-#   KUBECTL  path to the kubectl binary (uptest sets it; default: kubectl)
+#   KUBECTL          path to the kubectl binary (uptest sets it; default: kubectl)
+#   E2E_ORG_SECRETS  "true" when the run includes the SecretAccess examples (the
+#                    Makefile sets it); the run then creates the disposable
+#                    organization secrets those examples manage, and removes
+#                    them when it ends. Needs E2E_ORG, which the Makefile exports.
 set -euo pipefail
 
 KUBECTL="${KUBECTL:-kubectl}"
@@ -145,5 +149,25 @@ spec:
       name: github-app-credentials
       key: creds
 YAML
+
+# ---------------------------------------------------------------------------
+# Disposable organization secrets for ActionsSecretAccess and
+# DependabotSecretAccess, which manage access to a secret but never create one.
+# test/teardown.sh removes them once the delete step has passed. A run that ends
+# before that step -- a failed assertion, a stopped job -- never reaches the
+# teardown script, so a detached watcher also removes them when this cluster
+# disappears. It holds no file descriptor of this process open.
+# ---------------------------------------------------------------------------
+if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  "${ROOT}/test/org-secrets.sh" create
+  # The runner removes the kubeconfig it gives this script once the script
+  # returns, so the watcher keeps a private flattened copy of the context.
+  watch_kubeconfig="$(mktemp)"
+  ${KUBECTL} config view --minify --flatten > "${watch_kubeconfig}"
+  WATCH_KUBECONFIG="${watch_kubeconfig}" KUBECTL="${KUBECTL}" \
+    setsid nohup "${ROOT}/test/org-secrets.sh" watch \
+    >"${TMPDIR:-/tmp}/org-secrets-watch.$$.log" 2>&1 </dev/null &
+fi
 
 echo "setup.sh: complete -- credentials Secret, ProviderConfig, namespaced ProviderConfig and ClusterProviderConfig applied."
