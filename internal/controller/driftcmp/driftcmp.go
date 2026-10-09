@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
 )
 
 // Equal reports whether a and b hold the same data, treating a nil and an
@@ -35,14 +36,7 @@ func Equal(a, b any) bool {
 	return cmp.Equal(a, b,
 		cmpopts.EquateEmpty(),
 		cmp.Comparer(func(x, y *[]string) bool {
-			return slices.Equal(deref(x), deref(y))
+			return slices.Equal(ptr.Deref(x, nil), ptr.Deref(y, nil))
 		}),
 	)
-}
-
-func deref(p *[]string) []string {
-	if p == nil {
-		return nil
-	}
-	return *p
 }
