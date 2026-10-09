@@ -1,0 +1,114 @@
+[
+  {
+    "number": 5,
+    "title": "Earlier work by a returning contributor",
+    "body": "```release-note\nSomething shipped in an earlier release\n```",
+    "user": {
+      "login": "kaessert"
+    },
+    "labels": [],
+    "merged_at": "2026-01-05T10:00:00Z"
+  },
+  {
+    "number": 11,
+    "title": "Fix converge loop on mutually exclusive WAF fields",
+    "body": "Some prose a reviewer reads.\n\n```release-note\nHttpLoadbalancer no longer loops when two mutually exclusive WAF fields are both set\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ],
+    "merged_at": "2026-03-01T10:00:00Z"
+  },
+  {
+    "number": 12,
+    "title": "Batch: 3 changes from the build pipeline",
+    "body": "This pull request carries several independent changes.\n\n```release-note\nBound the manager cache footprint by stripping CRD schemas from the informer cache\nRecord the minimum credential scope required for the API\nBypass the Secret cache to reduce memory on large clusters\n```\n",
+    "user": {
+      "login": "kaessert"
+    },
+    "labels": [
+      {
+        "name": "enhancement"
+      }
+    ],
+    "merged_at": "2026-03-02T10:00:00Z"
+  },
+  {
+    "number": 13,
+    "title": "chore: bump a lint pin",
+    "body": "Internal only.\n\n```release-note\nNONE\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [],
+    "merged_at": "2026-03-03T10:00:00Z"
+  },
+  {
+    "number": 14,
+    "title": "docs: clarify the connection secret example",
+    "body": "No block here at all — a contributor who has never seen the format.",
+    "user": {
+      "login": "newperson"
+    },
+    "labels": [],
+    "merged_at": "2026-03-04T10:00:00Z"
+  },
+  {
+    "number": 15,
+    "title": "Something with no prefix and no labels",
+    "body": "```release-note\nAdded a retry around transient 502s from the upstream API\n```",
+    "user": {
+      "login": "someone"
+    },
+    "labels": [],
+    "merged_at": "2026-03-05T10:00:00Z"
+  },
+  {
+    "number": 16,
+    "title": "fix: a change whose author left the template default in place",
+    "body": "Prose.\n\n```release-note\nFirst real note line\nSecond real note line\n```\n\nMore prose the template puts between them.\n\n```release-note\nNONE\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ],
+    "merged_at": "2026-03-06T10:00:00Z"
+  },
+  {
+    "number": 17,
+    "title": "chore: an empty block, most likely a slip",
+    "body": "```release-note\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [],
+    "merged_at": "2026-03-07T10:00:00Z"
+  },
+  {
+    "number": 18,
+    "title": "chore: lowercase none should still omit",
+    "body": "```release-note\nnone\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [],
+    "merged_at": "2026-03-08T10:00:00Z"
+  },
+  {
+    "number": 19,
+    "title": "fix: ZoneDelegated.spec.forProvider.delegateTo becomes immutable",
+    "body": "```release-note\n- Dash-prefixed bullet loses its marker\n* Star-prefixed bullet loses its marker\nBare bullet keeps no marker to lose\n**Bold:** Bold-prefixed bullet keeps both asterisks\n*Italic-prefixed bullet* keeps its single asterisks\n**Breaking:** `ZoneDelegated.spec.forProvider.delegateTo` becomes immutable\n```\n",
+    "user": {
+      "login": "acontributor"
+    },
+    "labels": [],
+    "merged_at": "2026-03-09T10:00:00Z"
+  }
+]

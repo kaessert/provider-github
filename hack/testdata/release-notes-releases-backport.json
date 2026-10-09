@@ -1,0 +1,26 @@
+[
+  {
+    "tag_name": "v0.2.2",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-09-02T19:05:35Z"
+  },
+  {
+    "tag_name": "v0.1.2",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-09-02T20:23:11Z"
+  },
+  {
+    "tag_name": "v0.1.1",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-08-01T09:00:00Z"
+  },
+  {
+    "tag_name": "v0.2.1",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-08-15T09:00:00Z"
+  }
+]
