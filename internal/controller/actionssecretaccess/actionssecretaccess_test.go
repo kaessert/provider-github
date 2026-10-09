@@ -104,7 +104,7 @@ func assertReady(t *testing.T, cr *v1alpha1.ActionsSecretAccess, status corev1.C
 
 // A missing secret must surface in Ready but report exists+up-to-date: Create
 // cannot make a secret without its value, so it must never be reached.
-func TestObserve_SecretNotFound_ReadyFalseAndNoCreate(t *testing.T) {
+func TestObserveSecretNotFoundReadyFalseAndNoCreate(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret: func(_ context.Context, _, _ string) (*github.Secret, *github.Response, error) {
 			return nil, fake.GenerateEmptyResponse(), fake.Generate404Response()
@@ -128,7 +128,7 @@ func TestObserve_SecretNotFound_ReadyFalseAndNoCreate(t *testing.T) {
 
 // Visibility cannot be changed through the API, so a mismatch must be reported
 // in Ready without touching the repository list or triggering Update.
-func TestObserve_VisibilityMismatch_ReadyFalseAndNoList(t *testing.T) {
+func TestObserveVisibilityMismatchReadyFalseAndNoList(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret:                  getSecret(visibilityPrivate),
 		MockListSelectedReposForOrgSecret: listMustNotBeCalled(t),
@@ -150,7 +150,7 @@ func TestObserve_VisibilityMismatch_ReadyFalseAndNoList(t *testing.T) {
 }
 
 // Repository lists are compared as sets; GitHub's ordering must not cause drift.
-func TestObserve_Selected_SameReposDifferentOrder_UpToDate(t *testing.T) {
+func TestObserveSelectedSameReposDifferentOrderUpToDate(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret:                  getSecret(visibilitySelected),
 		MockListSelectedReposForOrgSecret: listRepos(testRepoB, testRepoA),
@@ -168,7 +168,7 @@ func TestObserve_Selected_SameReposDifferentOrder_UpToDate(t *testing.T) {
 }
 
 // An extra repository on GitHub is drift that Update must remove.
-func TestObserve_Selected_DifferentRepos_NotUpToDate(t *testing.T) {
+func TestObserveSelectedDifferentReposNotUpToDate(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret:                  getSecret(visibilitySelected),
 		MockListSelectedReposForOrgSecret: listRepos(testRepoA, testRepoB),
@@ -187,7 +187,7 @@ func TestObserve_Selected_DifferentRepos_NotUpToDate(t *testing.T) {
 // canonical, so a spec name differing only in case from the listed one must not
 // read as drift; otherwise Update rewrites the list on every poll while the
 // resource shows Ready.
-func TestObserve_Selected_NameCaseDiffers_UpToDate(t *testing.T) {
+func TestObserveSelectedNameCaseDiffersUpToDate(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret:                  getSecret(visibilitySelected),
 		MockListSelectedReposForOrgSecret: listRepos("Repo-A"),
@@ -207,7 +207,7 @@ func TestObserve_Selected_NameCaseDiffers_UpToDate(t *testing.T) {
 // The declared list is a set: a repository listed twice in spec, in any case,
 // must not read as drift against GitHub's single entry; otherwise Update
 // rewrites the list on every poll while the resource shows Ready.
-func TestObserve_Selected_DuplicateSpecRepo_UpToDate(t *testing.T) {
+func TestObserveSelectedDuplicateSpecRepoUpToDate(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret:                  getSecret(visibilitySelected),
 		MockListSelectedReposForOrgSecret: listRepos(testRepoA),
@@ -226,7 +226,7 @@ func TestObserve_Selected_DuplicateSpecRepo_UpToDate(t *testing.T) {
 
 // Repositories beyond the first page must be compared; otherwise a secret with
 // more than 100 repositories would report drift forever.
-func TestObserve_Selected_Pagination_CollectsAllPages(t *testing.T) {
+func TestObserveSelectedPaginationCollectsAllPages(t *testing.T) {
 	var pages []int
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret: getSecret(visibilitySelected),
@@ -256,7 +256,7 @@ func TestObserve_Selected_Pagination_CollectsAllPages(t *testing.T) {
 
 // For all/private there is no repository list on GitHub, so a matching
 // visibility is Ready without any List call.
-func TestObserve_NotSelected_VisibilityMatches_ReadyAndNoList(t *testing.T) {
+func TestObserveNotSelectedVisibilityMatchesReadyAndNoList(t *testing.T) {
 	for _, v := range []string{visibilityAll, visibilityPrivate} {
 		t.Run(v, func(t *testing.T) {
 			e := newExternal(&fake.MockActionsClient{
@@ -306,7 +306,7 @@ func repoGetMustNotBeCalled(t *testing.T) *fake.MockRepositoriesClient {
 
 // GitHub's Set endpoint takes repository IDs, so Update must resolve spec
 // names the secret does not yet have and send exactly the spec IDs in spec order.
-func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
+func TestUpdateSetsResolvedRepoIDs(t *testing.T) {
 	var got github.SelectedRepoIDs
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listRepos(),
@@ -331,7 +331,7 @@ func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
 // Update cost must scale with the repositories added, not the list size:
 // removing an extra repository must take every ID from the list and cost no
 // Repositories.Get, or a large secret cannot converge within the reconcile timeout.
-func TestUpdate_RemoveExtraRepo_NoRepoGet(t *testing.T) {
+func TestUpdateRemoveExtraRepoNoRepoGet(t *testing.T) {
 	var got github.SelectedRepoIDs
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID, testRepoB: testRepoBID, "repo-extra": 1}),
@@ -349,7 +349,7 @@ func TestUpdate_RemoveExtraRepo_NoRepoGet(t *testing.T) {
 
 // Adding one repository must cost exactly one Repositories.Get, for that name
 // only; the IDs of repositories already selected come from the list.
-func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
+func TestUpdateAddOneRepoGetsOnlyThatRepo(t *testing.T) {
 	var got github.SelectedRepoIDs
 	var gets []string
 	actions := &fake.MockActionsClient{
@@ -377,7 +377,7 @@ func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
 
 // IDs on later list pages must be used too; otherwise every repository past
 // the first 100 would cost a Repositories.Get on each Update.
-func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
+func TestUpdateIDsFromLaterPagesNoRepoGet(t *testing.T) {
 	var got github.SelectedRepoIDs
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: func(_ context.Context, _, _ string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
@@ -404,7 +404,7 @@ func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
 // canonical, so a spec name differing only in case from a listed one must take
 // its ID from the list: no Repositories.Get, or every Update pays for a lookup
 // GitHub resolves to the same repository.
-func TestUpdate_NameCaseDiffers_IDFromListNoRepoGet(t *testing.T) {
+func TestUpdateNameCaseDiffersIDFromListNoRepoGet(t *testing.T) {
 	var got github.SelectedRepoIDs
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{"Repo-A": testRepoAID, "repo-extra": 1}),
@@ -423,7 +423,7 @@ func TestUpdate_NameCaseDiffers_IDFromListNoRepoGet(t *testing.T) {
 // The declared list is a set: a repository listed twice in spec must be sent
 // to GitHub once, with its ID taken from the list, so Update writes the same
 // set Observe compares against.
-func TestUpdate_DuplicateSpecRepo_SetOnceNoRepoGet(t *testing.T) {
+func TestUpdateDuplicateSpecRepoSetOnceNoRepoGet(t *testing.T) {
 	var got github.SelectedRepoIDs
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID, "repo-extra": 1}),
@@ -441,7 +441,7 @@ func TestUpdate_DuplicateSpecRepo_SetOnceNoRepoGet(t *testing.T) {
 
 // A new repository declared twice must cost one Repositories.Get, for its first
 // spelling, and be sent to GitHub once: the declared list is a set.
-func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
+func TestUpdateDuplicateNewRepoOneRepoGetSetOnce(t *testing.T) {
 	var got github.SelectedRepoIDs
 	var gets []string
 	actions := &fake.MockActionsClient{
@@ -471,7 +471,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 // another name means the repository was renamed on GitHub: the list keeps
 // reporting drift, and writing would change nothing and repeat every poll, so
 // Update must fail with the fix instead of calling Set.
-func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
+func TestUpdateRenamedRepoErrorAndNoSet(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{"new-name": testRepoAID, testRepoB: testRepoBID}),
 		MockSetSelectedReposForOrgSecret: func(_ context.Context, _, _ string, _ []int64) (*github.Response, error) {
@@ -497,7 +497,7 @@ func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
 // A resource being deleted must be reported gone without calling GitHub.
 // Delete is a no-op, so if Observe kept reporting it exists the reconciler
 // would call Delete every poll and never remove the finalizer.
-func TestObserve_Deleting_NotExistsAndNoClientCall(t *testing.T) {
+func TestObserveDeletingNotExistsAndNoClientCall(t *testing.T) {
 	e := newExternal(&fake.MockActionsClient{
 		MockGetOrgSecret: func(_ context.Context, _, _ string) (*github.Secret, *github.Response, error) {
 			t.Error("GetOrgSecret was called, want no call")
@@ -519,7 +519,7 @@ func TestObserve_Deleting_NotExistsAndNoClientCall(t *testing.T) {
 
 // The provider does not own the secret, so deleting the resource must not call
 // GitHub; any call would panic on the nil client interfaces.
-func TestDelete_NoClientCall(t *testing.T) {
+func TestDeleteNoClientCall(t *testing.T) {
 	e := &external{github: &ghclient.Client{Services: &ghclient.Services{}}}
 
 	if _, err := e.Delete(context.Background(), newCR(visibilitySelected, testRepoA)); err != nil {

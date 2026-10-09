@@ -20,9 +20,9 @@ import (
 	"github.com/google/go-github/v90/github"
 )
 
-// TestPickCredsForPC_SingleCreds returns the only available credential when
+// TestPickCredsForPCSingleCreds returns the only available credential when
 // there are no AdditionalCredentials.
-func TestPickCredsForPC_SingleCreds(t *testing.T) {
+func TestPickCredsForPCSingleCreds(t *testing.T) {
 	chosen, _, err := pickCredsForPool([]string{"creds-A"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -32,9 +32,9 @@ func TestPickCredsForPC_SingleCreds(t *testing.T) {
 	}
 }
 
-// TestPickCredsForPC_MultipleCreds_PrefersHealthier picks the credential
+// TestPickCredsForPCMultipleCredsPrefersHealthier picks the credential
 // whose pool entry shows the most remaining quota.
-func TestPickCredsForPC_MultipleCreds_PrefersHealthier(t *testing.T) {
+func TestPickCredsForPCMultipleCredsPrefersHealthier(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
@@ -67,7 +67,7 @@ func TestPickCredsForPC_MultipleCreds_PrefersHealthier(t *testing.T) {
 // github_app_picker_picks_total counter, labeled with the chosen
 // credential's app_id / app_installation_id. With one credential, the
 // reason is "only_candidate".
-func TestResolveAndConnect_RecordsPickerPick(t *testing.T) {
+func TestResolveAndConnectRecordsPickerPick(t *testing.T) {
 	kube := newFakeKubeWithSecret(t, "github-secret", "crossplane-system", map[string][]byte{
 		"creds": []byte("12345,67890,-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"),
 	}).Build()
@@ -90,7 +90,7 @@ func TestResolveAndConnect_RecordsPickerPick(t *testing.T) {
 // malformed PEM) happen before any wrapped GitHub call. ResolveAndConnect
 // must still record the failure on the pool and bump the unhealthy
 // counter so the picker can avoid the broken credential on next pick.
-func TestResolveAndConnect_NewClientFailure_RecordsToPool(t *testing.T) {
+func TestResolveAndConnectNewClientFailureRecordsToPool(t *testing.T) {
 	// Three comma-separated fields (passes ExtractAppIDs) but the second
 	// field isn't a valid integer, so strconv.Atoi inside NewCachedServices
 	// will fail before any HTTP call.
@@ -120,9 +120,9 @@ func TestResolveAndConnect_NewClientFailure_RecordsToPool(t *testing.T) {
 	}
 }
 
-// TestPickCredsForPC_AllInCooldown_ReturnsTypedError lets callers requeue
+// TestPickCredsForPCAllInCooldownReturnsTypedError lets callers requeue
 // reconciles intelligently when every app is exhausted.
-func TestPickCredsForPC_AllInCooldown_ReturnsTypedError(t *testing.T) {
+func TestPickCredsForPCAllInCooldownReturnsTypedError(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))

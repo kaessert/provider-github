@@ -21,7 +21,7 @@ import (
 
 // Every rate-limit metric carries organization, app_id, and
 // app_installation_id labels with the values supplied at record time.
-func TestRecordRateLimitInfo_LabelsByOrgAppAndInstallation(t *testing.T) {
+func TestRecordRateLimitInfoLabelsByOrgAppAndInstallation(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	resetAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -49,7 +49,7 @@ func TestRecordRateLimitInfo_LabelsByOrgAppAndInstallation(t *testing.T) {
 // Two installations of the same App (same app_id, different
 // app_installation_id) produce distinct time series rather than
 // overwriting each other.
-func TestRecordRateLimitInfo_DistinctInstallationsAreSeparate(t *testing.T) {
+func TestRecordRateLimitInfoDistinctInstallationsAreSeparate(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.RecordRateLimitInfo(&github.Response{
@@ -72,7 +72,7 @@ func TestRecordRateLimitInfo_DistinctInstallationsAreSeparate(t *testing.T) {
 
 // A 429 response increments rate_limit_exceeded_total under the supplied
 // org, app_id, and app_installation_id labels.
-func TestRecordRateLimitInfo_429IncrementsExceededCounter(t *testing.T) {
+func TestRecordRateLimitInfo429IncrementsExceededCounter(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.RecordRateLimitInfo(&github.Response{
@@ -88,7 +88,7 @@ func TestRecordRateLimitInfo_429IncrementsExceededCounter(t *testing.T) {
 // installation_id, reason). Reason values distinguish picker decisions:
 // highest_remaining (strict winner), random_tiebreak (N ≥ 2 tied),
 // only_candidate (others in cooldown).
-func TestRecordPickerPick_IncrementsCounter(t *testing.T) {
+func TestRecordPickerPickIncrementsCounter(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.RecordPickerPick("acme", "12345", "67890", "highest_remaining")
@@ -107,7 +107,7 @@ func TestRecordPickerPick_IncrementsCounter(t *testing.T) {
 // (org, app_id, installation_id, method) series. Counts every wrapped
 // call regardless of outcome; operators sum across `method` for per-app
 // traffic volume.
-func TestRecordAPICall_IncrementsCounter(t *testing.T) {
+func TestRecordAPICallIncrementsCounter(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.RecordAPICall("acme", "12345", "67890", "Organizations.Get")
@@ -125,7 +125,7 @@ func TestRecordAPICall_IncrementsCounter(t *testing.T) {
 // app_unhealthy_total is a separate counter from rate_limit_exceeded:
 // every call to RecordAppUnhealthy increments the (org, app_id,
 // installation_id) series by one.
-func TestRecordAppUnhealthy_IncrementsCounter(t *testing.T) {
+func TestRecordAppUnhealthyIncrementsCounter(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.RecordAppUnhealthy("acme", "12345", "67890")
@@ -137,7 +137,7 @@ func TestRecordAppUnhealthy_IncrementsCounter(t *testing.T) {
 }
 
 // The gauge reads 1 while a dimension is unreconcilable and drops back to 0 once it is not.
-func TestSetRepositoryUnreconcilable_FollowsState(t *testing.T) {
+func TestSetRepositoryUnreconcilableFollowsState(t *testing.T) {
 	m := newRateLimitMetrics()
 
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, true)
@@ -152,7 +152,7 @@ func TestSetRepositoryUnreconcilable_FollowsState(t *testing.T) {
 }
 
 // Forgetting a repository removes all of its series and leaves other repositories' series alone.
-func TestForgetRepository_RemovesOnlyThatRepository(t *testing.T) {
+func TestForgetRepositoryRemovesOnlyThatRepository(t *testing.T) {
 	m := newRateLimitMetrics()
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, true)
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionBranchProtection, false)

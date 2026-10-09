@@ -324,7 +324,7 @@ func TestObserve(t *testing.T) {
 // the diff against the CR's enabled-repos list, every CR-declared repo
 // past page 1 looks "missing", and the controller burns calls
 // re-Adding repos that are already enabled.
-func TestListEnabledReposInOrg_Paginates(t *testing.T) {
+func TestListEnabledReposInOrgPaginates(t *testing.T) {
 	pages := [][]*github.Repository{
 		{{Name: github.Ptr("a")}, {Name: github.Ptr("b")}},
 		{{Name: github.Ptr("c")}},
@@ -368,7 +368,7 @@ func TestListEnabledReposInOrg_Paginates(t *testing.T) {
 // enabled-repos list already matches the CR. This protects against
 // wasteful idempotent writes when Observe flagged the CR as out-of-date
 // for some other reason (e.g. description or secrets drifted).
-func TestSetEnabledReposForActions_SkipsWhenAlreadyMatching(t *testing.T) {
+func TestSetEnabledReposForActionsSkipsWhenAlreadyMatching(t *testing.T) {
 	setCalled := false
 	gh := &ghclient.Client{
 		Services: &ghclient.Services{
@@ -399,7 +399,7 @@ func TestSetEnabledReposForActions_SkipsWhenAlreadyMatching(t *testing.T) {
 // repo-name→ID cache from the list response so it only fetches IDs for
 // newly-added repos. Without that optimization, every Update on a large
 // org would re-fetch every repo's ID — O(N) avoidable Get calls.
-func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
+func TestSetEnabledReposForActionsCallsSetWithResolvedIDs(t *testing.T) {
 	idR1, idR2 := int64(11), int64(22)
 	var setIDs []int64
 	setCalls := 0
@@ -451,7 +451,7 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 // listEnabledReposInOrg without calling Set. A silent partial-page
 // result would leak into the diff and could trigger a wrong Set call
 // against a truncated view of the enabled-repos list.
-func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
+func TestSetEnabledReposForActionsPaginationErrorMidWalk(t *testing.T) {
 	listCalls := 0
 	setCalled := false
 	gh := &ghclient.Client{
@@ -489,7 +489,7 @@ func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
 // Update() relies on the helper's error to decide whether to mark the
 // CR Synced=False, so swallowing a Set failure would silently mislabel
 // state as in-sync.
-func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
+func TestSetEnabledReposForActionsSetErrorPropagates(t *testing.T) {
 	wantErr := errors.New("github: 422 invalid repository id")
 	gh := &ghclient.Client{
 		Services: &ghclient.Services{
@@ -521,7 +521,7 @@ func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
 // Repositories.Get fallback (cache miss path). A swallow here would
 // produce zero-value IDs in the Set call, which GitHub rejects — but
 // would manifest as an unrelated 422, not the actual root cause.
-func TestSetEnabledReposForActions_GetErrorPropagates(t *testing.T) {
+func TestSetEnabledReposForActionsGetErrorPropagates(t *testing.T) {
 	wantErr := errors.New("github: 404 not found")
 	setCalled := false
 	gh := &ghclient.Client{
