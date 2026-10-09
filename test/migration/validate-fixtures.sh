@@ -17,7 +17,12 @@
 #      (spec.publishConnectionDetailsTo, spec.providerRef) -- anything else
 #      that no longer validates is an unannounced API break;
 #   5. the namespaced adoption fixtures are the cluster ones moved to the
-#      namespaced scope and nothing else.
+#      namespaced scope and nothing else;
+#   6. the manifests the adoption scenario derives from the v1 fixtures
+#      (adopt-derive.sh) validate against the candidate CRDs and their CEL rules,
+#      in both modes (Observe-only, and the default management policies), and the
+#      list of create-time fields the Observe-only derivation omits is exactly the
+#      list of fields the candidate CRDs re-require.
 #
 # Baseline CRDs come from MIGRATION_BASELINE_CRDS (a directory), else from
 # MIGRATION_BASELINE_DIR/package/crds (a checkout of the baseline tag), else
@@ -28,8 +33,11 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "${HERE}/lib.sh"
+# shellcheck source=adopt-derive.sh
+. "${HERE}/adopt-derive.sh"
 # Offline checks render the fixtures with the sample values, never with values a
 # previous live run discovered.
+# shellcheck disable=SC2034  # read by render and load_runtime_env in lib.sh
 RUNTIME_ENV=/nonexistent
 
 require_tools kubeconform yq jq git sed
@@ -236,6 +244,55 @@ if [ -n "${parity_bad}" ]; then
   record FAIL "namespaced adoption fixtures mirror the cluster ones" "${parity_bad}"
 else
   record PASS "namespaced adoption fixtures mirror the cluster ones"
+fi
+
+# ---------------------------------------------------------------------------
+# The manifests the adoption scenario derives from the v1 fixtures
+# ---------------------------------------------------------------------------
+derive_adoption observe "${WORK}/rendered/v1" - "${WORK}/rendered/derived-observe"
+derive_probe "${WORK}/rendered/derived-observe"
+derive_adoption full "${WORK}/rendered/v1" - "${WORK}/rendered/derived-full"
+kc_check "derived Observe-only adoption manifests validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/derived-observe"
+kc_check "derived fully managed adoption manifests validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/derived-full"
+cel_check "CEL rules of the candidate CRDs hold for the derived Observe-only manifests" "${CAND_CRDS}" "${WORK}/rendered/derived-observe"
+cel_check "CEL rules of the candidate CRDs hold for the derived fully managed manifests" "${CAND_CRDS}" "${WORK}/rendered/derived-full"
+
+# Nothing the baseline manages is left out of the derivation.
+v1_count="$(for f in "${WORK}"/rendered/v1/*.yaml; do yq -o=json -I=0 '.' "${f}"; done | jq -r 'select(.kind != "Secret") | .kind' | wc -l)"
+obs_count="$(find "${WORK}/rendered/derived-observe" -name '*.yaml' ! -name "*-${ADOPT_PROBE_NAME}.yaml" | wc -l)"
+full_count="$(find "${WORK}/rendered/derived-full" -name '*.yaml' | wc -l)"
+if [ "${v1_count}" -gt 0 ] && [ "${v1_count}" -eq "${obs_count}" ] && [ "${v1_count}" -eq "${full_count}" ]; then
+  record PASS "one adoption manifest is derived per v1 managed resource (${v1_count})"
+else
+  record FAIL "one adoption manifest is derived per v1 managed resource" "v1 ${v1_count}, observe ${obs_count}, full ${full_count}"
+fi
+
+# The fields an Observe-only derivation omits are the ones the CEL rules re-require.
+cel_fields="$(for crd in "${CAND_CRDS}"/organizations.github.crossplane.io_*.yaml; do
+  yq -o=json '.' "${crd}" | jq -c '.spec.names.kind as $k
+    | [.. | objects | select(has("x-kubernetes-validations")) | .["x-kubernetes-validations"][].rule
+       | capture("has\\(self\\.spec\\.forProvider\\.(?<f>[A-Za-z0-9]+)\\)$").f] as $f
+    | select(($f | length) > 0) | {($k): ($f | sort)}'
+done | jq -sS 'add')"
+want_fields="$(jq -S 'map_values(sort)' <<<"${ADOPT_OMITTED_FIELDS}")"
+if [ "${cel_fields}" = "${want_fields}" ]; then
+  record PASS "the fields the Observe-only derivation omits are exactly the ones the candidate CRDs re-require ($(jq '[.[] | length] | add' <<<"${want_fields}") fields)"
+else
+  record FAIL "the fields the Observe-only derivation omits are exactly the ones the candidate CRDs re-require" "CRDs: $(jq -c . <<<"${cel_fields}") derivation: $(jq -c . <<<"${want_fields}")"
+fi
+
+# An Observe-only manifest carries none of the omitted fields, no removed field, and the Observe policy.
+bad_obs="$(for f in "${WORK}"/rendered/derived-observe/*.yaml; do
+  yq -o=json -I=0 '.' "${f}" | jq -r --argjson omitted "${ADOPT_OMITTED_FIELDS}" '
+    . as $d | [ (($omitted[$d.kind] // [])[] | select(. as $x | $d.spec.forProvider | has($x))),
+                (if $d.spec.managementPolicies == ["Observe"] then empty else "managementPolicies" end),
+                (if ($d.spec | has("publishConnectionDetailsTo") or has("providerRef")) then "removed field" else empty end) ]
+    | select(length > 0) | "\($d.kind)/\($d.metadata.name): \(join(","))"'
+done)"
+if [ -z "${bad_obs}" ]; then
+  record PASS "derived Observe-only manifests are Observe-only and omit the create-time fields"
+else
+  record FAIL "derived Observe-only manifests are Observe-only and omit the create-time fields" "$(printf '%s' "${bad_obs}" | head -3 | tr '\n' ';')"
 fi
 
 summarize

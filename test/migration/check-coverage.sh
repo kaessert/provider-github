@@ -20,6 +20,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${HERE}/lib.sh"
 # Offline checks render the fixtures with the sample values, never with values a
 # previous live run discovered.
+# shellcheck disable=SC2034  # read by render and load_runtime_env in lib.sh
 RUNTIME_ENV=/nonexistent
 
 require_tools yq jq git
@@ -128,6 +129,35 @@ if [ -n "${unset_rows}" ]; then
   record FAIL "every coverage row is set by a v1 fixture" "${unset_rows}"
 else
   record PASS "every coverage row is set by a v1 fixture ($(wc -l <"${ROWS}") rows)"
+fi
+
+# coverage table <-> adoption expectations. Every row of the coverage table has at
+# least one row in the adoption expectations (what status.atProvider must report
+# against GitHub, or why nothing can be compared), every expectation names a path of
+# the coverage table (or a top-level setting) and an object of the v1 fixtures.
+EXPECT="${MIGRATION_ADOPT_NESTED_TABLE:-${MIGRATION_DIR}/expect-adopt-nested.tsv}"
+EXPECT_ROWS="${WORK}/expect-rows.tsv"
+grep -v "^#" "${EXPECT}" | grep -v '^[[:space:]]*$' >"${EXPECT_ROWS}"
+no_expectation="$(while IFS=$'\t' read -r kind path _; do
+  awk -F'\t' -v k="${kind}" -v p="${path}" '$1 == k && $3 == p { found = 1 } END { exit !found }' "${EXPECT_ROWS}" || echo "${kind} ${path}"
+done <"${ROWS}")"
+if [ -n "${no_expectation}" ]; then
+  record FAIL "every coverage row has an adoption expectation" "$(printf '%s' "${no_expectation}" | head -5 | tr '\n' ';')"
+else
+  record PASS "every coverage row has an adoption expectation ($(wc -l <"${ROWS}") rows, $(wc -l <"${EXPECT_ROWS}") expectations)"
+fi
+stray="$(while IFS=$'\t' read -r kind mr path _; do
+  case "${path}" in
+    setting:*) ;;
+    *) awk -F'\t' -v k="${kind}" -v p="${path}" '$1 == k && $2 == p { found = 1 } END { exit !found }' "${ROWS}" || echo "${kind} ${path} is not a coverage row" ;;
+  esac
+  [ -n "$(jq -r --arg kind "${kind}" --arg n "${mr}" 'select(.kind == $kind and .metadata.name == $n) | .metadata.name' "${DOCS}")" ] \
+    || echo "${kind}/${mr} is not a v1 fixture"
+done <"${EXPECT_ROWS}")"
+if [ -n "${stray}" ]; then
+  record FAIL "every adoption expectation names a coverage row or a setting, and a v1 fixture object" "$(printf '%s' "${stray}" | head -5 | tr '\n' ';')"
+else
+  record PASS "every adoption expectation names a coverage row or a setting, and a v1 fixture object"
 fi
 
 # Every visibility on OrganizationVariable.

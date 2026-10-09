@@ -12,7 +12,13 @@
 #     timestamps on request;
 #   * the fixture validator rejects an unknown field, a `selected` object without
 #     repositories and a write-capable object that omits a create-time field;
-#   * the coverage checker rejects a missing row and an unsatisfied row;
+#   * the coverage checker rejects a missing row, an unsatisfied row and a coverage
+#     row with no adoption expectation;
+#   * the adoption flow's pure parts: the manifests derived from the v1 fixtures, the
+#     expectation tables (every expression compiles, reads its fixture, and for the
+#     objects the stand-in API holds agrees with it), the verdict of a nested row, the
+#     comparison of two snapshots into changed paths and their classification, and
+#     the write counts read from a provider log;
 #   * the entry point fails fast and names the missing input.
 set -uo pipefail
 
@@ -172,12 +178,172 @@ if [ $? -ne 0 ] && grep -E '^FAIL' <<<"${cov_out}" | grep -q 'every baseline sub
 else
   record FAIL "the coverage checker rejects a sub-object with no row"
 fi
+grep -v 'Team	pgh-mig-team-child	.spec.forProvider.members\[\]' "${HERE}/expect-adopt-nested.tsv" >"${T}/expect-missing.tsv"
+cov_out="$(MIGRATION_ADOPT_NESTED_TABLE="${T}/expect-missing.tsv" MIGRATION_WORKDIR="${T}/cwd" "${HERE}/check-coverage.sh" 2>&1)"
+if [ $? -ne 0 ] && grep -E '^FAIL' <<<"${cov_out}" | grep -q 'every coverage row has an adoption expectation'; then
+  record PASS "the coverage checker rejects a coverage row with no adoption expectation"
+else
+  record FAIL "the coverage checker rejects a coverage row with no adoption expectation"
+fi
 { cat "${HERE}/coverage.tsv"; printf 'Team\t.spec.forProvider.noSuchObject\tnot in any fixture\n'; } >"${T}/cov-unset.tsv"
 cov_out="$(MIGRATION_COVERAGE_TABLE="${T}/cov-unset.tsv" MIGRATION_WORKDIR="${T}/cwd" "${HERE}/check-coverage.sh" 2>&1)"
 if [ $? -ne 0 ] && grep -E '^FAIL' <<<"${cov_out}" | grep -q 'every coverage row is set by a v1 fixture'; then
   record PASS "the coverage checker rejects a row no fixture satisfies"
 else
   record FAIL "the coverage checker rejects a row no fixture satisfies"
+fi
+
+# --- the adoption flow: derivation, expectations, verdicts ----------------------------
+# shellcheck source=adopt-common.sh
+. "${HERE}/adopt-common.sh"
+# shellcheck disable=SC2034  # read by render in lib.sh
+RUNTIME_ENV=/nonexistent
+mkdir -p "${T}/ex"
+for f in "${HERE}"/fixtures/v1/*.yaml; do render "${f}" "${T}/ex/$(basename "${f}")"; done
+fixture_for_provider() { # fixture_for_provider <Kind> <name> -- forProvider of a rendered v1 fixture
+  for f in "${T}"/ex/*.yaml; do yq -o=json -I=0 '.' "${f}"; done \
+    | jq -c --arg k "$1" --arg n "$2" 'select(.kind == $k and .metadata.name == $n) | .spec.forProvider'
+}
+
+# Derivation: the external name comes from the live baseline object, a stale file is replaced.
+printf '[{"kind":"OrganizationWebhook","name":"pgh-mig-hook-wcs","externalName":"694960442"},{"kind":"Team","name":"pgh-mig-team-parent","externalName":""}]' >"${T}/live.json"
+mkdir -p "${T}/derived"
+: >"${T}/derived/stale.yaml"
+derive_adoption observe "${T}/ex" "${T}/live.json" "${T}/derived"
+hook_ext="$(yq '.metadata.annotations["crossplane.io/external-name"]' "${T}/derived"/*-organizationwebhook-pgh-mig-hook-wcs.yaml)"
+team_ext="$(yq '.metadata.annotations["crossplane.io/external-name"]' "${T}/derived"/*-team-pgh-mig-team-parent.yaml)"
+var_ext="$(yq '.metadata.annotations["crossplane.io/external-name"]' "${T}/derived"/*-organizationvariable-pgh-mig-var-all.yaml)"
+if [ "${hook_ext}" = 694960442 ] && [ "${team_ext}" = pgh-mig-team-parent ] && [ "${var_ext}" = PGH_MIG_VAR_ALL ] && [ ! -e "${T}/derived/stale.yaml" ]; then
+  record PASS "a derived manifest takes the live external name, else the fixture's, else the object name; stale files are replaced"
+else
+  record FAIL "a derived manifest takes the live external name, else the fixture's, else the object name; stale files are replaced" "hook ${hook_ext} team ${team_ext} variable ${var_ext}"
+fi
+derive_probe "${T}/derived"
+probe_file="${T}/derived/99-team-${ADOPT_PROBE_NAME}.yaml"
+if [ -f "${probe_file}" ] && [ "$(yq '.spec.forProvider.description' "${probe_file}")" = "${ADOPT_PROBE_DESCRIPTION}" ] \
+  && [ "$(yq '.metadata.annotations["crossplane.io/external-name"]' "${probe_file}")" = pgh-mig-team-parent ] \
+  && [ "$(yq '.spec.managementPolicies[0]' "${probe_file}")" = Observe ]; then
+  record PASS "the drift probe observes the parent team with a description that differs from GitHub's"
+else
+  record FAIL "the drift probe observes the parent team with a description that differs from GitHub's"
+fi
+derive_adoption full "${T}/ex" - "${T}/derived-full"
+if [ "$(yq '.spec.managementPolicies[0]' "${T}/derived-full"/*-organization-pgh-mig-org.yaml)" = '*' ] \
+  && [ "$(yq '.spec.forProvider | has("description")' "${T}/derived-full"/*-organization-pgh-mig-org.yaml)" = true ] \
+  && [ "$(yq '.spec | has("providerRef") or has("publishConnectionDetailsTo")' "${T}/derived-full"/*-organizationvariable-pgh-mig-var-providerref.yaml)" = false ] \
+  && [ "$(yq '.spec.providerConfigRef.name' "${T}/derived-full"/*-organizationvariable-pgh-mig-var-providerref.yaml)" = default ]; then
+  record PASS "a fully managed derivation keeps the v1 forProvider, drops the removed fields and sets the default policies"
+else
+  record FAIL "a fully managed derivation keeps the v1 forProvider, drops the removed fields and sets the default policies"
+fi
+
+# Expectation tables: every expression compiles, reads its fixture, and agrees with the stand-in API.
+bad_compile="" bad_shape="" bad_agree="" compared=0 rows=0
+while IFS=$'\t' read -r kind mr rid _ a s; do
+  [ "${a}" = "-" ] && continue
+  rows=$((rows + 1))
+  for expr in "${a}" "${s}"; do
+    jq -n "${expr}" >/dev/null 2>&1
+    [ $? -ne 3 ] || bad_compile+="${kind}/${mr} ${rid}; "
+  done
+  fixture_for_provider "${kind}" "${mr}" >"${T}/forprovider.json"
+  av="$(eval_expr "${a}" "${T}/forprovider.json")"
+  case "${av}" in null | ERROR | '') bad_shape+="${kind}/${mr} ${rid}; " ;; esac
+  # The stand-in API holds the first repository, the child team, and one variable,
+  # runner group and secret with the fixture's repository lists.
+  case "${kind}/${mr}/${rid}" in
+    Repository/pgh-mig-repo-main/* | */*/.spec.forProvider.selectedRepositories\[\] | Team/pgh-mig-team-child/.spec.forProvider.parent)
+      case "${kind}/${mr}" in OrganizationVariable/pgh-mig-var-all | RunnerGroup/pgh-mig-rg-workflows | DependabotSecretAccess/*) continue ;; esac
+      sv="$(eval_expr "${s}" "${T}/a.json")"
+      compared=$((compared + 1))
+      [ "${av}" = "${sv}" ] || bad_agree+="${kind}/${mr} ${rid} (fixture ${av:0:60}; snapshot ${sv:0:60}); "
+      ;;
+  esac
+done < <(expectation_rows "${HERE}/expect-adopt-nested.tsv")
+[ -z "${bad_compile}" ] && record PASS "every expression of the adoption expectations compiles (${rows} rows)" \
+  || record FAIL "every expression of the adoption expectations compiles" "${bad_compile}"
+[ -z "${bad_shape}" ] && record PASS "every atProvider expression yields a value over the fixture it reads" \
+  || record FAIL "every atProvider expression yields a value over the fixture it reads" "${bad_shape}"
+if [ -z "${bad_agree}" ] && [ "${compared}" -ge 15 ]; then
+  record PASS "the atProvider and snapshot expressions agree on the objects the stand-in API holds (${compared} rows)"
+else
+  record FAIL "the atProvider and snapshot expressions agree on the objects the stand-in API holds" "compared ${compared}: ${bad_agree}"
+fi
+
+# Verdict of a nested row.
+v_ok=1
+[ "$(nested_verdict - observe '["a"]' '["a"]')" = PASS ] || v_ok=0
+[ "$(nested_verdict - observe '["a"]' '["b"]')" = FAIL ] || v_ok=0
+[ "$(nested_verdict - observe '["a"]' null)" = FAIL ] || v_ok=0
+[ "$(nested_verdict visibility observe '[]' '["a"]')" = NOT-MIRRORED ] || v_ok=0
+[ "$(nested_verdict visibility full '[]' '["a"]')" = FAIL ] || v_ok=0
+[ "$(nested_verdict visibility observe '["b"]' '["a"]')" = FAIL ] || v_ok=0
+[ "${v_ok}" -eq 1 ] && record PASS "a nested row passes on equal values, fails on a difference or on nothing to compare, and not-mirrored only for an omitted visibility" \
+  || record FAIL "a nested row passes on equal values, fails on a difference or on nothing to compare, and not-mirrored only for an omitted visibility"
+
+# The request budget check reads GitHub's free rate-limit endpoint and stops a run that would starve.
+budget() { # budget <minimum> -- exit status and message of require_rate_budget against the stand-in API
+  ( export MIGRATION_API_URL="http://127.0.0.1:${PORT}" MIGRATION_GITHUB_TOKEN=selftest MIGRATION_MIN_RATE_BUDGET="$1"
+    require_rate_budget ) 2>&1
+}
+if budget 4000 >/dev/null && ! budget 4500 >"${T}/budget.txt" && grep -q 'only 4200 GitHub requests are left' "${T}/budget.txt" && budget 0 >/dev/null; then
+  record PASS "a scenario refuses to start when the hour's remaining GitHub requests are below the budget, and names the number"
+else
+  record FAIL "a scenario refuses to start when the hour's remaining GitHub requests are below the budget, and names the number" "$(head -2 "${T}/budget.txt" | tr '\n' ';')"
+fi
+
+# Comparing two snapshots into changed paths, and classifying them.
+jq -c '.repos["pgh-mig-repo-main"].settings.description = "x"' "${T}/a.json" >"${T}/c1.json"
+jq -c '.repos["pgh-mig-repo-main"].settings.description = "x" | .repos["pgh-mig-repo-main"]._ts.updated_at = "2027-01-01T00:00:00Z"' "${T}/a.json" >"${T}/c2.json"
+jq -c '.repos["pgh-mig-repo-main"]._ts.updated_at = "2027-01-01T00:00:00Z"' "${T}/a.json" >"${T}/c3.json"
+jq -c '.repos["pgh-mig-repo-main"].settings.description = "x" | .teams["pgh-mig-team-child"].privacy = "secret"' "${T}/a.json" >"${T}/c4.json"
+printf '%s\n' '^repos/pgh-mig-repo-main/settings/description$' >"${T}/allowed.txt"
+snapshot_changed_paths "${T}/a.json" "${T}/c1.json" >"${T}/p1.tsv"
+snapshot_changed_paths "${T}/a.json" "${T}/c2.json" >"${T}/p2.tsv"
+snapshot_changed_paths "${T}/a.json" "${T}/c3.json" >"${T}/p3.tsv"
+snapshot_changed_paths "${T}/a.json" "${T}/c4.json" >"${T}/p4.tsv"
+snapshot_changed_paths "${T}/a.json" "${T}/b.json" >"${T}/p0.tsv"
+if [ "$(cut -f1 "${T}/p1.tsv")" = "repos/pgh-mig-repo-main/settings/description" ] && [ ! -s "${T}/p0.tsv" ] \
+  && [ -z "$(classify_changes "${T}/p1.tsv" "${T}/allowed.txt")" ] \
+  && [ -z "$(classify_changes "${T}/p2.tsv" "${T}/allowed.txt")" ] \
+  && [ "$(classify_changes "${T}/p3.tsv" "${T}/allowed.txt")" = "REWRITE repos/pgh-mig-repo-main/_ts/updated_at" ] \
+  && [ "$(classify_changes "${T}/p4.tsv" "${T}/allowed.txt")" = "UNEXPECTED teams/pgh-mig-team-child/privacy" ]; then
+  record PASS "a change is intended when its path is allowed (with its own timestamp), a rewrite when only a timestamp moved, unexpected otherwise"
+else
+  record FAIL "a change is intended when its path is allowed (with its own timestamp), a rewrite when only a timestamp moved, unexpected otherwise" \
+    "p1=$(cut -f1 "${T}/p1.tsv" | tr '\n' ,) p3=$(classify_changes "${T}/p3.tsv" "${T}/allowed.txt") p4=$(classify_changes "${T}/p4.tsv" "${T}/allowed.txt")"
+fi
+
+# Every change row names a fixture object and an allowed path that contains the required one.
+bad_change=""
+while IFS=$'\t' read -r kind mr patch check allowed required note; do
+  if [ "${patch}" = "-" ]; then
+    [ -n "${note}" ] && [ "${note}" != "-" ] || bad_change+="${kind}/${mr} is waived without a reason; "
+    continue
+  fi
+  [ -n "$(fixture_for_provider "${kind}" "${mr}")" ] || bad_change+="${kind}/${mr} is not a v1 fixture; "
+  jq -e . <<<"${patch}" >/dev/null 2>&1 || bad_change+="${kind}/${mr} patch is not JSON; "
+  jq -n "${check}" >/dev/null 2>&1
+  [ $? -ne 3 ] || bad_change+="${kind}/${mr} check does not compile; "
+  [ -n "${required}" ] && [ -n "${allowed}" ] || bad_change+="${kind}/${mr} has no path; "
+done < <(expectation_rows "${HERE}/expect-adopt-change.tsv")
+[ -z "${bad_change}" ] && record PASS "every deliberate change names a v1 fixture, a JSON patch, a check and the paths it may change" \
+  || record FAIL "every deliberate change names a v1 fixture, a JSON patch, a check and the paths it may change" "${bad_change}"
+
+# Write counts from a provider log (the debug lines of crossplane-runtime).
+cat >"${T}/provider.log" <<'LOG'
+2026-10-09T21:39:20Z	DEBUG	provider-github	Reconciling	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+2026-10-09T21:39:21Z	DEBUG	provider-github	Successfully requested update of external resource	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}, "requeue-after": "x"}
+2026-10-09T21:39:22Z	DEBUG	provider-github	Reconciling	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+2026-10-09T21:39:23Z	DEBUG	provider-github	Successfully requested creation of external resource	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-child"}}
+2026-10-09T21:39:24Z	DEBUG	provider-github	Reconciling	{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+LOG
+counts="$(log_counts "${T}/provider.log" Team pgh-mig-team-parent)"
+none="$(log_counts "${T}/provider.log" Team pgh-mig-absent)"
+if [ "${counts}" = "0 1 2" ] && [ "${none}" = "0 0 0" ]; then
+  record PASS "write counts are read per kind and object from the provider log, with the reconciles as the control"
+else
+  record FAIL "write counts are read per kind and object from the provider log, with the reconciles as the control" "got '${counts}' and '${none}'"
 fi
 
 # --- entry point fails fast and names the input -----------------------------------

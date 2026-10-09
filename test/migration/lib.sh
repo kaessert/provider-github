@@ -23,6 +23,8 @@
 #   MIGRATION_POLL             provider --poll interval [60s]
 #   MIGRATION_SETTLE_POLLS     poll cycles the candidate must run before the
 #                              post-upgrade snapshot is taken [4]
+#   MIGRATION_MIN_RATE_BUDGET  GitHub requests that must be left in the hour for
+#                              the adoption scenario to start, 0 = no check [3500]
 #   MIGRATION_READY_TIMEOUT    seconds to wait for fixtures to become Ready [1500]
 #   MIGRATION_BASELINE_REPO    where the baseline tag is fetched from
 #   MIGRATION_BASELINE_REF     baseline tag [v0.22.0]
@@ -283,6 +285,24 @@ gh_list() {
     [ "${page}" -le 50 ] || die "pagination of ${path} did not end after 50 pages"
   done
   printf '%s' "${out}"
+}
+
+# require_rate_budget -- the long scenarios poll dozens of objects for about an hour
+# and share the installation's 5000 requests an hour with everything else on the
+# test organization. Asking GitHub for the budget is free; refusing to start with
+# less than MIGRATION_MIN_RATE_BUDGET left (0 disables the check) beats failing
+# half way with 403s.
+require_rate_budget() {
+  local min="${MIGRATION_MIN_RATE_BUDGET:-3500}" left reset
+  [ "${min}" -gt 0 ] || return 0
+  local body
+  body="$(gh_get /rate_limit)" || die "cannot read the GitHub rate limit"
+  left="$(printf '%s' "${body}" | jq -r '.resources.core.remaining // 0')"
+  reset="$(printf '%s' "${body}" | jq -r '.resources.core.reset // 0')"
+  if [ "${left}" -lt "${min}" ]; then
+    die "only ${left} GitHub requests are left in this hour (resets at $(date -u -d "@${reset}" +%H:%M:%SZ 2>/dev/null || echo "${reset}")); the scenario needs about ${min}. Wait, or set MIGRATION_MIN_RATE_BUDGET=0 to run anyway"
+  fi
+  log "GitHub request budget: ${left} left (needs ${min})"
 }
 
 # ---------------------------------------------------------------------------
