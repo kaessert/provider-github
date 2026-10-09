@@ -1,0 +1,16 @@
+# kind	managed resource	merge patch	atProvider check (jq over .status.atProvider)	allowed changed paths (regex)	required changed path (regex)	note
+# Step 4 of the adoption flow: one deliberate spec change per kind, applied to the fully
+# managed objects. Each change must reach GitHub (the required path changes) and nothing
+# else may change: every value that differs between the snapshots taken before and after
+# must match the allowed regex of its kind (paths are snapshot keys joined with /; a
+# timestamp under _ts of the changed object itself is allowed, any other timestamp is
+# reported as a rewrite). A row whose patch is - is waived, with the reason in the note.
+Organization	pgh-mig-org	{"spec":{"forProvider":{"description":"pgh-mig organization description (changed)"}}}	.description == "pgh-mig organization description (changed)"	^org/description$	^org/description$	-
+Membership	pgh-mig-membership	-	-	-	-	no deliberate change: role is the only mutable field and changing it would alter a real user's role in the organization
+Team	pgh-mig-team-parent	{"spec":{"forProvider":{"description":"pgh-mig parent team (changed)"}}}	.description == "pgh-mig parent team (changed)"	^teams/pgh-mig-team-parent/description$	^teams/pgh-mig-team-parent/description$	-
+Repository	pgh-mig-repo-main	{"spec":{"forProvider":{"description":"pgh-mig primary repository (changed)"}}}	.description == "pgh-mig primary repository (changed)"	^repos/pgh-mig-repo-main/settings/description$	^repos/pgh-mig-repo-main/settings/description$	-
+OrganizationVariable	pgh-mig-var-all	{"spec":{"forProvider":{"value":"all-value-changed"}}}	.value == "all-value-changed"	^variables/PGH_MIG_VAR_ALL/value$	^variables/PGH_MIG_VAR_ALL/value$	-
+OrganizationWebhook	pgh-mig-hook-plain	{"spec":{"forProvider":{"events":["repository"]}}}	(.events | sort) == ["repository"]	^orgHooks/https://example.com/pgh-mig/org-hook-plain/events/[0-9]+$	^orgHooks/https://example.com/pgh-mig/org-hook-plain/events/	-
+RunnerGroup	pgh-mig-rg-selected	{"spec":{"forProvider":{"selectedRepositories":[{"repo":"pgh-mig-repo-main"},{"repo":"pgh-mig-repo-rules"}]}}}	([.selectedRepositories[]?.repo] | sort) == ["pgh-mig-repo-main","pgh-mig-repo-rules"]	^runnerGroups/pgh-mig-rg-selected/selectedRepositories/[0-9]+/(id|name)$	^runnerGroups/pgh-mig-rg-selected/selectedRepositories/	-
+ActionsSecretAccess	pgh-mig-actions-secret-access	{"spec":{"forProvider":{"selectedRepositories":[{"repo":"pgh-mig-repo-main"},{"repo":"pgh-mig-repo-rules"}]}}}	([.selectedRepositories[]?.repo] | sort) == ["pgh-mig-repo-main","pgh-mig-repo-rules"]	^secrets/actions/PGH_MIG_ACTIONS_SECRET/selectedRepositories/[0-9]+/(id|name)$	^secrets/actions/PGH_MIG_ACTIONS_SECRET/selectedRepositories/	-
+DependabotSecretAccess	pgh-mig-dependabot-secret-access	{"spec":{"forProvider":{"selectedRepositories":[{"repo":"pgh-mig-repo-main"},{"repo":"pgh-mig-repo-rules"}]}}}	([.selectedRepositories[]?.repo] | sort) == ["pgh-mig-repo-main","pgh-mig-repo-rules"]	^secrets/dependabot/PGH_MIG_DEPENDABOT_SECRET/selectedRepositories/[0-9]+/(id|name)$	^secrets/dependabot/PGH_MIG_DEPENDABOT_SECRET/selectedRepositories/	-

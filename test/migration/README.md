@@ -7,11 +7,15 @@ organization:
 1. **In-place upgrade.** Take a cluster running the baseline provider with a full
    set of managed resources, point the Provider at this tree's build. Is anything
    recreated or written?
-2. **Observe-only adoption, cluster-scoped kinds.** Can this tree's cluster-scoped
-   managed resources adopt existing GitHub objects with `managementPolicies:
-   [Observe]`, fill `status.atProvider` from GitHub, and write nothing?
-3. **Observe-only adoption, namespaced kinds.** The same for the namespaced kinds
-   in `organizations.github.m.crossplane.io`.
+2. **Adoption of what the baseline created, cluster-scoped kinds.** The baseline
+   creates every fixture object and is removed, its objects orphaned. Can this
+   tree's cluster-scoped managed resources adopt them with `managementPolicies:
+   [Observe]`, fill `status.atProvider` from GitHub (nested sub-objects included),
+   and write nothing? Can the same objects then be switched to full management
+   with zero writes, and changed once per kind with exactly that change reaching
+   GitHub?
+3. **Observe-only adoption, namespaced kinds.** Objects seeded through the GitHub
+   API are adopted by the namespaced kinds in `organizations.github.m.crossplane.io`.
 
 It is **not part of the end-to-end suite**. No `e2e` target, `UPTEST_MANIFESTS_*`
 variable, CI workflow or file under `examples/` reaches it, and nothing gates on
@@ -52,7 +56,8 @@ default: the first user member found), `MIGRATION_FORK_SOURCE` (public `owner/re
 to fork, default `actions/hello-world-docker-action`, chosen because it carries `.github/workflows/ci.yml`, which the runner-group workflow fixture names), `MIGRATION_WORKDIR` (evidence and scratch,
 default `$TMPDIR/provider-github-migration`), `MIGRATION_POLL` (provider `--poll`,
 default `60s`: at 15s a run exhausted the GitHub App installation's 5000 requests an hour), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
-`MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
+`MIGRATION_MIN_RATE_BUDGET` (GitHub requests that must be left in the hour for `adopt-cluster` to start,
+default `3500`, `0` disables the check), `MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
 baseline), `MIGRATION_REQUIRE_BASELINE_READY=1` (fail rather than warn when a
 fixture is not Ready on the baseline) and `MIGRATION_KEEP_V1_FLAGS=1` (upgrade
 without replacing the baseline's runtime flags, to record what a user who leaves
@@ -81,8 +86,11 @@ managed-resource state, the provider logs and the rendered fixtures.
 | `snapshot.sh` | GitHub state snapshot and diff |
 | `oob.sh` | out-of-band setup, seeding and cleanup through the GitHub API |
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
-| `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share |
-| `expect-adopt-mirror.tsv` | what `status.atProvider` must report for the seeded objects |
+| `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds both adoption flows) |
+| `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures; the evaluation helpers of the expectation tables |
+| `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenario (b)) |
+| `expect-adopt-change.tsv` | the one deliberate change per kind of scenario (b), and what it may change on GitHub |
+| `expect-adopt-mirror.tsv` | what `status.atProvider` must report for the objects seeded through the API (scenario (c)) |
 | `check-separation.sh` | proof the harness is unreachable from the end-to-end suite |
 | `selftest.sh`, `testdata/` | offline tests of the harness against a read-only local stand-in for the GitHub API |
 | `run.sh` | entry point used by the Makefile |
@@ -207,7 +215,7 @@ baseline snapshot before changing anything**. Then, through the GitHub API:
   then), and creates four organization secrets, two Actions and two Dependabot, of
   visibility `selected` (the provider never creates a secret; sealed with
   `test/sealedbox`);
-* **adopt:** seeds one object of every adoptable kind: a repository, a parent and a
+* **adopt** (scenario (c) only; scenario (b) uses the `upgrade` setup, because the baseline provider creates its own objects): seeds one object of every adoptable kind: a repository, a parent and a
   child team (with the member) and a team that will drift, a variable, an organization
   webhook, a runner group and two secrets, and records the webhook's numeric ID.
 
@@ -265,7 +273,71 @@ be back where it started.
    deprecated `spec.providerRef`, the externally published secret, and the objects
    with non-default management policies and `Orphan` deletion.
 
-### (b) `adopt-cluster` and (c) `adopt-namespaced`
+### (b) `adopt-cluster`
+
+The full adoption flow: everything the baseline created is adopted, then fully managed.
+
+1. Build the baseline tag and this tree; the `upgrade` setup (above).
+2. **The baseline creates.** Install the baseline Provider, apply the `v1` fixtures,
+   wait for Synced and Ready, let it run two poll cycles, snapshot GitHub (`v1`) and the
+   managed resources. A fixture that is not Ready on the baseline is not on GitHub: it is
+   reported and left out of the adoption (`MIGRATION_REQUIRE_BASELINE_READY=1` fails
+   instead).
+3. **Orphan.** Give every v1 managed resource `deletionPolicy: Orphan` (the run stops
+   before any delete if one lacks it), delete them, snapshot (`orphaned`): GitHub must be
+   identical to `v1`. Remove the baseline Provider and install the candidate.
+4. **Observe-only adoption.** For every v1 object, one NEW cluster-scoped managed resource
+   is derived from its fixture (`adopt-derive.sh`):
+   * `crossplane.io/external-name` from the live baseline object, which is the object's
+     name for every kind but `Organization` (the login) and `OrganizationWebhook` (the
+     numeric hook ID, set by the baseline when it created the hook). A `RunnerGroup` is
+     found by name; its numeric ID is `status.atProvider.id`;
+   * `managementPolicies: [Observe]`;
+   * the ten create-time fields the candidate lets an Observe-only object omit are left
+     out (Organization `description`, Membership `role`, variable `value` and
+     `visibility`, webhook `url`, `contentType` and `events`, runner group and
+     SecretAccess `visibility`; `validate-fixtures.sh` checks the list against the CEL
+     rules of the candidate CRDs); everything else, nested sub-objects included, is the v1
+     `forProvider`;
+   * the fields the move to crossplane-runtime v2 removes (`publishConnectionDetailsTo`,
+     `providerRef`) are dropped.
+
+   A drift probe is added: a second Observe-only `Team` over the parent team, whose
+   declared description differs from GitHub's. Assert: every object Synced and Ready (the
+   probe Synced and not Ready); UIDs new; `status.atProvider.id` equals the external name
+   (the webhook's is GitHub's hook ID, the runner group's GitHub's group ID);
+   `status.atProvider` against the snapshot for every row of `expect-adopt-nested.tsv`;
+   the provider log shows each object reconciled and no create or update; the GitHub
+   snapshot (`adopted`) is identical to `orphaned`, timestamps included.
+   The observation fills a selected-repositories list only while the spec declares
+   `visibility: selected`, so those four rows are reported as not mirrored here (they are
+   asserted in step 5) rather than as failures.
+5. **Full management.** Apply the v1 `forProvider` of the same objects (the removed fields
+   dropped) under the default management policies. Wait for Synced and Ready, let the
+   provider run `MIGRATION_SETTLE_POLLS` cycles, snapshot (`full`). Assert: GitHub is
+   identical to `adopted` (the switch and the cycles after it wrote nothing), the provider
+   log shows no create or update, the same per-object and per-row checks as in step 4 now
+   with every list mirrored.
+6. **One deliberate change per kind** (`expect-adopt-change.tsv`): a description, a
+   variable value, a webhook event, a repository list. Wait until `status.atProvider`
+   shows it and every object is Synced and Ready again, snapshot (`changed`). Assert: the
+   changed value is on GitHub; every other value that differs between `full` and `changed`
+   is allowed by the row of its kind (nothing else changed; a timestamp that moved on an
+   object whose values did not change is reported as a rewrite); each changed object issued
+   an update and no other object issued a create or an update. `Membership` is the one
+   kind with no deliberate change: its only mutable field is the user's role in the
+   organization.
+7. Cleanup deletes the managed resources (the default policies delete the GitHub objects;
+   the Membership keeps `Orphan`), removes the Provider and sweeps.
+
+`report.md` ends with three tables: per managed resource (phase, Ready, Synced,
+`status.atProvider.id`, external name, whether they agree, creates and updates in the
+provider log and the reconciles that make zero meaningful), per nested sub-object
+(phase, result, the two values when they differ), and per deliberate change. A run takes
+about an hour and polls dozens of objects, which is why it checks the request budget
+first.
+
+### (c) `adopt-namespaced`
 
 1. Build this tree; seed the adoption targets; install the candidate Provider and the
    ProviderConfigs; snapshot GitHub (`seeded`).
@@ -283,9 +355,9 @@ be back where it started.
 
 ## Safety
 
-* `Membership` fixtures use `deletionPolicy: Orphan` (and adoption is Observe-only):
-  deleting a Membership with the default policy removes the user from the
-  organization.
+* `Membership` fixtures use `deletionPolicy: Orphan` (the derived fully managed Membership
+  keeps it, and Observe-only adoption never deletes): deleting a Membership with the
+  default policy removes the user from the organization.
 * The upgrade scenario changes organization-wide settings and restores them from the
   baseline snapshot: the description, and the Actions policy and enabled-repository
   list. A run that is killed before cleanup leaves them changed; `oob.sh sweep`
@@ -317,8 +389,12 @@ directory and the Makefile's `Migration Validation` block refers to it.
 ## Status of this harness
 
 The offline parts (fixture validation, coverage, separation and the self-test) run
-without a cluster or a GitHub call. The scenarios have not been run against the live
-organization yet: the first run may surface GitHub-side validation differences (for
+without a cluster or a GitHub call. They check the manifests `adopt-cluster` derives
+against the candidate CRDs and their CEL rules, and the expectation tables against the
+fixtures and the stand-in API; what GitHub itself reports for a nested sub-object (the
+shape of a branch protection or a ruleset) is known only from a live run, so the first run
+of `adopt-cluster` may fail a row whose expectation is mis-stated rather than the provider.
+The first run of the other scenarios may surface GitHub-side validation differences (for
 example the runner-group workflow restriction, which not every organization plan
 accepts, or branch-protection actor lists) and build details of the baseline tag. Those
 surface as a fixture that never becomes Ready, which the upgrade scenario reports and

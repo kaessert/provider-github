@@ -75,6 +75,8 @@ write_report() {
     echo "| Status | Check | Detail |"
     echo "|---|---|---|"
     awk -F'\t' '{printf "| %s | %s | %s |\n", $1, $2, $3}' "${RESULTS_FILE}"
+    # The adoption flow keeps its per-object and per-sub-object tables beside the results.
+    [ ! -s "${EVIDENCE_DIR}/report-tables.md" ] || cat "${EVIDENCE_DIR}/report-tables.md"
   } >"${EVIDENCE_DIR}/report.md"
 }
 
@@ -111,12 +113,12 @@ assert_snapshots_identical() {
   fi
 }
 
-# settle_pause waits long enough for the running provider to complete a few poll
+# settle_pause [polls] waits long enough for the running provider to complete a few poll
 # cycles, so a change it was going to make has been made before the next snapshot.
 settle_pause() {
-  local seconds
-  seconds=$(($(poll_seconds "${MIGRATION_POLL}") * MIGRATION_SETTLE_POLLS + 15))
-  log "letting the provider run ${MIGRATION_SETTLE_POLLS} poll cycles (${seconds}s)"
+  local polls="${1:-${MIGRATION_SETTLE_POLLS}}" seconds
+  seconds=$(($(poll_seconds "${MIGRATION_POLL}") * polls + 15))
+  log "letting the provider run ${polls} poll cycles (${seconds}s)"
   sleep "${seconds}"
 }
 
