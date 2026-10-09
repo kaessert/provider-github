@@ -51,7 +51,6 @@ spec:
       name: example-cluster-provider-secret
       key: creds
 
----
 # Reference a ClusterProviderConfig from a managed resource (the default when
 # providerConfigRef is omitted is the ClusterProviderConfig named "default"):
 #
