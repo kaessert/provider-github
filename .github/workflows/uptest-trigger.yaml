@@ -233,7 +233,10 @@ jobs:
           # actually enforced. Either way the GitHub secret must exist before
           # this workflow is dispatched, or leaving it unset is the deliberate
           # choice for a simulator-only provider.
-          GH_APP_CREDENTIALS: ${{ secrets.GH_APP_CREDENTIALS }}
+          PROVIDER_GITHUB_E2E_ORG: ${{ secrets.PROVIDER_GITHUB_E2E_ORG }}
+          PROVIDER_GITHUB_E2E_APP_ID: ${{ secrets.PROVIDER_GITHUB_E2E_APP_ID }}
+          PROVIDER_GITHUB_E2E_INSTALLATION_ID: ${{ secrets.PROVIDER_GITHUB_E2E_INSTALLATION_ID }}
+          PROVIDER_GITHUB_E2E_PRIVATE_KEY: ${{ secrets.PROVIDER_GITHUB_E2E_PRIVATE_KEY }}
           UPTEST_INPUT_MANIFESTS: ${{ needs.get-example-list.outputs.example_list }}
         run: |
           make e2e
