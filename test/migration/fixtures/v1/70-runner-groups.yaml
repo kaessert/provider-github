@@ -24,6 +24,6 @@ spec:
     visibility: all
     allowsPublicRepositories: false
     selectedWorkflows:
-      - __ORG__/pgh-mig-repo-main/.github/workflows/ci.yml@refs/heads/main
+      - __ORG__/pgh-mig-repo-fork/.github/workflows/ci.yml@refs/heads/main
   providerConfigRef:
     name: default

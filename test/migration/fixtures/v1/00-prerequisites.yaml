@@ -8,3 +8,11 @@ metadata:
 type: Opaque
 stringData:
   secret: pgh-mig-webhook-signing-value
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pgh-mig-repo-main-conn
+  namespace: crossplane-system
+# The connection-secret type, so the controller may publish into it.
+type: connection.crossplane.io/v1alpha1

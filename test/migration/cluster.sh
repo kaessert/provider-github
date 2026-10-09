@@ -16,6 +16,33 @@
 # shellcheck shell=bash
 
 # shellcheck disable=SC2034  # the scenario drivers use these
+
+# The harness is started by `make validate.migration.*`, and that make exports its
+# whole variable set (OUTPUT_DIR, XPKG_OUTPUT_DIR, ROOT_DIR, tool paths,
+# IMAGE_TEMP_DIR, MAKEFLAGS, ...) to everything it starts. A baseline build that
+# inherits them writes its binary, image and package into the candidate's output
+# directories, and an inherited IMAGE_TEMP_DIR names a directory the first image
+# build already removed. So every make that looks at a tree other than the
+# candidate's runs through clean_make, which keeps only an allowlist of the
+# environment.
+unset IMAGE_TEMP_DIR MAKEFLAGS MFLAGS MAKELEVEL
+
+clean_make() {
+  local v args=()
+  for v in PATH HOME USER LOGNAME LANG LC_ALL TERM TMPDIR XDG_CACHE_HOME XDG_CONFIG_HOME \
+    DOCKER_HOST DOCKER_CONFIG DOCKER_CONTEXT DOCKER_BUILDKIT DOCKER_CERT_PATH DOCKER_TLS_VERIFY \
+    GOPATH GOCACHE GOMODCACHE GOPROXY GOSUMDB GONOSUMDB GONOPROXY GOPRIVATE GOTOOLCHAIN GOENV GOROOT \
+    HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR; do
+    [ -n "${!v+x}" ] && args+=("${v}=${!v}")
+  done
+  env -i "${args[@]}" make "$@"
+}
+
+# The baseline tag pins an `up` CLI whose Docker client is too old for current
+# daemons ("client version 1.41 is too old"); the baseline package is built with
+# a newer one. The candidate does not use `up`.
+MIGRATION_BASELINE_UP_VERSION="${MIGRATION_BASELINE_UP_VERSION:-v0.39.0}"
+
 CROSSPLANE_NS="${CROSSPLANE_NAMESPACE:-crossplane-system}"
 PROVIDER_NAME="provider-github"
 GROUP_CLUSTER="organizations.github.crossplane.io"
@@ -23,15 +50,19 @@ GROUP_NAMESPACED="organizations.github.m.crossplane.io"
 PLURALS="organizations memberships teams repositories organizationvariables organizationwebhooks runnergroups actionssecretaccesses dependabotsecretaccesses"
 # Package digests are labels for the local cache, not content hashes: the two
 # builds must not share one so the package manager sees an upgrade.
-DIGEST_BASELINE="sha256:0000000000000000000000000000000000000000000000000000000000000001"
-DIGEST_CANDIDATE="sha256:0000000000000000000000000000000000000000000000000000000000000002"
+# They differ in their FIRST characters: Crossplane names the package revision and
+# the cached package after the first 12 characters of the digest, so digests that
+# differ only at the end would make the upgrade reuse the baseline's revision and
+# cache entry.
+DIGEST_BASELINE="sha256:1111111111111111111111111111111111111111111111111111111111111111"
+DIGEST_CANDIDATE="sha256:2222222222222222222222222222222222222222222222222222222222222222"
 BASELINE_VERSION_LABEL="${MIGRATION_BASELINE_REF}"
 CANDIDATE_VERSION_LABEL="v0.0.0-migration"
 BASELINE_DIR=""
 
 # make_var <tree> <VAR> -- prints the value make computes for VAR in <tree>.
 make_var() {
-  make -C "$1" -s --no-print-directory --eval="__migration_probe: ; @echo \$($2)" __migration_probe
+  clean_make -C "$1" -s --no-print-directory --eval="__migration_probe: ; @echo \$($2)" __migration_probe
 }
 
 host_arch() {
@@ -91,12 +122,39 @@ fetch_baseline() {
     || die "baseline checkout ${BASELINE_DIR} is at '${described:-no tag}', expected ${MIGRATION_BASELINE_REF}"
 }
 
+# tree_arch <tree> -- the architecture <tree> builds for.
+tree_arch() {
+  local arch
+  arch="$(make_var "$1" ARCH)"
+  [ -n "${arch}" ] || arch="$(host_arch)"
+  printf '%s' "${arch}"
+}
+
+# tree_image <tree> -- the local name the tree's runtime image is kept under.
+# Both trees build to one name (same project, same build registry), so the second
+# build would replace the first; each image is retagged right after its build.
+tree_image() {
+  if [ "$1" = "${BASELINE_DIR}" ]; then
+    printf 'migration.local/%s:baseline' "${PROVIDER_NAME}"
+  else
+    printf 'migration.local/%s:candidate' "${PROVIDER_NAME}"
+  fi
+}
+
 # build_tree <dir> <version> -- builds the provider image and package from <dir>.
 build_tree() {
   local dir="$1" version="$2"
   log "building ${dir} as ${version} (this takes several minutes)"
-  make -C "${dir}" build VERSION="${version}" >"${EVIDENCE_DIR}/build-$(basename "${dir}").log" 2>&1 \
+  # load_package takes the one package found in the output directory, so a
+  # package left by an earlier build must not be there.
+  rm -f "$(make_var "${dir}" XPKG_OUTPUT_DIR)/linux_$(tree_arch "${dir}")/"*.xpkg
+  local extra=()
+  [ "${dir}" = "${BASELINE_DIR}" ] && extra=("UP_VERSION=${MIGRATION_BASELINE_UP_VERSION}")
+  clean_make -C "${dir}" build VERSION="${version}" ${extra[@]+"${extra[@]}"} >"${EVIDENCE_DIR}/build-$(basename "${dir}").log" 2>&1 \
     || { tail -30 "${EVIDENCE_DIR}/build-$(basename "${dir}").log" >&2; die "build of ${dir} failed (full log: ${EVIDENCE_DIR}/build-$(basename "${dir}").log)"; }
+  local built
+  built="$(make_var "${dir}" BUILD_REGISTRY)/${PROVIDER_NAME}-$(tree_arch "${dir}")"
+  docker tag "${built}" "$(tree_image "${dir}")" || die "could not tag ${built} as $(tree_image "${dir}")"
 }
 
 # assert_baseline_crds records whether the baseline checkout's CRDs are the
@@ -142,10 +200,8 @@ cluster_up() {
 # cluster without a registry: image into the kind node, package into the
 # Crossplane package cache.
 load_package() {
-  local tree="$1" label="$2" digest="$3" arch registry xpkg_dir xpkg cache pod friendly
-  arch="$(make_var "${tree}" ARCH)"
-  [ -n "${arch}" ] || arch="$(host_arch)"
-  registry="$(make_var "${tree}" BUILD_REGISTRY)"
+  local tree="$1" label="$2" digest="$3" arch xpkg_dir xpkg cache pod friendly
+  arch="$(tree_arch "${tree}")"
   xpkg_dir="$(make_var "${tree}" XPKG_OUTPUT_DIR)/linux_${arch}"
   xpkg="$(find "${xpkg_dir}" -maxdepth 1 -name '*.xpkg' 2>/dev/null | sort | head -n1)"
   [ -f "${xpkg}" ] || die "no package built under ${xpkg_dir}"
@@ -162,9 +218,9 @@ load_package() {
   pod="$(kc -n "${CROSSPLANE_NS}" get pod -l app=crossplane,patched=true -o jsonpath='{.items[0].metadata.name}')"
   [ -n "${pod}" ] || die "no patched Crossplane pod to copy the package into"
   kc -n "${CROSSPLANE_NS}" cp "${cache}" -c dev "${pod}:/tmp" >/dev/null || die "could not copy the package into ${pod}"
-  "${KIND_BIN}" load docker-image "${registry}/${PROVIDER_NAME}-${arch}" --name "${KIND_CLUSTER_NAME}" >/dev/null \
-    || die "could not load ${registry}/${PROVIDER_NAME}-${arch} into the kind cluster"
-  log "loaded ${label} build (${registry}/${PROVIDER_NAME}-${arch}) into cluster ${KIND_CLUSTER_NAME}"
+  "${KIND_BIN}" load docker-image "$(tree_image "${tree}")" --name "${KIND_CLUSTER_NAME}" >/dev/null \
+    || die "could not load $(tree_image "${tree}") into the kind cluster"
+  log "loaded ${label} build ($(tree_image "${tree}")) into cluster ${KIND_CLUSTER_NAME}"
 }
 
 # apply_runtime_config <label> <image> <args...>
@@ -183,12 +239,9 @@ apply_runtime_config() {
 # install_provider <tree> <label> <digest> <args...> -- creates or updates the
 # Provider so that it runs <tree>'s build with the given runtime arguments.
 install_provider() {
-  local tree="$1" label="$2" digest="$3" arch registry
+  local tree="$1" label="$2" digest="$3"
   shift 3
-  arch="$(make_var "${tree}" ARCH)"
-  [ -n "${arch}" ] || arch="$(host_arch)"
-  registry="$(make_var "${tree}" BUILD_REGISTRY)"
-  apply_runtime_config "${label}" "${registry}/${PROVIDER_NAME}-${arch}" "$@"
+  apply_runtime_config "${label}" "$(tree_image "${tree}")" "$@"
   jq -cn --arg name "${PROVIDER_NAME}" --arg pkg "xpkg.crossplane.internal/dev/${PROVIDER_NAME}@${digest}" \
     --arg drc "runtimeconfig-${PROVIDER_NAME}-${label}" '
     {apiVersion: "pkg.crossplane.io/v1", kind: "Provider", metadata: {name: $name},

@@ -103,7 +103,7 @@ take_snapshot() { # take_snapshot <name> -- snapshots/<name>.json
 
 # assert_snapshots_identical <check name> <snapshot a> <snapshot b> [--ignore-timestamps]
 assert_snapshots_identical() {
-  local name="$1" a="$2" b="$3" mode="${4:-}" out="${EVIDENCE_DIR}/diff-$2-vs-$3.txt"
+  local name="$1" a="$2" b="$3" mode="${4:-}" out="${EVIDENCE_DIR}/diff-$2-vs-$3${4:+-timestamps-ignored}.txt"
   if "${MIGRATION_DIR}/snapshot.sh" diff "${EVIDENCE_DIR}/snapshots/${a}.json" "${EVIDENCE_DIR}/snapshots/${b}.json" ${mode:+"${mode}"} >"${out}" 2>&1; then
     record PASS "${name}"
   else

@@ -132,6 +132,12 @@ spec:
               - context: pgh-mig/ci
   providerConfigRef:
     name: default
+  # A repository with a webhook secret keeps the webhook secrets it applied in
+  # this connection secret and fails to observe without it. The Secret is in
+  # 00-prerequisites.yaml because the controller reads it before it is published.
+  writeConnectionSecretToRef:
+    name: pgh-mig-repo-main-conn
+    namespace: crossplane-system
 ---
 # The ruleset below names the environment pgh-mig-env, which the scenario driver
 # creates through the GitHub API once this repository exists. Until then the

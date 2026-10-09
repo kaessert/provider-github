@@ -124,6 +124,18 @@ else
   record FAIL "a change to an object outside the prefixes is not seen" "$(head -3 "${T}/d5.txt" | tr '\n' ';')"
 fi
 
+# The App can create an environment but not list them: GitHub answers 403. The
+# snapshot records them as unreadable, prints no ERROR line and does not fail.
+touch "${T}/api/repos/pgh-test/pgh-mig-repo-main/environments.json.403"
+if snap "${T}/envs403.json" && ! grep -q 'ERROR' "${T}/snap.err" \
+  && jq -e '.repos["pgh-mig-repo-main"].environments == "unreadable"' "${T}/envs403.json" >/dev/null 2>&1; then
+  record PASS "environments the App may not list (403) are recorded as unreadable, without an ERROR line"
+else
+  record FAIL "environments the App may not list (403) are recorded as unreadable, without an ERROR line" \
+    "$(tail -3 "${T}/snap.err" | tr '\n' ';')"
+fi
+rm -f "${T}/api/repos/pgh-test/pgh-mig-repo-main/environments.json.403"
+
 # --- fixture validator ----------------------------------------------------------
 copy_fixtures() { rm -rf "${T}/fx"; cp -r "${HERE}/fixtures" "${T}/fx"; }
 validate_expect_fail() { # validate_expect_fail <name> <text that must appear>

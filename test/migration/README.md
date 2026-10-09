@@ -49,9 +49,9 @@ The scenarios fail at once, naming the input, when something is missing:
 
 Optional: `MIGRATION_MEMBER` (an existing organization member the fixtures use;
 default: the first user member found), `MIGRATION_FORK_SOURCE` (public `owner/repo`
-to fork, default `octocat/Hello-World`), `MIGRATION_WORKDIR` (evidence and scratch,
+to fork, default `actions/hello-world-docker-action`, chosen because it carries `.github/workflows/ci.yml`, which the runner-group workflow fixture names), `MIGRATION_WORKDIR` (evidence and scratch,
 default `$TMPDIR/provider-github-migration`), `MIGRATION_POLL` (provider `--poll`,
-default `15s`), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
+default `60s`: at 15s a run exhausted the GitHub App installation's 5000 requests an hour), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
 `MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
 baseline), `MIGRATION_REQUIRE_BASELINE_READY=1` (fail rather than warn when a
 fixture is not Ready on the baseline) and `MIGRATION_KEEP_V1_FLAGS=1` (upgrade
@@ -222,7 +222,9 @@ test/migration/snapshot.sh ids out.json
 `dump` issues GET requests only and records, for everything under the prefixes above,
 the numeric ID and every managed setting: repository settings, topics, fork and
 template origin, collaborators, team access, webhooks (GitHub masks the secret, so its
-presence shows), branch protection, rulesets and environments; teams with parent and
+presence shows), branch protection and rulesets; environments are recorded as
+`unreadable` (the App can create an environment but GitHub refuses to list them with
+403, so no environment is compared, and no error is logged); teams with parent and
 members; variables and secrets (metadata only) with their selected repositories;
 organization webhooks; runner groups. It also records the organization's description,
 Actions policy and enabled-repository list, and the member's role. Timestamps are
@@ -289,6 +291,15 @@ be back where it started.
   list. A run that is killed before cleanup leaves them changed; `oob.sh sweep`
   restores them from `$MIGRATION_WORKDIR/baseline.json`, and the next `prepare` removes
   leftover `pgh-mig-` objects but does not restore settings.
+* Let a running scenario finish. Stopping it (`kill`, Ctrl-C of the make
+  target's process group) ends the driver WITHOUT running its cleanup: the GitHub
+  objects stay and the organization settings are not restored. After any stop, run
+  `oob.sh sweep`.
+* The scenarios, a `snapshot.sh dump` and every `make e2e*` run share the
+  installation's 5000 requests per hour on the `pgh-test` organization. A dump reads
+  dozens of objects and a Repository observe is dozens of requests, which is why the
+  default poll is 60s. Do not run two of them at once; once the limit is exhausted
+  (`403 API rate limit of 5000 exceeded`) every call fails until the hour rolls over.
 * Deleting is by prefix. A repository, team, variable, secret, runner group or
   webhook that starts with `pgh-mig-` / `PGH_MIG_` or `https://example.com/pgh-mig`
   in the test organization belongs to this harness.
