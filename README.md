@@ -202,6 +202,58 @@ rather than served from a cluster-wide Secret informer. The provider therefore
 needs `get` on Secrets but does not list or watch them, and its memory use does
 not grow with the number of Secrets in the cluster.
 
+### Drift Detection
+
+Every managed resource, in both API scopes, accepts an optional
+`spec.driftDetection` block next to `spec.forProvider`:
+
+```yaml
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: sample-team
+spec:
+  driftDetection:
+    mode: warn        # enabled (default) | warn | disabled
+  forProvider:
+    description: This is a sample team
+    orgRef:
+      name: pgh-sample-organization
+```
+
+A resource without the block reconciles exactly as before, which is the same as
+`mode: enabled`.
+
+| Mode | Behavior |
+|---|---|
+| `enabled` | Drift between the spec and GitHub is detected and corrected. This is the default. |
+| `warn` | Drift is detected and reported on the `DriftDetected` condition (`reason: Drifted`), and is **not** corrected. Use it to see what actually drifts before deciding what to do about it. |
+| `disabled` | Drift is neither detected nor corrected. The resource is still created, deleted and its connection details published. |
+
+`DriftDetected` is `True` while drift is present and not being corrected, and
+`False` (`reason: InSync`) when `mode: warn` finds none. It reports that drift
+occurred, not which fields differ.
+
+#### Ignoring fields owned elsewhere
+
+`spec.driftDetection.ignore[].paths` names `forProvider` fields that something
+other than Crossplane owns. For such a field the value observed on GitHub is
+carried forward instead of the spec value, both when comparing and when an
+update is sent, so correcting another field does not revert it. Paths use the
+field path notation of Composition patches (`forProvider.description`, or the
+JSON Pointer form `/forProvider/description`); list indices and wildcards are
+rejected, so a whole list is ignored or not.
+
+An ignore path is accepted only if the provider can read the field back from
+`status.atProvider`. Most of this provider's resources publish little or nothing
+under `status.atProvider`, and the provider does not currently populate a
+counterpart for any `forProvider` field, so **every ignore path is rejected
+today**: the resource reports the reason on its `Synced` condition and is not
+reconciled until the path is removed. The organization, `url` and the reference
+fields that address a resource (`org`, `orgRef`, `orgSelector`) can never be
+ignored. `mode: warn` and `mode: disabled` need no ignore paths and work on
+every kind.
+
 ### crossplane-runtime v2: removed features and always-on management policies
 
 The provider is built on crossplane-runtime v2. Compared with earlier releases:

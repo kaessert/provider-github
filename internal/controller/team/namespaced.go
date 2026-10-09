@@ -34,6 +34,7 @@ import (
 	namespacedapis "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/controller/scopebridge"
+	"github.com/crossplane/provider-github/internal/driftdetection"
 	"github.com/crossplane/provider-github/internal/telemetry"
 )
 
@@ -47,10 +48,10 @@ func SetupNamespacedWithTimeout(mgr ctrl.Manager, o controller.Options, metrics 
 	name := managed.ControllerName(namespacedv1alpha1.TeamGroupKind)
 
 	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnector(&namespacedConnector{
+		managed.WithExternalConnector(driftdetection.WrapConnector[resource.Managed](&namespacedConnector{
 			kube:    mgr.GetClient(),
 			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &namespacedapis.ProviderConfigUsage{}),
-			metrics: metrics}),
+			metrics: metrics})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))), //nolint:staticcheck // crossplane-runtime's event.NewAPIRecorder still takes the record.EventRecorder that GetEventRecorderFor returns; the replacement events API is not accepted by it yet.
