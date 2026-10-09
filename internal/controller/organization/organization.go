@@ -155,11 +155,6 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	cr.Status.AtProvider.ID = name
 
-	notUpToDate := managed.ExternalObservation{
-		ResourceExists:   true,
-		ResourceUpToDate: false,
-	}
-
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
 		repos, err := listEnabledReposInOrg(ctx, c.github, name)
@@ -171,7 +166,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		aRepos := getSortedRepoNames(repos)
 
 		if !reflect.DeepEqual(aRepos, crARepos) {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	}
 
@@ -186,7 +181,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				return managed.ExternalObservation{}, err
 			}
 			if !cmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
-				return notUpToDate, nil
+				return drifted(cr), nil
 			}
 		}
 		if cr.Spec.ForProvider.Secrets.DependabotSecrets != nil {
@@ -199,7 +194,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				return managed.ExternalObservation{}, err
 			}
 			if !cmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
-				return notUpToDate, nil
+				return drifted(cr), nil
 			}
 		}
 	}
@@ -208,7 +203,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// policy that writes, an empty description is a declared one.
 	desc := cr.Spec.ForProvider.Description
 	if (desc != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())) && desc != pointer.Deref(org.Description, "") {
-		return notUpToDate, nil
+		return drifted(cr), nil
 	}
 
 	cr.SetConditions(xpv2.Available())
@@ -217,6 +212,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceExists:   true,
 		ResourceUpToDate: true,
 	}, nil
+}
+
+// drifted reports an existing Organization that differs from its spec. Ready is
+// False until a later poll finds it in sync; the update that corrects the drift
+// runs in the meantime.
+func drifted(cr *v1alpha1.Organization) managed.ExternalObservation {
+	cr.SetConditions(xpv2.Unavailable())
+	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {

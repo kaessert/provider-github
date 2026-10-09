@@ -238,8 +238,7 @@ occurred, not which fields differ.
 
 When the provider finds a resource that exists on GitHub but differs from the
 spec, it sets `Ready=False` (`reason: Unavailable`) until a later poll finds it
-in sync. `Organization` and `Repository` do not do this yet: their `Ready` stays
-`True` while drift is corrected. With `mode: enabled` that is about one poll cycle per correction: the
+in sync. With `mode: enabled` that is about one poll cycle per correction: the
 update runs, and the next reconcile sets `Ready=True`. Resources that already
 report their own `Ready=False` reason (for example `SecretNotFound` or
 `VisibilityMismatch` on `ActionsSecretAccess` and `DependabotSecretAccess`) keep
