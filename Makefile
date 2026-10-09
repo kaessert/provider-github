@@ -1,10 +1,34 @@
 # ====================================================================================
 # Setup Project
+
+# Force -mod=readonly into the exported GOFLAGS so no invocation in this
+# Makefile's pipeline (including `go tool` targets, which load the full module
+# graph) can rewrite go.sum. -mod=readonly is the Go default; forcing it changes
+# nothing about a correct environment. The filter-out preserves every unrelated
+# ambient flag.
+export GOFLAGS := -mod=readonly $(filter-out -mod=%,$(GOFLAGS))
 PROJECT_NAME := provider-github
 PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
 
 PLATFORMS ?= linux_amd64 linux_arm64
-GOLANGCILINT_VERSION ?= 2.4.0
+GOLANGCILINT_VERSION ?= 2.12.2
+# VERSION guard: reachability, not just existence, of git tags.
+#
+# build/makelib/common.mk derives VERSION by testing whether any tag exists in
+# the repository at all. A tag that exists but is not an ancestor of HEAD (for
+# example a patch tag on a release branch) makes `git describe --tags` fall back
+# to a bare commit SHA instead of a semver string, and the xpkg is then cached
+# under a name the package manager never looks up.
+#
+# This guard runs BEFORE common.mk is included and tests reachability instead.
+# When a reachable tag is present it sets nothing and common.mk's normal
+# derivation proceeds unchanged.
+ifeq ($(origin VERSION), undefined)
+ifeq ($(shell git describe --tags --abbrev=0 2>/dev/null),)
+VERSION := $(shell echo "v0.0.0-$$(git rev-list HEAD --count)-g$$(git describe --dirty --always)" | sed 's/-/./2' | sed 's/-/./2' | sed 's/-/./2')
+endif
+endif
+
 -include build/makelib/common.mk
 
 # ====================================================================================
