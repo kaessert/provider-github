@@ -125,18 +125,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	cr.Status.AtProvider.ID = name
 
-	notUpToDate := managed.ExternalObservation{
-		ResourceExists:   true,
-		ResourceUpToDate: false,
-	}
-
 	// Archived repos freeze settings, branch protection, rulesets and webhooks on
 	// GitHub; only team access, topics and collaborator removals stay writable. They
 	// reconcile on a separate path so frozen drift can't loop, and the freeze is
 	// surfaced on the CR rather than ignored silently.
 	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
 	if archivedCr != pointer.Deref(repo.Archived, false) {
-		return notUpToDate, nil
+		return drifted(cr), nil
 	}
 	if archivedCr {
 		return c.observeArchived(ctx, cr, repo, name)
@@ -151,7 +146,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
 	if collaborators.hasDrift() {
-		return notUpToDate, nil
+		return drifted(cr), nil
 	}
 
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
@@ -161,7 +156,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if !reflect.DeepEqual(util.SortByKey(ghTToPermission), util.SortByKey(crTToPermission)) {
-		return notUpToDate, nil
+		return drifted(cr), nil
 	}
 
 	if cr.Spec.ForProvider.Webhooks != nil {
@@ -181,7 +176,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 
 		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	}
 
@@ -227,7 +222,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
 		if !cmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
@@ -245,7 +240,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 
 		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	}
 
@@ -260,7 +255,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			continue
 		}
 		if setting.requested != setting.echoed {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	}
 
@@ -270,7 +265,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghTopics := util.SortAndReturn(repo.Topics)
 
 		if !reflect.DeepEqual(crTopics, ghTopics) {
-			return notUpToDate, nil
+			return drifted(cr), nil
 		}
 	}
 
@@ -280,6 +275,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceExists:   true,
 		ResourceUpToDate: true,
 	}, nil
+}
+
+// drifted reports an existing Repository that differs from its spec. Ready is
+// False until a later poll finds it in sync; the update that corrects the drift
+// runs in the meantime.
+func drifted(cr *v1alpha1.Repository) managed.ExternalObservation {
+	cr.SetConditions(xpv2.Unavailable())
+	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
 }
 
 // Condition surfaced when a repo is archived. GitHub makes archived repos
@@ -374,7 +377,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	}
 
 	if len(removable) > 0 || teamsDrift || topicsDrift {
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+		return drifted(cr), nil
 	}
 
 	cr.SetConditions(xpv2.Available())
