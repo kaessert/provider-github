@@ -441,8 +441,13 @@ orphaned, the candidate is installed.
    the sweep) is created by a namespaced object, then adopted by a cluster-scoped one that declares
    another description. Both have full management of the description, neither deletes the team.
    Recorded after `MIGRATION_SETTLE_POLLS` poll cycles: the updates each controller issued, the
-   description on GitHub and in each status. If both controllers wrote, the report says so as a
-   finding. `MIGRATION_BOTH_SCOPES_WRITE=0` skips this step.
+   description on GitHub and in each status. One GitHub object is managed by exactly one managed
+   resource, in exactly one scope; naming it from two scopes is an invalid configuration (Crossplane
+   has never guarded it for two cluster-scoped resources either), so the predicted outcome is that
+   both controllers write and overwrite each other. The step asserts that: both wrote is a PASS, and
+   the numbers are still reported. A run in which only one side wrote (a guard appeared) is a WARN,
+   because it means cross-scope behaviour exists that is not documented; one in which neither wrote
+   is recorded as inconclusive. `MIGRATION_BOTH_SCOPES_WRITE=0` skips this step.
 9. Cleanup deletes the managed resources of both groups, the namespaces and the
    ClusterProviderConfig, removes the Provider and sweeps.
 

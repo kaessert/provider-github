@@ -1016,8 +1016,9 @@ adopt_bothscopes_observe_phase() {
 
 # adopt_bothscopes_write_phase -- guarded: one disposable Team (pgh-mig-both-team, swept with
 # the rest), a harmless field (its description), Orphan on both objects. The namespaced object
-# creates the team; a cluster-scoped object adopts it with a different description. If nothing
-# stops two scopes managing one object, each controller keeps overwriting the other's value.
+# creates the team; a cluster-scoped object adopts it with a different description. Managing one
+# object from two scopes is invalid, so each controller is expected to keep overwriting the other's
+# value; the verdict asserts that.
 # MIGRATION_BOTH_SCOPES_WRITE=0 skips it.
 adopt_bothscopes_write_phase() {
   local dir="${EVIDENCE_DIR}/rendered/both" since nsu clu creates recs ns_synced cl_synced gh_desc ns_desc cl_desc verdict
@@ -1051,8 +1052,11 @@ adopt_bothscopes_write_phase() {
     "namespaced: $(mr_state "${GROUP_NAMESPACED}" | jq -r --arg n "${ADOPT_BOTH_TEAM}" '[.[] | select(.name == $n)][0].syncedMessage // ""' | cut -c1-120); cluster-scoped: $(mr_state "${GROUP_CLUSTER}" | jq -r '[.[] | select(.name == "pgh-mig-cl-both-team")][0].syncedMessage // ""' | cut -c1-120)"
   verdict="$(both_scopes_write_verdict "${nsu}" "${clu}" "${ns_synced}" "${cl_synced}")"
   printf '%s' "${verdict}" >"${EVIDENCE_DIR}/both-write-verdict.txt"
-  case "${verdict}" in
-    "NO GUARD"*) record WARN "both scopes under full management: finding" "${verdict}" ;;
+  # Two scopes naming one object both writing is what the rule predicts; the surprise is a verdict
+  # in which one side did not write.
+  case "$(both_scopes_write_status "${verdict}")" in
+    PASS) record PASS "both scopes under full management: both controllers wrote, as expected for an object managed from two scopes" "${verdict}" ;;
+    WARN) record WARN "both scopes under full management: only one scope wrote, undocumented cross-scope behaviour" "${verdict}" ;;
     *) record INFO "both scopes under full management: verdict" "${verdict}" ;;
   esac
   # Orphan on both: deleting the objects leaves the team for the cleanup sweep.

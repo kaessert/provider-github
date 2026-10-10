@@ -327,12 +327,24 @@ both_scopes_write_verdict() {
   fi
 }
 
+# both_scopes_write_status <write verdict> -- how the report classifies the verdict. One GitHub
+# object is managed by exactly one managed resource in exactly one scope, so two scopes naming it
+# both writing is the predicted outcome (PASS). One side not writing means something kept it from
+# writing: cross-scope behaviour nobody documented (WARN). Anything else is INFO.
+both_scopes_write_status() {
+  case "$1" in
+    "NO GUARD"*) echo PASS ;;
+    "ONE SCOPE WROTE"*) echo WARN ;;
+    *) echo INFO ;;
+  esac
+}
+
 # both_scopes_summary <observe verdict> <write verdict> -- the plain answer to the question
 # whether the provider guards against two scopes managing one object.
 both_scopes_summary() {
   case "$2" in
-    "NO GUARD"*) echo "No. The provider has no guard that stops a cluster-scoped and a namespaced managed resource from managing the same GitHub object at once: the two controllers both wrote to the same team. Adopt into one scope at a time." ;;
-    "ONE SCOPE WROTE"*) echo "Something stopped one scope from writing (see the write verdict above); the Observe-only probe: $1." ;;
+    "NO GUARD"*) echo "No, as documented. One GitHub object is managed by exactly one managed resource in exactly one scope; the provider has no guard that stops a cluster-scoped and a namespaced managed resource from managing the same GitHub object at once, and the two controllers both wrote to the same team, as two cluster-scoped resources naming one object would. Adopt into one scope at a time." ;;
+    "ONE SCOPE WROTE"*) echo "Something stopped one scope from writing, which is not documented behaviour (see the write verdict above); the Observe-only probe: $1." ;;
     "inconclusive"*) echo "Not established: the full-management probe was inconclusive; the Observe-only probe: $1." ;;
     *) echo "Not measured: the full-management probe did not run; the Observe-only probe: ${1:-not measured}." ;;
   esac

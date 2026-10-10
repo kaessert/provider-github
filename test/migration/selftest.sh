@@ -455,9 +455,14 @@ v_ok=1
 [[ "$(both_scopes_write_verdict 0 0 True True)" == "inconclusive"* ]] || v_ok=0
 [[ "$(both_scopes_write_verdict 3 0 True False)" == "ONE SCOPE WROTE: only the namespaced"* ]] || v_ok=0
 [[ "$(both_scopes_write_verdict 0 3 False True)" == "ONE SCOPE WROTE: only the cluster-scoped"* ]] || v_ok=0
-[[ "$(both_scopes_summary x "$(both_scopes_write_verdict 3 2 True True)")" == "No. The provider has no guard"* ]] || v_ok=0
+[[ "$(both_scopes_summary x "$(both_scopes_write_verdict 3 2 True True)")" == "No, as documented."* ]] || v_ok=0
 [[ "$(both_scopes_summary x "$(both_scopes_write_verdict 3 0 True False)")" == "Something stopped"* ]] || v_ok=0
 [[ "$(both_scopes_summary x '')" == "Not measured"* ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 3 2 True True)")" == PASS ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 3 0 True False)")" == WARN ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 3 False True)")" == WARN ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 0 True True)")" == INFO ]] || v_ok=0
+[[ "$(both_scopes_write_status 'a guard: the second scope was refused')" == INFO ]] || v_ok=0
 [ "${v_ok}" -eq 1 ] && record PASS "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured" \
   || record FAIL "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured"
 
