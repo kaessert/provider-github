@@ -174,8 +174,9 @@ func TestObserveMirrorDropsUnqueriedState(t *testing.T) {
 	}
 }
 
-// An archived repository's frozen settings are not read, and so not mirrored;
-// the collaborators and teams it does read are.
+// An archived repository's webhooks, branch protection and rulesets are frozen
+// for writing, not for reading: the mirror replaces what an earlier poll left
+// with what GitHub holds, and the collaborators and teams are mirrored too.
 func TestObserveMirrorsArchivedRepository(t *testing.T) {
 	repos := upToDateRepositories(nil)
 	repos.MockGet = func(context.Context, string, string) (*github.Repository, *github.Response, error) {
@@ -190,8 +191,10 @@ func TestObserveMirrorsArchivedRepository(t *testing.T) {
 	observeMirror(t, cr, repos)
 
 	ap := cr.Status.AtProvider
-	if ap.Webhooks != nil || ap.BranchProtectionRules != nil || ap.RepositoryRules != nil {
-		t.Errorf("atProvider = webhooks %v, branch protection %v, rules %v; want none", ap.Webhooks, ap.BranchProtectionRules, ap.RepositoryRules)
+	if len(ap.Webhooks) != 1 || ap.Webhooks[0].URL != webhook1url ||
+		len(ap.BranchProtectionRules) != 1 || ap.BranchProtectionRules[0].Branch != "main" ||
+		len(ap.RepositoryRules) != 1 || ap.RepositoryRules[0].Name == "stale" {
+		t.Errorf("atProvider = webhooks %v, branch protection %v, rules %v; want what GitHub holds", ap.Webhooks, ap.BranchProtectionRules, ap.RepositoryRules)
 	}
 	wantPerms := v1alpha1.RepositoryPermissionsObservation{
 		Users: []v1alpha1.RepositoryUserObservation{{User: user1, Role: "pull"}},
@@ -202,6 +205,24 @@ func TestObserveMirrorsArchivedRepository(t *testing.T) {
 	}
 	if ap.Archived == nil || !*ap.Archived {
 		t.Errorf("archived = %v, want true", ap.Archived)
+	}
+}
+
+// The same holds for an archived repository: a section the spec does not declare
+// is not queried, so its mirror is dropped.
+func TestObserveMirrorDropsUnqueriedStateWhileArchived(t *testing.T) {
+	cr := repository(withArchived(true))
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+	cr.Spec.ForProvider.RepositoryRules = nil
+	cr.Status.AtProvider.Webhooks = []v1alpha1.RepositoryWebhookObservation{{URL: "stale"}}
+	cr.Status.AtProvider.BranchProtectionRules = []v1alpha1.BranchProtectionRuleObservation{{Branch: "stale"}}
+	cr.Status.AtProvider.RepositoryRules = []v1alpha1.RepositoryRulesetObservation{{Name: "stale"}}
+	observeMirror(t, cr, archivedRepositories())
+
+	ap := cr.Status.AtProvider
+	if ap.Webhooks != nil || ap.BranchProtectionRules != nil || ap.RepositoryRules != nil {
+		t.Errorf("atProvider = webhooks %v, branch protection %v, rules %v; want none", ap.Webhooks, ap.BranchProtectionRules, ap.RepositoryRules)
 	}
 }
 

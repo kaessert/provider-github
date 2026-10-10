@@ -81,6 +81,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if s.GetVisibility() == secretaccess.VisibilitySelected {
 		ghNames, err := secretaccess.ListRepoNames(ctx, c.github.Actions, org, name)
 		if err != nil {
+			if mismatch {
+				// The mismatch needs no list: report it rather than let a failed read hide it.
+				cr.SetConditions(secretaccess.VisibilityMismatch(s.Visibility, visibility))
+				return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
+			}
 			return managed.ExternalObservation{}, err
 		}
 		cr.Status.AtProvider.SelectedRepositories = secretaccess.RepoObservations(ghNames)
