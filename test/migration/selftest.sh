@@ -499,6 +499,95 @@ else
   record FAIL "write counts tell the namespaced controller from the cluster-scoped one over the same object name, whatever the order of the request's fields" "namespaced '${ns_counts}', cluster '${cl_counts}', default '${dflt_counts}'"
 fi
 
+# --- leaving the baseline: the ProviderConfig goes first, every baseline CRD is awaited ----------
+# A stand-in cluster in files. remove_provider takes the CRDs of the baseline package away EXCEPT a
+# kind that still has an instance (a ProviderConfig the Provider is no longer there to release), and
+# the CRD named in STICKY_CRD, which stays whatever happens.
+SIM="${T}/sim"
+sim_reset() { # sim_reset [sticky crd]
+  rm -rf "${SIM}"
+  mkdir -p "${SIM}"
+  baseline_crds >"${SIM}/crds"
+  [ "$(wc -l <"${SIM}/crds")" -ge 12 ] || die "the baseline CRD list is short: $(wc -l <"${SIM}/crds")"
+  echo default >"${SIM}/providerconfigs"
+  : >"${SIM}/order"
+  STICKY_CRD="${1:-}"
+}
+kc() {
+  case "$*" in
+    "delete providerconfigs.github.crossplane.io --all --wait=false")
+      echo delete-providerconfigs >>"${SIM}/order"
+      grep -q running "${SIM}/state" 2>/dev/null && : >"${SIM}/providerconfigs" ;;
+    "get providerconfigs.github.crossplane.io -o name") sed 's|^|providerconfig.github.crossplane.io/|' "${SIM}/providerconfigs" ;;
+    "get crd/"*) grep -qx "${2#crd/}" "${SIM}/crds" ;;
+    *) return 0 ;;
+  esac
+}
+remove_provider() {
+  echo remove-provider >>"${SIM}/order"
+  : >"${SIM}/state"
+  {
+    [ -s "${SIM}/providerconfigs" ] && echo providerconfigs.github.crossplane.io
+    [ -z "${STICKY_CRD}" ] || echo "${STICKY_CRD}"
+  } >"${SIM}/keep"
+  grep -Fx -f "${SIM}/keep" "${SIM}/crds" >"${SIM}/crds.left" || : >"${SIM}/crds.left"
+  mv "${SIM}/crds.left" "${SIM}/crds"
+}
+wait_until() { shift 2; "$@"; } # one try: the stand-in cluster does not change while it waits
+provider_pods_gone() { return 0; }
+run_leave() { ( RESULTS_FILE="${T}/leave.tsv"; : >"${RESULTS_FILE}"; remove_baseline_provider ) >"${T}/leave.out" 2>&1; }
+
+sim_reset
+echo running >"${SIM}/state"
+if run_leave && [ "$(paste -sd, "${SIM}/order")" = "delete-providerconfigs,remove-provider" ] && [ ! -s "${SIM}/crds" ]; then
+  record PASS "leaving the baseline deletes its ProviderConfig before the Provider is removed, and no baseline CRD is left"
+else
+  record FAIL "leaving the baseline deletes its ProviderConfig before the Provider is removed, and no baseline CRD is left" \
+    "order $(paste -sd, "${SIM}/order"), CRDs left: $(tr '\n' ' ' <"${SIM}/crds")"
+fi
+# Control: the stand-in reproduces the defect when the ProviderConfig is still there as the Provider goes.
+sim_reset
+echo running >"${SIM}/state"
+remove_provider
+if [ "$(baseline_crds_left)" = providerconfigs.github.crossplane.io ]; then
+  record PASS "control: a ProviderConfig left behind keeps the CRD of its kind after the Provider is removed (the defect the ordering prevents)"
+else
+  record FAIL "control: a ProviderConfig left behind keeps the CRD of its kind after the Provider is removed" "left: $(baseline_crds_left | tr '\n' ' ')"
+fi
+sim_reset providerconfigusages.github.crossplane.io
+echo running >"${SIM}/state"
+run_leave
+rc=$?
+if [ "${rc}" -ne 0 ] && grep -q '^FAIL.*every CRD of the baseline package is gone.*still present: providerconfigusages.github.crossplane.io' "${T}/leave.tsv" \
+  && ! grep -qi 'kept' "${T}/leave.tsv"; then
+  record PASS "a baseline CRD that stays after the Provider was removed fails the scenario and is named, with no 'kept' path"
+else
+  record FAIL "a baseline CRD that stays after the Provider was removed fails the scenario and is named, with no 'kept' path" "rc ${rc}: $(cat "${T}/leave.tsv")"
+fi
+# (kc, remove_provider, wait_until and provider_pods_gone stay replaced: nothing below calls them.)
+
+# The exclusion rule: only an object the baseline never created (not Synced) is left out of the adoption.
+cat >"${T}/k8s-v1.json" <<'JSON'
+[{"kind":"Team","name":"pgh-mig-team-parent","ready":"True","synced":"True"},
+ {"kind":"Repository","name":"pgh-mig-repo-rules","ready":"False","synced":"True"},
+ {"kind":"OrganizationVariable","name":"pgh-mig-var-policies","ready":"False","synced":"False"},
+ {"kind":"OrganizationVariable","name":"pgh-mig-var-unknown","ready":"Unknown","synced":"Unknown"}]
+JSON
+baseline_excluded "${T}/k8s-v1.json" >"${T}/excluded.txt"
+mkdir -p "${T}/excl"
+for f in team-pgh-mig-team-parent repository-pgh-mig-repo-rules organizationvariable-pgh-mig-var-policies organizationvariable-pgh-mig-var-unknown; do : >"${T}/excl/10-${f}.yaml"; done
+drop_excluded "${T}/excl" "${T}/excluded.txt"
+if [ "$(paste -sd, "${T}/excluded.txt")" = "OrganizationVariable/pgh-mig-var-policies,OrganizationVariable/pgh-mig-var-unknown" ] \
+  && [ "$(ls "${T}/excl" | paste -sd,)" = "10-repository-pgh-mig-repo-rules.yaml,10-team-pgh-mig-team-parent.yaml" ] \
+  && [ "$(baseline_not_ready "${T}/k8s-v1.json")" = "Repository/pgh-mig-repo-rules: Ready=False Synced=True" ] \
+  && [ "$(baseline_state "${T}/k8s-v1.json" Repository pgh-mig-repo-rules)" = "Ready=False Synced=True" ] \
+  && [ "$(baseline_state "${T}/k8s-v1.json" Team pgh-mig-absent)" = "-" ]; then
+  record PASS "only objects that are not Synced on the baseline are excluded; a Synced object that is not Ready is adopted and reported with its baseline state"
+else
+  record FAIL "only objects that are not Synced on the baseline are excluded; a Synced object that is not Ready is adopted and reported with its baseline state" \
+    "excluded: $(paste -sd, "${T}/excluded.txt"); kept: $(ls "${T}/excl" | paste -sd,)"
+fi
+
 # --- entry point fails fast and names the input -----------------------------------
 creds=(PROVIDER_GITHUB_APP_ID=1 PROVIDER_GITHUB_APP_INSTALLATION_ID=2 "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64=$(printf x | base64)")
 out="$(env -i PATH="${PATH}" "${HERE}/run.sh" upgrade 2>&1)"

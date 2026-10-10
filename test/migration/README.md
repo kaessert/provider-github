@@ -292,12 +292,23 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 1. Build the baseline tag and this tree; the `upgrade` setup (above).
 2. **The baseline creates.** Install the baseline Provider, apply the `v1` fixtures,
    wait for Synced and Ready, let it run two poll cycles, snapshot GitHub (`v1`) and the
-   managed resources. A fixture that is not Ready on the baseline is not on GitHub: it is
-   reported and left out of the adoption (`MIGRATION_REQUIRE_BASELINE_READY=1` fails
-   instead).
+   managed resources. A fixture the baseline never created (not Synced, for example a
+   spec the baseline rejects) is reported and left out of the adoption
+   (`MIGRATION_REQUIRE_BASELINE_READY=1` fails instead). A fixture that is Synced but not
+   Ready exists on GitHub: it is adopted like the others and its baseline state is shown in
+   the per-object table, so a fix for the baseline's problem with it is proven on the
+   adopted object.
 3. **Orphan.** Give every v1 managed resource `deletionPolicy: Orphan` (the run stops
    before any delete if one lacks it), delete them, snapshot (`orphaned`): GitHub must be
-   identical to `v1`. Remove the baseline Provider and install the candidate.
+   identical to `v1`. Then leave the baseline the way a user must: delete the baseline's
+   `ProviderConfig` objects (the credentials Secret stays) while its Provider still runs,
+   uninstall the Provider, and wait until every CRD of the baseline package is gone; one
+   that remains fails the run and is named. A `ProviderConfig` left in place when the
+   Provider is uninstalled keeps its in-use finalizer, so the CRD of its kind stays, the old
+   package revision keeps control of it and the next Provider never becomes Healthy
+   (`cannot establish control of object: providerconfigs.github.crossplane.io is already
+   controlled by ProviderRevision ...`). That ordering is a migration note for a user moving
+   from the baseline to another build. Then install the candidate.
 4. **Observe-only adoption.** For every v1 object, one NEW cluster-scoped managed resource
    is derived from its fixture (`adopt-derive.sh`):
    * `crossplane.io/external-name` from the live baseline object, which is the object's
