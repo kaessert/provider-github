@@ -385,6 +385,21 @@ snapshot_changed_paths() {
     | "\($k)\t\($A[$k] | tojson)\t\($B[$k] | tojson)"'
 }
 
+# team_echo_allowed <snapshot after the change> <team slug> <new description, JSON> -- the allowed-path
+# regexes (one per line) for the places GitHub echoes a changed team's description: the PARENT object
+# of a child team wherever the child appears under branch protection
+# (repos/<repo>/branchProtection/<branch>/.../teams/<n>/parent/description). Only a path whose parent
+# is the changed team, and whose value is the one the harness set, is allowed; the description of a
+# team that is not the changed one, a parent echo holding another value, and every other path are not.
+team_echo_allowed() {
+  jq -r --arg slug "$2" --argjson v "$3" '
+    . as $s
+    | [paths | select(length >= 6 and .[0] == "repos" and .[2] == "branchProtection"
+        and .[-1] == "description" and .[-2] == "parent" and .[-4] == "teams" and (.[-3] | type) == "number")]
+    | .[] | select(. as $p | ($s | getpath($p[0:-1] + ["slug"])) == $slug and ($s | getpath($p)) == $v)
+    | map(tostring) | join("/")' "$1" | sed -e 's/[][\.*^$+?(){}|]/\\&/g' -e 's/^/^/' -e 's/$/$/'
+}
+
 # classify_changes <changed-paths file> <allowed-regexes file>
 # Reads the output of snapshot_changed_paths and the allowed path regexes (one
 # per line). Prints UNEXPECTED <path> for a value change no regex allows, and

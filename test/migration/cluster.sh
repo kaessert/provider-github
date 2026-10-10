@@ -441,6 +441,7 @@ mr_state() {
       synced: ([.status.conditions[]? | select(.type == "Synced") | .status][0] // "Unknown"),
       syncedMessage: ([.status.conditions[]? | select(.type == "Synced") | .message][0] // ""),
       readyMessage: ([.status.conditions[]? | select(.type == "Ready") | .message][0] // ""),
+      readyReason: ([.status.conditions[]? | select(.type == "Ready") | .reason][0] // ""),
       deleting: (.metadata.deletionTimestamp != null),
       atProviderId: (.status.atProvider.id // null),
       providerConfigKind: (.spec.providerConfigRef.kind // "ProviderConfig"),
