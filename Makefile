@@ -495,7 +495,7 @@ e2e.actions-secret-access: e2e
 e2e.dependabot-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS)
 e2e.dependabot-secret-access: e2e
 
-# GATED: invites a real GitHub user; the example invites the dedicated test account provider-gh-tester (PROVIDER_GITHUB_TEST_ACCOUNT_* env vars).
+# GATED: invites a real GitHub user; the example invites alexandraklochko, a consenting real user who receives an invitation email per run and must not accept.
 e2e.membership: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_MEMBERSHIP)
 e2e.membership: e2e
 
