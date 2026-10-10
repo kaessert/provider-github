@@ -18,9 +18,12 @@ package organization
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"sync"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
@@ -122,6 +125,10 @@ const (
 	errGetPC           = "cannot get ProviderConfig"
 
 	errNewClient = "cannot create new Service"
+
+	// visibilitySelected is the visibility of an organization secret shared with
+	// a list of repositories.
+	visibilitySelected = "selected"
 )
 
 type external struct {
@@ -176,7 +183,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		cr.Status.AtProvider.Actions.EnabledRepos = enabledRepoObservations(aRepos)
 
 		if !driftcmp.Equal(aRepos, crARepos) {
-			return drifted(cr), nil
+			return drifted(cr, fmt.Sprintf("actions.enabledRepos: GitHub has %v, spec declares %v", aRepos, crARepos)), nil
 		}
 	}
 
@@ -193,7 +200,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			}
 			cr.Status.AtProvider.Secrets.ActionsSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.ActionsSecrets, ghActionsSecretRepos)
 			if !driftcmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
-				return drifted(cr), nil
+				return drifted(cr, "secrets.actionsSecrets selected repository IDs (-spec +GitHub): "+cmp.Diff(crActionsSecretsToConfig, ghActionsSecretsToConfig)), nil
 			}
 		}
 		if cr.Spec.ForProvider.Secrets.DependabotSecrets != nil {
@@ -207,7 +214,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			}
 			cr.Status.AtProvider.Secrets.DependabotSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.DependabotSecrets, ghDependabotSecretRepos)
 			if !driftcmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
-				return drifted(cr), nil
+				return drifted(cr, "secrets.dependabotSecrets selected repository IDs (-spec +GitHub): "+cmp.Diff(crDependabotSecretsToConfig, ghDependabotSecretsToConfig)), nil
 			}
 		}
 	}
@@ -216,7 +223,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// policy that writes, an empty description is a declared one.
 	desc := cr.Spec.ForProvider.Description
 	if (desc != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())) && desc != pointer.Deref(org.Description, "") {
-		return drifted(cr), nil
+		return drifted(cr, fmt.Sprintf("description: GitHub has %q, spec declares %q", pointer.Deref(org.Description, ""), desc)), nil
 	}
 
 	cr.SetConditions(xpv2.Available())
@@ -229,9 +236,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 // drifted reports an existing Organization that differs from its spec. Ready is
 // False until a later poll finds it in sync; the update that corrects the drift
-// runs in the meantime.
-func drifted(cr *v1alpha1.Organization) managed.ExternalObservation {
-	cr.SetConditions(xpv2.Unavailable())
+// runs in the meantime. The Ready condition message names the field that
+// differed and what each side held.
+func drifted(cr *v1alpha1.Organization, why string) managed.ExternalObservation {
+	cr.SetConditions(xpv2.Unavailable().WithMessage("drift: " + why))
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
 }
 
@@ -253,13 +261,24 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 	gh := c.github
-	req := &github.Organization{
-		Description: &cr.Spec.ForProvider.Description,
-	}
 
-	_, _, err := gh.Organizations.Edit(ctx, name, req)
+	// Observe's reads can differ from GitHub's state for a moment after an
+	// earlier write. Every write below is therefore made only after reading
+	// the current state again and finding it different, so a drift that is
+	// already gone costs reads and no write: a write moves the updated_at of
+	// the organization and of the secret it touches even when it changes
+	// nothing.
+	current, _, err := gh.Organizations.Get(ctx, name)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
+	}
+	if current == nil || pointer.Deref(current.Description, "") != cr.Spec.ForProvider.Description {
+		req := &github.Organization{
+			Description: &cr.Spec.ForProvider.Description,
+		}
+		if _, _, err := gh.Organizations.Edit(ctx, name, req); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
 	}
 
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
@@ -271,13 +290,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	secrets := cr.Spec.ForProvider.Secrets
 	if secrets != nil {
 		if secrets.ActionsSecrets != nil {
-			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.ActionsSecrets, &ActionsSecretSetter{gh: gh})
+			err = updateOrgSecrets(ctx, gh, name, secrets.ActionsSecrets, gh.Actions, &ActionsSecretSetter{gh: gh})
 			if err != nil {
 				return managed.ExternalUpdate{}, err
 			}
 		}
 		if secrets.DependabotSecrets != nil {
-			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.DependabotSecrets, &DependabotSecretSetter{gh: gh})
+			err = updateOrgSecrets(ctx, gh, name, secrets.DependabotSecrets, gh.Dependabot, &DependabotSecretSetter{gh: gh})
 			if err != nil {
 				return managed.ExternalUpdate{}, err
 			}
@@ -429,7 +448,7 @@ func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner strin
 		}
 		repoIds := make([]int64, 0)
 		repoNames := make([]string, 0)
-		if ghSecret != nil && ghSecret.Visibility == "selected" {
+		if ghSecret != nil && ghSecret.Visibility == visibilitySelected {
 			opts := &github.ListOptions{PerPage: 100}
 			for {
 				// Check for context timeout in pagination loop
@@ -515,18 +534,24 @@ func (d *DependabotSecretSetter) SetSelectedReposForOrgSecret(ctx context.Contex
 	return nil
 }
 
-func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
+// updateOrgSecrets sets the selected repositories of each declared secret to
+// the declared list. A secret whose selected repositories on GitHub already
+// are that list is left alone.
+func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, secrets []v1alpha1.OrgSecret, getter OrgSecretGetter, setter OrgSecretSetter) error {
+	declared, err := getOrgSecretsMapFromCr(ctx, gh, owner, secrets)
+	if err != nil {
+		return err
+	}
+	current, _, err := getOrgSecretsWithConfig(ctx, getter, owner, secrets)
+	if err != nil {
+		return err
+	}
 	for _, secret := range secrets {
-		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
-		for _, repo := range secret.RepositoryAccessList {
-			ghRepo, _, err := gh.Repositories.Get(ctx, owner, repo.Repo)
-			if err != nil {
-				return err
-			}
-			repoIds = append(repoIds, ghRepo.GetID())
+		if driftcmp.Equal(declared[secret.Name], current[secret.Name]) {
+			continue
 		}
-		err := setter.SetSelectedReposForOrgSecret(ctx, owner, secret.Name, repoIds)
-		if err != nil {
+		// getOrgSecretsMapFromCr sorts; the request carries the declared IDs.
+		if err := setter.SetSelectedReposForOrgSecret(ctx, owner, secret.Name, declared[secret.Name]); err != nil {
 			return err
 		}
 	}
