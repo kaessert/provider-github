@@ -511,8 +511,11 @@ e2e.organization-webhook: e2e
 # deleted. Both scopes manage that one organization, so they run as two sequential
 # passes instead of a comma pair.
 e2e.organization: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION)
+# The namespaced pass gets its own IMAGE_TEMP_DIR: imagelight.mk exports one made
+# by the top-level make, the first pass's img.done deletes it, and a sub-make that
+# inherited it would recreate it as a regular file and fail its image build.
 e2e.organization: e2e
-	@$(MAKE) e2e UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+	@$(MAKE) e2e IMAGE_TEMP_DIR=$$(mktemp -d) UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
 
 e2e.repository: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY)
 e2e.repository: e2e
