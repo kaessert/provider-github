@@ -17,7 +17,8 @@
 # So the harness does not leave this to the race: it waits for the generated default branch, and
 # when v0.22.0 is stuck on the unprotected branch it seeds the protection the fixture declares
 # through the GitHub API (the same kind of out-of-band seeding oob.sh does for the other
-# preconditions) and waits for the object to become Synced. v0.22.0 is a tag and cannot change.
+# preconditions) and waits for the object to become Synced and Ready (a Synced object that was never
+# observed is Ready=False, reason Creating: not settled). v0.22.0 is a tag and cannot change.
 #
 # shellcheck shell=bash
 
@@ -116,16 +117,34 @@ baseline_rule_actors() {
 }
 
 # baseline_protection_state <state.json> <Repository name> -- what v0.22.0 made of the object:
-#   settled      Synced=True
+#   settled      Synced=True and Ready=True
 #   unprotected  Synced=False because the branch has no protection rule (the deadlock)
-#   pending      anything else (not reconciled yet, or failing for another reason)
+#   pending      anything else (not reconciled yet, failing for another reason, or Synced=True
+#                with Ready=False)
+# Synced=True alone proves nothing: an object that was just created and never observed carries it
+# (Ready=False, reason Creating) until its first Observe fails. For a Repository that declares
+# branch protection, Ready=True is only reached once v0.22.0 observed the protection the fixture
+# declares, which also means its Update applied the rest of the settings.
 baseline_protection_state() {
   jq -r --arg n "$2" --arg t "${BASELINE_UNPROTECTED_TEXT}" '
     [.[] | select(.kind == "Repository" and .name == $n)][0] as $o
     | if $o == null then "pending"
-      elif $o.synced == "True" then "settled"
+      elif $o.synced == "True" and $o.ready == "True" then "settled"
       elif ($o.synced == "False" and (($o.syncedMessage // "") | contains($t))) then "unprotected"
       else "pending" end' "$1" 2>/dev/null || echo pending
+}
+
+# baseline_protection_detail <state.json> <Repository name> -- the last Ready/Synced state of the
+# object and the message it carries, for the failure that names it.
+baseline_protection_detail() {
+  jq -r --arg n "$2" '
+    [.[] | select(.kind == "Repository" and .name == $n)][0] as $o
+    | if $o == null then "Repository/\($n): not found in the cluster"
+      else "Repository/\($n): Ready=\($o.ready) Synced=\($o.synced)"
+        + (if ($o.readyReason // "") != "" then " reason=\($o.readyReason)" else "" end)
+        + (if ($o.syncedMessage // "") != "" then " synced: \($o.syncedMessage)" else "" end)
+        + (if ($o.readyMessage // "") != "" then " ready: \($o.readyMessage)" else "" end)
+      end' "$1" 2>/dev/null || echo "Repository/$2: state unreadable"
 }
 
 # ---------------------------------------------------------------------------
@@ -138,7 +157,8 @@ baseline_oob() { "${MIGRATION_DIR}/oob.sh" "$@"; }
 BASELINE_SEEDED=""
 
 # baseline_protection_step <rendered-dir> <group> -- one look at every Repository with declared
-# protection: seeds the ones v0.22.0 is stuck on (once each), returns 0 when all are Synced.
+# protection: seeds the ones v0.22.0 is stuck on (once each), returns 0 when all are settled
+# (Synced and Ready; a seeded object is settled once v0.22.0 has applied the rest of its settings).
 baseline_protection_step() {
   local dir="$1" group="$2" state repo branch s pending=0
   state="$(mktemp)"
@@ -175,9 +195,10 @@ baseline_protection_step() {
 # baseline_settle_protected_repos <rendered-dir> <group> [timeout] -- called once the v1 fixtures
 # are applied. For every Repository that declares branch protection: waits until GitHub has
 # generated its default branch (no commits is a precondition failure, not a provider defect), then
-# waits for v0.22.0 to make it Synced, seeding the protection when it is stuck on an unprotected
-# branch. Returns 1 when an object is still not Synced at the timeout; the caller decides what that
-# means.
+# waits for v0.22.0 to make it Synced and Ready, seeding the protection when it is stuck on an
+# unprotected branch (and waiting for Ready after the seed: the settings are applied by v0.22.0's
+# Update). At the timeout it records a FAIL naming each unsettled object with its last Ready/Synced
+# message and returns 1; the caller ends the run, it does not adopt an unfinished baseline.
 baseline_settle_protected_repos() {
   local dir="$1" group="$2" timeout="${3:-${MIGRATION_SEED_TIMEOUT:-600}}" repo branch rc
   BASELINE_SEEDED=""
@@ -201,9 +222,19 @@ baseline_settle_protected_repos() {
   done < <(baseline_protected_repos "${dir}")
   if wait_until "${timeout}" 10 baseline_protection_step "${dir}" "${group}"; then
     if [ -z "${BASELINE_SEEDED}" ]; then
-      record INFO "the baseline applied the declared branch protection itself" "no out-of-band seeding was needed"
+      record INFO "the baseline applied the declared branch protection itself" "no out-of-band seeding was needed: every such Repository reached Ready=True"
     fi
     return 0
   fi
+  local state detail=""
+  state="$(mktemp)"
+  mr_state "${group}" >"${state}"
+  while IFS=$'\t' read -r repo branch; do
+    [ -n "${repo}" ] || continue
+    [ "$(baseline_protection_state "${state}" "${repo}")" != settled ] || continue
+    detail+="$(baseline_protection_detail "${state}" "${repo}")${BASELINE_SEEDED:+ (seeded:${BASELINE_SEEDED})}; "
+  done < <(baseline_protected_repos "${dir}")
+  rm -f "${state}"
+  record FAIL "the baseline finished every Repository with declared branch protection: Synced and Ready within ${timeout}s" "${detail}"
   return 1
 }

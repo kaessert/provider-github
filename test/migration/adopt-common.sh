@@ -323,8 +323,10 @@ adopt_baseline_phase() {
 
   # GitHub generates the template-based repositories asynchronously and v0.22.0 meets them in the
   # middle: make the Repository fixtures that declare branch protection deterministic (baseline.sh).
-  baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" \
-    || warn "a Repository with declared branch protection is not Synced on the baseline after the wait; the result below decides"
+  baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" || {
+    capture_provider_logs baseline
+    exit 1
+  }
 
   if wait_settled "${GROUP_CLUSTER}" "${MIGRATION_READY_TIMEOUT}"; then
     record PASS "the baseline created every v1 fixture: all Synced and Ready"

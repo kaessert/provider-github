@@ -344,11 +344,17 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    * if v0.22.0 is Synced=False with `branch is not protected`, the harness seeds the
      protection the fixture declares through the GitHub API (`oob.sh seed-protection`: the
      team and user access the rule names, the protection request derived from the fixture's
-     `branchProtectionRules`, the signed-commits switch), once, and waits for Synced=True.
+     `branchProtectionRules`, the signed-commits switch), once, and waits for Ready=True (v0.22.0 then
+     applies the remaining settings in its Update).
      The report says the protection was seeded and why. Retrying a delete and a re-create
      would be the same coin flip;
-   * a Repository that is still not Synced after that is adopted when GitHub holds it
-     (the rule above), and a FAIL when it does not.
+   * a settled baseline means Synced=True and Ready=True: a freshly created object that was
+     never observed is Synced=True with Ready=False (`Creating`) for a moment and is not
+     settled, and "the baseline applied the declared branch protection itself" is reported
+     only for a Repository that reached Ready=True without seeding;
+   * a Repository that is not Synced and Ready at the timeout (`MIGRATION_SEED_TIMEOUT`)
+     ends the run FAIL, naming the object and its last Ready/Synced message, so an
+     unfinished baseline is never adopted.
 
    The same wait and seeding run in scenario (a). The SKIPPED rows of the nested table are
    counted in its result line, and a SKIPPED row of any object other than the allowed

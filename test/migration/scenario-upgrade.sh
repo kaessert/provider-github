@@ -67,9 +67,9 @@ apply_fixtures "${EVIDENCE_DIR}/rendered/v1"
 BACKGROUND_PIDS+=("$!")
 
 # The Repository fixtures that declare branch protection: wait for GitHub to generate their default
-# branch and, when v0.22.0 is stuck on the unprotected branch, seed the declared protection (baseline.sh).
-baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" \
-  || record WARN "a Repository with declared branch protection is not Synced on the baseline" "see the not-Ready list below"
+# branch and, when v0.22.0 is stuck on the unprotected branch, seed the declared protection (baseline.sh);
+# one that is not Synced and Ready at the timeout fails the run.
+baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" || exit 1
 
 if wait_settled "${GROUP_CLUSTER}" "${MIGRATION_READY_TIMEOUT}"; then
   record PASS "every v1 fixture is Synced and Ready on the baseline"
