@@ -91,6 +91,7 @@ managed-resource state, the provider logs and the rendered fixtures.
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
 | `upgrade-compare.sh` | the upgrade scenario's comparisons: which objects the GitHub comparison narrows, the Kubernetes regression check with its re-read, and the attribution of `updated_at` moves |
 | `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds the full adoption flow, `run_adopt_full <cluster\|namespaced>`) |
+| `adopt-unsynced.sh` | which baseline objects are adopted (what GitHub holds, not Synced alone), the one completing update of an object the baseline never finished, and the "GitHub holds none" rows |
 | `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures (both scopes), the reference twins, the cluster-scoped twins and the both-scopes Teams; the evaluation helpers of the expectation tables and the both-scopes verdicts |
 | `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenarios (b) and (c)) |
 | `expect-adopt-change.tsv` | the one deliberate change per kind of scenarios (b) and (c), and what it may change on GitHub |
@@ -305,12 +306,21 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 1. Build the baseline tag and this tree; the `upgrade` setup (above).
 2. **The baseline creates.** Install the baseline Provider, apply the `v1` fixtures,
    wait for Synced and Ready, let it run two poll cycles, snapshot GitHub (`v1`) and the
-   managed resources. A fixture the baseline never created (not Synced, for example a
-   spec the baseline rejects) is reported and left out of the adoption
-   (`MIGRATION_REQUIRE_BASELINE_READY=1` fails instead). A fixture that is Synced but not
-   Ready exists on GitHub: it is adopted like the others and its baseline state is shown in
-   the per-object table, so a fix for the baseline's problem with it is proven on the
-   adopted object.
+   managed resources. What is adopted is decided by what GitHub holds, not by Synced alone
+   (`adopt-unsynced.sh`): a fixture that is not Synced and that the `v1` snapshot does not
+   hold (for example a spec the baseline rejects) was never created; it is reported and left
+   out of the adoption (`MIGRATION_REQUIRE_BASELINE_READY=1` fails instead). A fixture that is
+   Synced but not Ready exists on GitHub: it is adopted like the others and its baseline state
+   is shown in the per-object table, so a fix for the baseline's problem with it is proven on
+   the adopted object. A fixture that is NOT Synced but that the snapshot holds is adopted too,
+   listed with the message the baseline gave (`v1-unsynced-adopted.txt`) and shown with it in
+   the per-object table's "On the baseline" column. `Repository/pgh-mig-repo-main` is the case
+   that matters: the baseline creates the repository, its webhook and its ruleset, then reports
+   Synced=False (`observe failed: branch is not protected`) because the default branch is
+   protected by the ruleset and not by classic branch protection, and the repository holds most
+   of the nested sub-objects, so leaving it out would leave them unevaluated. The key of an
+   object in the snapshot is its external name (a webhook's URL); a webhook the baseline never
+   recorded takes the hook ID GitHub holds.
 3. **Orphan.** Give every v1 managed resource `deletionPolicy: Orphan` (the run stops
    before any delete if one lacks it), delete them, snapshot (`orphaned`): GitHub must be
    identical to `v1`. Then leave the baseline the way a user must: delete the baseline's
@@ -351,7 +361,11 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    (the webhook's is GitHub's hook ID, the runner group's GitHub's group ID);
    `status.atProvider` against the snapshot for every row of `expect-adopt-nested.tsv`;
    the provider log shows each object reconciled and no create or update; the GitHub
-   snapshot (`adopted`) is identical to `orphaned`, timestamps included.
+   snapshot (`adopted`) is identical to `orphaned`, timestamps included. A sub-object that
+   GitHub holds none of on the baseline (the classic branch protection of
+   `pgh-mig-repo-main`), and that `status.atProvider` reports none of either, is "GitHub
+   holds none" (not a mismatch); `status.atProvider` reporting something GitHub lacks is still
+   a failure.
    The observation fills a selected-repositories list only while the spec declares
    `visibility: selected`, so those four rows are reported as not mirrored here (they are
    asserted in step 5) rather than as failures.
@@ -360,7 +374,14 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    provider run `MIGRATION_SETTLE_POLLS` cycles, snapshot (`full`). Assert: GitHub is
    identical to `adopted` (the switch and the cycles after it wrote nothing), the provider
    log shows no create or update, the same per-object and per-row checks as in step 4 now
-   with every list mirrored.
+   with every list mirrored. An object adopted although the baseline did not report it Synced
+   may issue exactly ONE update (INFO, named, attributed to the baseline never finishing it)
+   and no create: the candidate finishes what the baseline could not. That update's writes
+   are left out of the snapshot comparison (the sub-objects the `v1` snapshot held none of,
+   and the repository's `updated_at`; IDs and every other value stay compared) and the
+   sub-objects the manifest declares must exist afterwards, else the row fails. A second
+   update, a create, an update under Observe and the same update of any other object are
+   failures.
 6. **One deliberate change per kind** (`expect-adopt-change.tsv`): a description, a
    variable value, a webhook event, a repository list. Wait until `status.atProvider`
    shows it and every object is Synced and Ready again, snapshot (`changed`). Assert: the

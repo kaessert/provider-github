@@ -7,6 +7,8 @@
 
 # shellcheck source=adopt-derive.sh
 . "${MIGRATION_DIR}/adopt-derive.sh"
+# shellcheck source=adopt-unsynced.sh
+. "${MIGRATION_DIR}/adopt-unsynced.sh"
 
 # ===========================================================================
 # The full adoption flow (scenarios (b) and (c))
@@ -160,12 +162,8 @@ adopt_settled() {
   [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" '[.[] | select(.synced != "True" or (.ready != "True" and .name != $p))] | length')" -eq 0 ]
 }
 
-# baseline_excluded <k8s-v1.json> -- "Kind/name" of the objects the baseline never created on
-# GitHub: not Synced. An object that is Synced but not Ready exists on GitHub (the baseline
-# created it and reports a problem with it) and is adopted like the others.
-baseline_excluded() {
-  jq -r '.[] | select(.synced != "True") | "\(.kind)/\(.name)"' "$1"
-}
+# (baseline_excluded and baseline_unsynced_adopted, which decide what is adopted, are in
+# adopt-unsynced.sh.)
 
 # baseline_not_ready <k8s-v1.json> -- "Kind/name: Ready=.. Synced=.." of the adopted objects
 # the baseline did not report Ready.
@@ -174,10 +172,13 @@ baseline_not_ready() {
 }
 
 # baseline_state <k8s-v1.json> <Kind> <name> -- "Ready=.. Synced=.." the baseline reported for
-# an object, "-" for one that was not a v1 object.
+# an object, "-" for one that was not a v1 object; an object it did not report Synced (adopted
+# because GitHub holds it) carries the message the baseline gave.
 baseline_state() {
   jq -r --arg k "$2" --arg n "$3" '[.[] | select(.kind == $k and .name == $n)][0]
-    | if . == null then "-" else "Ready=\(.ready) Synced=\(.synced)" end' "$1" 2>/dev/null || echo "-"
+    | if . == null then "-"
+      elif .synced == "True" then "Ready=\(.ready) Synced=\(.synced)"
+      else "Ready=\(.ready) Synced=\(.synced), on GitHub: \((if (.syncedMessage // "") != "" then .syncedMessage else (.readyMessage // "") end) | gsub("[\t\n]"; " ") | .[0:120])" end' "$1" 2>/dev/null || echo "-"
 }
 
 # drop_excluded <dir> [list] -- removes the manifests of the objects the baseline never
@@ -203,8 +204,10 @@ run_adopt_full() {
 
   scenario_begin "adopt-${scope}"
   # The evidence directory is reused between runs: start the tables empty.
-  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt "${EVIDENCE_DIR}/changes-echo.tsv"
+  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt "${EVIDENCE_DIR}/changes-echo.tsv" \
+    "${EVIDENCE_DIR}"/snapshots/*-filtered.json
   for t in mr nested change refs both notready; do : >"${EVIDENCE_DIR}/table-${t}.tsv"; done
+  : >"${EVIDENCE_DIR}/v1-unsynced-adopted.txt"
   use_candidate_tools
   require_rate_budget
   fetch_baseline
@@ -294,20 +297,31 @@ adopt_baseline_phase() {
       record FAIL "the baseline created every v1 fixture: all Synced and Ready" "$(head -3 "${EVIDENCE_DIR}/baseline-not-ready.txt" | tr '\n' ';')"
       exit 1
     fi
-    record WARN "some v1 fixtures are not Synced and Ready on the baseline; those that are not Synced were never created, and are left out of the adoption" \
+    record WARN "some v1 fixtures are not Synced and Ready on the baseline; those that are not Synced and that GitHub does not hold were never created, and are left out of the adoption" \
       "$(wc -l <"${EVIDENCE_DIR}/baseline-not-ready.txt") object(s), see baseline-not-ready.txt"
   fi
   # Two cycles are enough for the baseline to finish late initialisation; the zero-write
   # windows of the adoption phases use MIGRATION_SETTLE_POLLS.
   settle_pause 2
   mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-v1.json"
-  baseline_excluded "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-excluded.txt"
+  # What GitHub holds decides what is adopted: an object that is not Synced may still exist there.
+  take_snapshot v1
+  baseline_excluded "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/v1-excluded.txt"
+  baseline_unsynced_adopted "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/v1-unsynced-adopted.txt"
+  baseline_names "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/k8s-v1-names.json"
   baseline_not_ready "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-synced-not-ready.txt"
   if [ -s "${EVIDENCE_DIR}/v1-synced-not-ready.txt" ]; then
     record WARN "v1 objects the baseline created but reports not Ready; they exist on GitHub and are adopted like the others" \
       "$(tr '\n' ';' <"${EVIDENCE_DIR}/v1-synced-not-ready.txt")"
   fi
-  take_snapshot v1
+  if [ -s "${EVIDENCE_DIR}/v1-unsynced-adopted.txt" ]; then
+    record WARN "v1 objects the baseline reports not Synced but that GitHub holds; they are adopted, and under full management each may issue the one update that completes what the baseline could not" \
+      "$(tr '\n' ';' <"${EVIDENCE_DIR}/v1-unsynced-adopted.txt")"
+  fi
+  if [ -s "${EVIDENCE_DIR}/v1-excluded.txt" ]; then
+    record INFO "v1 objects the baseline never created (not Synced, absent from the GitHub snapshot); they are left out of the adoption" \
+      "$(tr '\n' ';' <"${EVIDENCE_DIR}/v1-excluded.txt")"
+  fi
   capture_provider_logs baseline
   # The connection secrets the baseline wrote (the webhook secrets it applied are recorded in
   # them) go when their owners are deleted: keep them, the namespaced objects start from them.
@@ -357,8 +371,8 @@ adopt_observe_phase() {
     record PASS "the candidate provider is Healthy with the cluster CRDs"
   fi
 
-  derive_adoption observe "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/observe" "${ADOPT_SCOPE}"
-  derive_adoption full "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/full" "${ADOPT_SCOPE}"
+  derive_adoption observe "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1-names.json" "${EVIDENCE_DIR}/rendered/observe" "${ADOPT_SCOPE}"
+  derive_adoption full "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1-names.json" "${EVIDENCE_DIR}/rendered/full" "${ADOPT_SCOPE}"
   drop_excluded "${EVIDENCE_DIR}/rendered/observe"
   drop_excluded "${EVIDENCE_DIR}/rendered/full"
   derive_probe "${EVIDENCE_DIR}/rendered/observe"
@@ -384,7 +398,7 @@ adopt_observe_phase() {
   log_findings adopt
   take_snapshot adopted
 
-  assert_snapshots_identical "no write: GitHub is identical before and after Observe-only adoption (IDs, settings, timestamps)" orphaned adopted
+  adopt_assert_zero_write "no write: GitHub is identical before and after Observe-only adoption (IDs, settings, timestamps)" orphaned adopted observe
   adopt_new_objects
   [ "${ADOPT_SCOPE}" != namespaced ] || adopt_check_paths
   adopt_check_state observe
@@ -514,6 +528,10 @@ adopt_check_state() {
     case "${idcheck}" in MISMATCH*) bad_id+="${kind}/${name} id=${id} external-name=${ext}; " ;; esac
     if [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; then
       :
+    elif [ "${phase}" = full ] && adopt_completing "${kind}/${name}" && completing_update_ok "${creates}" "${updates}"; then
+      # The baseline created this object on GitHub and never finished it; the candidate does, once.
+      record INFO "${phase}: ${kind}/${name} issued its one completing update: the baseline never finished it" \
+        "the baseline reported: $(adopt_completing_message "${kind}/${name}" | cut -c1-200)"
     else
       bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
     fi
@@ -615,10 +633,23 @@ adopt_check_nested() {
       av="$(eval_expr "${a}" "${atprov}" ".[\"${kind}/${mr}\"]")"
       sv="$(eval_expr "${s}" "${snap}")"
       verdict="$(nested_verdict "${cond}" "${phase}" "${av}" "${sv}")"
+      if [ "${verdict}" = FAIL ] && nested_none "${kind}" "${mr}" "${rid}" "${atprov}" "${snap}"; then
+        # GitHub holds nothing of this sub-object (the baseline never finished the object), and
+        # status.atProvider reports nothing either: not a mismatch under Observe. Once the one
+        # completing update has run, a sub-object the manifest declares must exist.
+        if [ "${phase}" = full ] && adopt_completing "${kind}/${mr}" \
+          && manifest_declares "$(adopt_file "${EVIDENCE_DIR}/rendered/full" "${kind}" "${mr}")" "${rid}"; then
+          verdict=FAIL
+          detail="GitHub still holds none after the completing update; the manifest declares it"
+        else
+          verdict=EXEMPT
+          detail="GitHub holds none"
+        fi
+      fi
       case "${verdict}" in
         PASS) detail="${av:0:90}" ;;
         NOT-MIRRORED) detail="visibility is not declared, so the list is not mirrored; GitHub holds ${sv:0:80}" ;;
-        *) detail="atProvider ${av:0:100}; GitHub ${sv:0:100}" ;;
+        *) [ -n "${detail}" ] || detail="atProvider ${av:0:100}; GitHub ${sv:0:100}" ;;
       esac
     fi
     case "${verdict}" in
@@ -747,7 +778,7 @@ adopt_full_phase() {
   else
     record FAIL "every object runs under the management policies of its full manifest" "$(printf '%s' "${bad}" | head -3 | tr '\n' ';')"
   fi
-  assert_snapshots_identical "full management with a matching forProvider writes nothing: GitHub is identical from adoption through ${MIGRATION_SETTLE_POLLS} poll cycles (IDs, settings, timestamps)" adopted full
+  adopt_assert_zero_write "full management with a matching forProvider writes nothing: GitHub is identical from adoption through ${MIGRATION_SETTLE_POLLS} poll cycles (IDs, settings, timestamps)" adopted full full
   adopt_check_state full
   adopt_check_nested full
   write_adopt_tables
@@ -963,7 +994,7 @@ twins_decided() {
 adopt_bothscopes_observe_phase() {
   local dir="${EVIDENCE_DIR}/rendered/cluster-twins" since twin kind name total=0 synced=0 degraded=0
   local nready nsynced ncounts cready csynced ccounts cmsg cid nid verdict
-  derive_cluster_twins "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/observe" "${dir}"
+  derive_cluster_twins "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1-names.json" "${EVIDENCE_DIR}/rendered/observe" "${dir}"
   ADOPT_TWIN_COUNT="$(find "${dir}" -name '*.yaml' | wc -l)"
   if [ "${ADOPT_TWIN_COUNT}" -eq 0 ]; then
     record WARN "no cluster-scoped twin could be derived: none of the twinned objects is in the adopted set"
