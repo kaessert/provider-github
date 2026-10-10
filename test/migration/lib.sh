@@ -19,7 +19,8 @@
 #   MIGRATION_ORG              test organization login [pgh-test]
 #   MIGRATION_MEMBER           existing org member the fixtures use [first member found]
 #   MIGRATION_FORK_SOURCE      public owner/repo the fork fixture forks [actions/hello-world-docker-action]
-#   MIGRATION_WORKDIR          evidence + scratch directory [${TMPDIR:-/tmp}/provider-github-migration]
+#   MIGRATION_WORKDIR          evidence + scratch directory [${TMPDIR:-/tmp}/provider-github-migration;
+#                              run.sh gives the offline steps a private mktemp -d directory instead]
 #   MIGRATION_POLL             provider --poll interval [60s]
 #   MIGRATION_SETTLE_POLLS     poll cycles the candidate must run before the
 #                              post-upgrade snapshot is taken [4]
