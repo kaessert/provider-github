@@ -74,37 +74,44 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	cr.Status.AtProvider.Value = v.Value
 	cr.Status.AtProvider.Visibility = ghVisibility
 	cr.Status.AtProvider.SelectedRepositories = nil
+	// Every section is read and mirrored before a difference is reported, so
+	// status.atProvider shows the repositories GitHub gives access to even when
+	// the value or the visibility before them differs.
 	// An omitted visibility, or an omitted value under an Observe-only policy,
 	// is not compared.
 	p := cr.Spec.ForProvider
 	valueDrift := v.Value != p.Value && (p.Value != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies()))
 	visibilityDrift := p.Visibility != "" && ghVisibility != p.Visibility
-	if valueDrift || visibilityDrift {
-		cr.SetConditions(xpv2.Unavailable())
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
-	}
+	drift := valueDrift || visibilityDrift
 
-	if cr.Spec.ForProvider.Visibility == visibilitySelected {
-		resolver := ghclient.NewRepoIDResolver(c.github, org)
-		crIDs, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
+	// The list exists on GitHub's side while GitHub's visibility is selected,
+	// whatever the spec says.
+	if ghVisibility == visibilitySelected {
 		ghRepos, err := listSelectedRepos(ctx, c.github, org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		ghIDs := make([]int64, 0, len(ghRepos))
-		for _, r := range ghRepos {
-			ghIDs = append(ghIDs, r.GetID())
-		}
 		cr.Status.AtProvider.SelectedRepositories = repoObservations(ghRepos)
-		ghclient.SortInt64(crIDs)
-		ghclient.SortInt64(ghIDs)
-		if !slices.Equal(crIDs, ghIDs) {
-			cr.SetConditions(xpv2.Unavailable())
-			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+
+		if !drift && p.Visibility == visibilitySelected {
+			resolver := ghclient.NewRepoIDResolver(c.github, org)
+			crIDs, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(p.SelectedRepositories))
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			ghIDs := make([]int64, 0, len(ghRepos))
+			for _, r := range ghRepos {
+				ghIDs = append(ghIDs, r.GetID())
+			}
+			ghclient.SortInt64(crIDs)
+			ghclient.SortInt64(ghIDs)
+			drift = !slices.Equal(crIDs, ghIDs)
 		}
+	}
+
+	if drift {
+		cr.SetConditions(xpv2.Unavailable())
+		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
 	cr.SetConditions(xpv2.Available())

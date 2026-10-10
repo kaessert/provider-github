@@ -34,8 +34,14 @@ func TestObserveStatusSetsAtProviderID(t *testing.T) {
 	e := &external{github: &ghclient.Client{Services: &ghclient.Services{
 		Repositories: &fake.MockRepositoriesClient{
 			MockGet: func(context.Context, string, string) (*github.Repository, *github.Response, error) {
-				// The archived flag differs, so Observe returns right after the read.
+				// The archived flag differs, so the repository is out of date.
 				return &github.Repository{Name: github.Ptr("widgets"), Archived: github.Ptr(true)}, fake.GenerateEmptyResponse(), nil
+			},
+			MockListCollaborators: func(context.Context, string, string, *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+				return nil, fake.GenerateEmptyResponse(), nil
+			},
+			MockListTeams: func(context.Context, string, string, *github.ListOptions) ([]*github.Team, *github.Response, error) {
+				return nil, fake.GenerateEmptyResponse(), nil
 			},
 		},
 	}}}

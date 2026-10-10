@@ -49,7 +49,7 @@ func TestObserveMirrorsDependabotSecretAccess(t *testing.T) {
 	}
 }
 
-// The repository list is read, and so mirrored, only while the spec asks for
+// The repository list is read, and so mirrored, only while GitHub reports
 // the selected visibility; a list mirrored earlier is not kept.
 func TestObserveMirrorDropsRepositoriesWhenNotSelected(t *testing.T) {
 	e := newExternal(&fake.MockDependabotClient{

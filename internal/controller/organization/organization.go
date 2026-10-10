@@ -171,6 +171,17 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	cr.Status.AtProvider.Actions.EnabledRepos = nil
 	cr.Status.AtProvider.Secrets = nil
 
+	// Every section is read and mirrored before a difference is reported, so
+	// status.atProvider shows what GitHub holds for the sections after the first
+	// one that differs. drift keeps the first difference, which is the message
+	// Ready carries.
+	var drift string
+	differs := func(why string) {
+		if drift == "" {
+			drift = why
+		}
+	}
+
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
 		repos, err := listEnabledReposInOrg(ctx, c.github, name)
@@ -183,38 +194,30 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		cr.Status.AtProvider.Actions.EnabledRepos = enabledRepoObservations(aRepos)
 
 		if !driftcmp.Equal(aRepos, crARepos) {
-			return drifted(cr, fmt.Sprintf("actions.enabledRepos: GitHub has %v, spec declares %v", aRepos, crARepos)), nil
+			differs(fmt.Sprintf("actions.enabledRepos: GitHub has %v, spec declares %v", aRepos, crARepos))
 		}
 	}
 
 	if cr.Spec.ForProvider.Secrets != nil {
 		cr.Status.AtProvider.Secrets = &v1alpha1.SecretConfigurationObservation{}
 		if cr.Spec.ForProvider.Secrets.ActionsSecrets != nil {
-			crActionsSecretsToConfig, err := getOrgSecretsMapFromCr(ctx, c.github, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
+			observed, why, isDrift, err := c.observeOrgSecrets(ctx, name, cr.Spec.ForProvider.Secrets.ActionsSecrets, c.github.Actions, drift != "")
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
-			ghActionsSecretsToConfig, ghActionsSecretRepos, err := getOrgSecretsWithConfig(ctx, c.github.Actions, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
-			if err != nil {
-				return managed.ExternalObservation{}, err
-			}
-			cr.Status.AtProvider.Secrets.ActionsSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.ActionsSecrets, ghActionsSecretRepos)
-			if !driftcmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
-				return drifted(cr, "secrets.actionsSecrets selected repository IDs (-spec +GitHub): "+cmp.Diff(crActionsSecretsToConfig, ghActionsSecretsToConfig)), nil
+			cr.Status.AtProvider.Secrets.ActionsSecrets = observed
+			if isDrift {
+				differs("secrets.actionsSecrets selected repository IDs (-spec +GitHub): " + why)
 			}
 		}
 		if cr.Spec.ForProvider.Secrets.DependabotSecrets != nil {
-			crDependabotSecretsToConfig, err := getOrgSecretsMapFromCr(ctx, c.github, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
+			observed, why, isDrift, err := c.observeOrgSecrets(ctx, name, cr.Spec.ForProvider.Secrets.DependabotSecrets, c.github.Dependabot, drift != "")
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
-			ghDependabotSecretsToConfig, ghDependabotSecretRepos, err := getOrgSecretsWithConfig(ctx, c.github.Dependabot, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
-			if err != nil {
-				return managed.ExternalObservation{}, err
-			}
-			cr.Status.AtProvider.Secrets.DependabotSecrets = orgSecretObservations(cr.Spec.ForProvider.Secrets.DependabotSecrets, ghDependabotSecretRepos)
-			if !driftcmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
-				return drifted(cr, "secrets.dependabotSecrets selected repository IDs (-spec +GitHub): "+cmp.Diff(crDependabotSecretsToConfig, ghDependabotSecretsToConfig)), nil
+			cr.Status.AtProvider.Secrets.DependabotSecrets = observed
+			if isDrift {
+				differs("secrets.dependabotSecrets selected repository IDs (-spec +GitHub): " + why)
 			}
 		}
 	}
@@ -223,7 +226,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// policy that writes, an empty description is a declared one.
 	desc := cr.Spec.ForProvider.Description
 	if (desc != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())) && desc != pointer.Deref(org.Description, "") {
-		return drifted(cr, fmt.Sprintf("description: GitHub has %q, spec declares %q", pointer.Deref(org.Description, ""), desc)), nil
+		differs(fmt.Sprintf("description: GitHub has %q, spec declares %q", pointer.Deref(org.Description, ""), desc))
+	}
+
+	if drift != "" {
+		return drifted(cr, drift), nil
 	}
 
 	cr.SetConditions(xpv2.Available())
@@ -232,6 +239,30 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceExists:   true,
 		ResourceUpToDate: true,
 	}, nil
+}
+
+// observeOrgSecrets reads the repositories GitHub gives each declared secret
+// access to and returns them as the mirror. When the declared lists are not
+// already known to differ (known is false), it also resolves the declared
+// repositories to IDs and reports whether they differ from GitHub's, with the
+// diff of the two.
+func (c *external) observeOrgSecrets(ctx context.Context, org string, declared []v1alpha1.OrgSecret, getter OrgSecretGetter, known bool) (observed []v1alpha1.OrgSecretObservation, diff string, differs bool, err error) {
+	gh, repos, err := getOrgSecretsWithConfig(ctx, getter, org, declared)
+	if err != nil {
+		return nil, "", false, err
+	}
+	observed = orgSecretObservations(declared, repos)
+	if known {
+		return observed, "", false, nil
+	}
+	spec, err := getOrgSecretsMapFromCr(ctx, c.github, org, declared)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if driftcmp.Equal(spec, gh) {
+		return observed, "", false, nil
+	}
+	return observed, cmp.Diff(spec, gh), true, nil
 }
 
 // drifted reports an existing Organization that differs from its spec. Ready is

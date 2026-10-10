@@ -73,22 +73,26 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	cr.Status.AtProvider.Visibility = s.GetVisibility()
 	cr.Status.AtProvider.SelectedRepositories = nil
 
+	// The list exists on GitHub's side while GitHub's visibility is selected,
+	// whatever the spec says; it is read and mirrored before any difference is
+	// reported.
 	// An omitted visibility (an Observe-only import) is not compared.
-	if visibility != "" && s.Visibility != visibility {
-		cr.SetConditions(secretaccess.VisibilityMismatch(s.Visibility, visibility))
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
-	}
-
-	if visibility == secretaccess.VisibilitySelected {
+	mismatch := visibility != "" && s.Visibility != visibility
+	if s.GetVisibility() == secretaccess.VisibilitySelected {
 		ghNames, err := secretaccess.ListRepoNames(ctx, c.github.Actions, org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 		cr.Status.AtProvider.SelectedRepositories = secretaccess.RepoObservations(ghNames)
-		if !secretaccess.SameRepos(cr.Spec.ForProvider.SelectedRepositories, ghNames) {
+		if !mismatch && visibility == secretaccess.VisibilitySelected && !secretaccess.SameRepos(cr.Spec.ForProvider.SelectedRepositories, ghNames) {
 			cr.SetConditions(xpv2.Unavailable())
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
+	}
+
+	if mismatch {
+		cr.SetConditions(secretaccess.VisibilityMismatch(s.Visibility, visibility))
+		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
 
 	cr.SetConditions(xpv2.Available())

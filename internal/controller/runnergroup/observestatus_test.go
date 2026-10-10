@@ -89,12 +89,14 @@ func TestObserveStatusDriftSetsUnavailable(t *testing.T) {
 }
 
 // An Observe-only import omits visibility: it is not compared, whatever
-// visibility the group has, and the repository access list is not read.
+// visibility the group has. The repositories with access are mirrored when
+// GitHub's visibility is selected.
 func TestObserveStatusOmittedVisibilityNoDrift(t *testing.T) {
 	for _, ghVisibility := range []string{"all", "private", "selected"} {
 		t.Run(ghVisibility, func(t *testing.T) {
 			actions := &fake.MockActionsClient{
-				MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) { g.Visibility = github.Ptr(ghVisibility) })),
+				MockListOrganizationRunnerGroups:    listGroups(ghGroup(func(g *github.RunnerGroup) { g.Visibility = github.Ptr(ghVisibility) })),
+				MockListRepositoryAccessRunnerGroup: namedRepoAccess(testRepoA),
 			}
 			e := newExternal(actions, nil)
 

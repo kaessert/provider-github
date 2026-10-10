@@ -26,6 +26,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
+	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 )
 
@@ -64,14 +65,14 @@ func TestObserveStatusRepoDriftSetsUnavailable(t *testing.T) {
 }
 
 // An Observe-only import omits visibility: nothing is compared, so no
-// mismatch is reported whatever visibility GitHub has, and the repository
-// list is not read.
+// mismatch is reported whatever visibility GitHub has. The repositories with
+// access are mirrored when GitHub's visibility is selected.
 func TestObserveStatusOmittedVisibilityNoMismatch(t *testing.T) {
 	for _, ghVisibility := range []string{visibilityAll, visibilityPrivate, visibilitySelected} {
 		t.Run(ghVisibility, func(t *testing.T) {
 			e := newExternal(&fake.MockDependabotClient{
 				MockGetOrgSecret:                  getSecret(ghVisibility),
-				MockListSelectedReposForOrgSecret: listMustNotBeCalled(t),
+				MockListSelectedReposForOrgSecret: listRepos(testRepoA),
 			}, nil)
 
 			cr := newCR("")
@@ -86,6 +87,13 @@ func TestObserveStatusOmittedVisibilityNoMismatch(t *testing.T) {
 			assertReady(t, cr, corev1.ConditionTrue, xpv2.ReasonAvailable)
 			if cr.Status.AtProvider.ID == "" {
 				t.Error("atProvider.id is empty, want the external name")
+			}
+			var wantRepos []v1alpha1.SecretSelectedRepoObservation
+			if ghVisibility == visibilitySelected {
+				wantRepos = []v1alpha1.SecretSelectedRepoObservation{{Repo: testRepoA}}
+			}
+			if diff := cmp.Diff(wantRepos, cr.Status.AtProvider.SelectedRepositories); diff != "" {
+				t.Errorf("selectedRepositories: -want, +got:\n%s", diff)
 			}
 		})
 	}
