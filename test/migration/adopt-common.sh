@@ -7,8 +7,6 @@
 
 # shellcheck source=adopt-derive.sh
 . "${MIGRATION_DIR}/adopt-derive.sh"
-# shellcheck source=adopt-org.sh
-. "${MIGRATION_DIR}/adopt-org.sh"
 
 # ===========================================================================
 # The full adoption flow (scenarios (b) and (c))
@@ -154,14 +152,12 @@ remove_baseline_provider() {
 
 # adopt_settled <group> <count> -- <count> adopted objects, each Synced and Ready; the
 # drift probe, when present, only Synced (it is Ready=False by design). The helper objects
-# of the namespaced scope (ADOPT_AUX_RE) are not counted. An Organization that the external writer
-# reset to its baseline (adopt-org.sh) is settled too: nothing in the cluster brings it back to Ready.
+# of the namespaced scope (ADOPT_AUX_RE) are not counted.
 adopt_settled() {
   local state
   state="$(mr_state "$1")"
   [ "$(printf '%s' "${state}" | jq --arg a "${ADOPT_AUX_RE}" '[.[] | select(.name | test($a) | not)] | length')" -eq "$2" ] || return 1
-  [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" --arg sig "${ORG_RESET_PREFIX}" "${ORG_RESET_JQ}"'
-    [.[] | select((.synced != "True" or (.ready != "True" and .name != $p)) and (orgreset($sig) | not))] | length')" -eq 0 ]
+  [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" '[.[] | select(.synced != "True" or (.ready != "True" and .name != $p))] | length')" -eq 0 ]
 }
 
 # baseline_excluded <k8s-v1.json> -- "Kind/name" of the objects the baseline never created on
@@ -207,8 +203,7 @@ run_adopt_full() {
 
   scenario_begin "adopt-${scope}"
   # The evidence directory is reused between runs: start the tables empty.
-  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt "${EVIDENCE_DIR}/org-samples.log" \
-    "${EVIDENCE_DIR}"/snapshots/*-org-filtered.json "${EVIDENCE_DIR}/changes-echo.tsv"
+  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt "${EVIDENCE_DIR}/changes-echo.tsv"
   for t in mr nested change refs both notready; do : >"${EVIDENCE_DIR}/table-${t}.tsv"; done
   use_candidate_tools
   require_rate_budget
@@ -221,7 +216,6 @@ run_adopt_full() {
   # the Actions policy `selected` and the organization secrets the SecretAccess kinds manage.
   "${MIGRATION_DIR}/oob.sh" prepare upgrade || die "out-of-band setup failed"
   load_runtime_env
-  org_baseline_load
   render_fixtures "${FIXTURES_DIR}/v1" "${EVIDENCE_DIR}/rendered/v1"
 
   cluster_up
@@ -350,8 +344,6 @@ adopt_orphan_phase() {
 adopt_observe_phase() {
   local since crd_scope=cluster
   [ "${ADOPT_SCOPE}" = namespaced ] && crd_scope=all
-  # The organization is sampled from here to the end of the scenario (adopt-org.sh).
-  org_sampler_start
   install_provider "${MIGRATION_CANDIDATE_DIR}" v2 "${DIGEST_CANDIDATE}" --debug "--poll=${MIGRATION_POLL}"
   mapfile -t crds < <(cluster_crds "${crd_scope}")
   wait_provider "${DIGEST_CANDIDATE}" "${crds[@]}"
@@ -377,7 +369,6 @@ adopt_observe_phase() {
 
   log "applying ${ADOPT_COUNT} Observe-only adoption manifests (and the drift probe)"
   since="$(now_utc)"
-  ADOPT_WINDOW_SINCE="${since}"
   apply_fixtures "${EVIDENCE_DIR}/rendered/observe"
   if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${ADOPT_GROUP}" "${ADOPT_COUNT}"; then
     record PASS "every adopted object is Synced and Ready (the drift probe is Synced)"
@@ -393,7 +384,7 @@ adopt_observe_phase() {
   log_findings adopt
   take_snapshot adopted
 
-  adopt_assert_zero_write "no write: GitHub is identical before and after Observe-only adoption (IDs, settings, timestamps)" orphaned adopted observe
+  assert_snapshots_identical "no write: GitHub is identical before and after Observe-only adoption (IDs, settings, timestamps)" orphaned adopted
   adopt_new_objects
   [ "${ADOPT_SCOPE}" != namespaced ] || adopt_check_paths
   adopt_check_state observe
@@ -494,7 +485,7 @@ adopt_new_objects() {
 # managed resource in the per-object table; PASS or FAIL for the aggregate checks.
 adopt_check_state() {
   local phase="$1" state snap log kind name path ready synced id ext rmsg idcheck gid counts creates updates recs p total_p bad_p
-  local bad_state="" bad_id="" bad_writes="" bad_idle="" total=0 sample resets=0 att unatt badtimes
+  local bad_state="" bad_id="" bad_writes="" bad_idle="" total=0
   state="${EVIDENCE_DIR}/k8s-${phase}.json"
   log="${EVIDENCE_DIR}/window-${phase}.log"
   snap="${EVIDENCE_DIR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
@@ -517,26 +508,12 @@ adopt_check_state() {
     read -r creates updates recs <<<"${counts}"
     if [ "${ready}" = True ] && [ "${synced}" = True ]; then
       :
-    elif org_reset_match "${kind}" "${ready}" "${synced}" "${rmsg}" && sample="$(org_reset_sample "${ADOPT_WINDOW_SINCE}")"; then
-      # The external writer put the organization back to its baseline: the provider reports the drift.
-      resets=$((resets + 1))
-      record WARN "${phase}: ${kind}/${name} is Ready=False because the organization was reset to its baseline by something outside the cluster" \
-        "${rmsg:0:160}; a sample shows the baseline values: ${sample}"
     else
       bad_state+="${kind}/${name} Ready=${ready} Synced=${synced}${rmsg:+ (${rmsg:0:100})}; "
     fi
     case "${idcheck}" in MISMATCH*) bad_id+="${kind}/${name} id=${id} external-name=${ext}; " ;; esac
     if [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; then
       :
-    elif [ "${kind}" = Organization ] && [ "${phase}" = full ] && [ "${creates}" -eq 0 ]; then
-      # Under full management the provider corrects the reset; an update no sample of the previous
-      # poll explains is a write of its own.
-      read -r att unatt badtimes <<<"$(org_attribute_updates "${log}" "${name}")"
-      if [ "${unatt}" -eq 0 ]; then
-        record INFO "${phase}: ${kind}/${name} issued ${att} update(s), each after a sample that shows the organization at its baseline: the provider corrected the external reset"
-      else
-        bad_writes+="${kind}/${name} updated ${updates}, ${unatt} with no sample of the previous poll at the baseline values (${badtimes}); "
-      fi
     else
       bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
     fi
@@ -546,7 +523,7 @@ adopt_check_state() {
   done < <(jq -r '.[] | [.kind, .name, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end), ((.readyMessage // "") | gsub("[\t\n]"; " "))] | @tsv' "${state}")
 
   if [ -z "${bad_state}" ] && [ "${total}" -gt 0 ]; then
-    record PASS "${phase}: every managed resource is Synced=True and Ready=True (${total} objects$([ "${resets}" -eq 0 ] || echo ", ${resets} of them reported as the external reset of the organization above"))"
+    record PASS "${phase}: every managed resource is Synced=True and Ready=True (${total} objects)"
   else
     record FAIL "${phase}: every managed resource is Synced=True and Ready=True" "${bad_state:-no managed resource found}"
   fi
@@ -576,14 +553,6 @@ adopt_check_state() {
   else
     record FAIL "${phase}: no managed resource issued a create or an update (provider debug log)" "${bad_writes}"
   fi
-}
-
-# adopt_org_is_reset <state.json> <name> -- the Organization is in the state org_reset_match describes.
-adopt_org_is_reset() {
-  local ready synced rmsg
-  IFS=$'\t' read -r ready synced rmsg < <(jq -r --arg n "$2" '[.[] | select(.kind == "Organization" and .name == $n)][0]
-    | [.ready, .synced, ((.readyMessage // "") | gsub("[\t\n]"; " "))] | @tsv' "$1")
-  org_reset_match Organization "${ready}" "${synced}" "${rmsg}"
 }
 
 # adopt_note_not_ready <phase> <state.json> -- one row in table-notready.tsv for every object that is
@@ -642,10 +611,6 @@ adopt_check_nested() {
     elif ! jq -e --arg k "${kind}/${mr}" 'has($k)' "${atprov}" >/dev/null 2>&1; then
       verdict=SKIPPED
       detail="not adopted: the object was not Ready on the baseline"
-    elif [ "${kind}" = Organization ] && [[ "${rid}" == .spec.forProvider.secrets* ]] && adopt_org_is_reset "${state}" "${mr}"; then
-      # The drift of the reset organization is reported before the controller reads the secrets.
-      verdict=SKIPPED
-      detail="the organization reports the external reset of its enabled repositories; the controller returns before it observes the secrets"
     else
       av="$(eval_expr "${a}" "${atprov}" ".[\"${kind}/${mr}\"]")"
       sv="$(eval_expr "${s}" "${snap}")"
@@ -758,7 +723,6 @@ adopt_full_phase() {
   local since bad f
   log "switching the adopted objects to full management"
   since="$(now_utc)"
-  ADOPT_WINDOW_SINCE="${since}"
   apply_fixtures "${EVIDENCE_DIR}/rendered/full"
   if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${ADOPT_GROUP}" "${ADOPT_COUNT}"; then
     record PASS "every object is Synced and Ready under full management"
@@ -783,7 +747,7 @@ adopt_full_phase() {
   else
     record FAIL "every object runs under the management policies of its full manifest" "$(printf '%s' "${bad}" | head -3 | tr '\n' ';')"
   fi
-  adopt_assert_zero_write "full management with a matching forProvider writes nothing: GitHub is identical from adoption through ${MIGRATION_SETTLE_POLLS} poll cycles (IDs, settings, timestamps)" adopted full full
+  assert_snapshots_identical "full management with a matching forProvider writes nothing: GitHub is identical from adoption through ${MIGRATION_SETTLE_POLLS} poll cycles (IDs, settings, timestamps)" adopted full
   adopt_check_state full
   adopt_check_nested full
   write_adopt_tables
@@ -805,7 +769,6 @@ adopt_changes_reflected() {
 adopt_change_phase() {
   local kind mr patch check allowed required note since applied=0 waived="" skipped="" counts creates updates recs
   local nsargs=() changed_kinds=" " reflected on_github bad_unexpected bad_rewrite bad_other bad_unchanged_writes="" lacking_update="" slug value
-  local other_ready other_synced other_name other_kind other_msg reset_orgs=""
   : >"${EVIDENCE_DIR}/changes-applied.tsv"
   : >"${EVIDENCE_DIR}/changes-allowed.txt"
   : >"${EVIDENCE_DIR}/changes-echo.tsv"
@@ -895,17 +858,9 @@ adopt_change_phase() {
     record FAIL "no object that was not changed issued a create or an update" "${bad_unchanged_writes}"
   fi
   adopt_note_not_ready change "${EVIDENCE_DIR}/k8s-change.json"
-  bad_other=""
-  while IFS=$'\t' read -r other_kind other_name other_ready other_synced other_msg; do
-    if org_reset_match "${other_kind}" "${other_ready}" "${other_synced}" "${other_msg}" && org_reset_sample "${since}" >/dev/null; then
-      reset_orgs+="${other_kind}/${other_name}: $(org_reset_sample "${since}"); "
-    else
-      bad_other+="${other_kind}/${other_name} Ready=${other_ready} Synced=${other_synced}${other_msg:+ (${other_msg:0:100})}; "
-    fi
-  done < <(jq -r '.[] | select(.synced != "True" or .ready != "True")
-    | [.kind, .name, .ready, .synced, ((.readyMessage // "") | gsub("[\t\n]"; " "))] | @tsv' "${EVIDENCE_DIR}/k8s-change.json")
-  [ -z "${reset_orgs}" ] || record WARN "change: the organization was reset to its baseline by something outside the cluster when the state was read (Ready=False, drift of the baseline's enabled repositories)" "${reset_orgs}"
-  [ -z "${bad_other}" ] || record FAIL "every object is Synced and Ready after the changes settled" "${bad_other:0:400}"
+  bad_other="$(jq -r '.[] | select(.synced != "True" or .ready != "True")
+    | "\(.kind)/\(.name) Ready=\(.ready) Synced=\(.synced)\(if (.readyMessage // "") != "" then " (\(.readyMessage[0:100] | gsub("[\t\n]"; " ")))" else "" end)"' "${EVIDENCE_DIR}/k8s-change.json" | head -3 | tr '\n' ';')"
+  [ -z "${bad_other}" ] || record FAIL "every object is Synced and Ready after the changes settled" "${bad_other}"
   write_adopt_tables
 }
 

@@ -28,9 +28,6 @@
 #   MIGRATION_BOTH_SCOPES_WRITE  0 = skip the step of adopt-namespaced that puts one
 #                              Team under full management of a cluster-scoped and a
 #                              namespaced object at once [1]
-#   MIGRATION_ORG_SAMPLE_INTERVAL  seconds between the samples of the organization's description
-#                              and Actions-enabled repositories the adoption scenarios take [a
-#                              third of MIGRATION_POLL]
 #   MIGRATION_READY_TIMEOUT    seconds to wait for fixtures to become Ready [1500]
 #   MIGRATION_BASELINE_REPO    where the baseline tag is fetched from
 #   MIGRATION_BASELINE_REF     baseline tag [v0.22.0]
