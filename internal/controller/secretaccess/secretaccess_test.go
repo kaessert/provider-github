@@ -154,15 +154,16 @@ func TestSameRepos(t *testing.T) {
 		ghNames []string
 		want    bool
 	}{
-		"BothEmpty":         {reason: "Nothing on either side is equal.", spec: nil, ghNames: nil, want: true},
-		"SameOrder":         {reason: "Identical lists match.", spec: specRepos("a", "b"), ghNames: []string{"a", "b"}, want: true},
-		"DifferentOrder":    {reason: "Order is ignored.", spec: specRepos("a", "b"), ghNames: []string{"b", "a"}, want: true},
-		"DifferentCase":     {reason: "Case is ignored.", spec: specRepos("Repo-A"), ghNames: []string{"repo-a"}, want: true},
-		"SpecDuplicates":    {reason: "Spec duplicates collapse, so they are not drift.", spec: specRepos("a", "A", "b"), ghNames: []string{"a", "b"}, want: true},
-		"SpecHasExtra":      {reason: "A repository missing on GitHub is drift.", spec: specRepos("a", "b"), ghNames: []string{"a"}, want: false},
-		"GitHubHasExtra":    {reason: "A repository only on GitHub is drift.", spec: specRepos("a"), ghNames: []string{"a", "b"}, want: false},
-		"DifferentNames":    {reason: "Same length, different members.", spec: specRepos("a"), ghNames: []string{"b"}, want: false},
-		"EmptySpecNonEmpty": {reason: "Empty spec against a populated list is drift.", spec: nil, ghNames: []string{"a"}, want: false},
+		"BothEmpty":           {reason: "Nothing on either side is equal.", spec: nil, ghNames: nil, want: true},
+		"SameOrder":           {reason: "Identical lists match.", spec: specRepos("a", "b"), ghNames: []string{"a", "b"}, want: true},
+		"DifferentOrder":      {reason: "Order is ignored.", spec: specRepos("a", "b"), ghNames: []string{"b", "a"}, want: true},
+		"DifferentCase":       {reason: "Case is ignored.", spec: specRepos("Repo-A"), ghNames: []string{"repo-a"}, want: true},
+		"GitHubCanonicalCase": {reason: "GitHub reports the canonical spelling while the spec is lower case; that is not drift.", spec: specRepos("repo-a"), ghNames: []string{"Repo-A"}, want: true},
+		"SpecDuplicates":      {reason: "Spec duplicates collapse, so they are not drift.", spec: specRepos("a", "A", "b"), ghNames: []string{"a", "b"}, want: true},
+		"SpecHasExtra":        {reason: "A repository missing on GitHub is drift.", spec: specRepos("a", "b"), ghNames: []string{"a"}, want: false},
+		"GitHubHasExtra":      {reason: "A repository only on GitHub is drift.", spec: specRepos("a"), ghNames: []string{"a", "b"}, want: false},
+		"DifferentNames":      {reason: "Same length, different members.", spec: specRepos("a"), ghNames: []string{"b"}, want: false},
+		"EmptySpecNonEmpty":   {reason: "Empty spec against a populated list is drift.", spec: nil, ghNames: []string{"a"}, want: false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
