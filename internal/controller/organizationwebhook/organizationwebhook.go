@@ -111,7 +111,11 @@ func mirrorHook(ap *v1alpha1.OrganizationWebhookObservation, h *github.Hook, org
 	ap.Org = org
 	ap.URL = h.Config.GetURL()
 	ap.ContentType = h.Config.GetContentType()
+	// An empty answer is an empty list, not an absent one.
 	ap.Events = slices.Sorted(slices.Values(h.Events))
+	if ap.Events == nil {
+		ap.Events = []string{}
+	}
 	ap.Active = nil
 	if h.Active != nil {
 		active := h.GetActive()

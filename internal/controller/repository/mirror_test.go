@@ -320,3 +320,17 @@ func TestRuleHashIsStable(t *testing.T) {
 		})
 	}
 }
+
+// A repository GitHub reports with no topics mirrors an empty list, not an
+// absent one.
+func TestMirrorRepositoryNoTopicsIsEmptyList(t *testing.T) {
+	for name, topics := range map[string][]string{"Nil": nil, "Empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			ap := v1alpha1.RepositoryObservation{Topics: []string{topic1}}
+			mirrorRepository(&ap, &github.Repository{Topics: topics}, "acme")
+			if ap.Topics == nil || len(ap.Topics) != 0 {
+				t.Errorf("topics = %#v, want a non-nil empty list", ap.Topics)
+			}
+		})
+	}
+}

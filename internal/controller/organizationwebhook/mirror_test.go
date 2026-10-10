@@ -56,3 +56,16 @@ func TestObserveMirrorsHook(t *testing.T) {
 		t.Errorf("atProvider: -want, +got:\n%s", diff)
 	}
 }
+
+// A hook GitHub reports with no events mirrors an empty list, not an absent one.
+func TestMirrorHookNoEventsIsEmptyList(t *testing.T) {
+	for name, events := range map[string][]string{"Nil": nil, "Empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			ap := v1alpha1.OrganizationWebhookObservation{Events: []string{"push"}}
+			mirrorHook(&ap, ghHook(func(h *github.Hook) { h.Events = events }), testOrg)
+			if ap.Events == nil || len(ap.Events) != 0 {
+				t.Errorf("events = %#v, want a non-nil empty list", ap.Events)
+			}
+		})
+	}
+}

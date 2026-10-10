@@ -51,7 +51,11 @@ func mirrorRepository(ap *v1alpha1.RepositoryObservation, repo *github.Repositor
 	ap.Archived = clone(repo.Archived)
 	ap.Private = clone(repo.Private)
 	ap.IsTemplate = clone(repo.IsTemplate)
+	// An empty answer is an empty list, not an absent one.
 	ap.Topics = slices.Sorted(slices.Values(repo.Topics))
+	if ap.Topics == nil {
+		ap.Topics = []string{}
+	}
 	ap.DefaultBranch = clone(repo.DefaultBranch)
 	ap.AllowMergeCommit = clone(repo.AllowMergeCommit)
 	ap.AllowSquashMerge = clone(repo.AllowSquashMerge)

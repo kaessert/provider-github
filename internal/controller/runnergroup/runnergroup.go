@@ -196,7 +196,8 @@ func mirrorGroup(ap *v1alpha1.RunnerGroupObservation, g *github.RunnerGroup, org
 	} else {
 		ap.AllowsPublicRepositories = nil
 	}
-	ap.SelectedWorkflows = nil
+	// An empty answer is an empty list, not an absent one.
+	ap.SelectedWorkflows = make([]v1alpha1.WorkflowRefObservation, 0, len(g.SelectedWorkflows))
 	for _, w := range g.SelectedWorkflows {
 		ap.SelectedWorkflows = append(ap.SelectedWorkflows, v1alpha1.WorkflowRefObservation(w))
 	}
