@@ -43,7 +43,7 @@ REQLOG="${T}/requests.log"
 python3 "${HERE}/testdata/mockapi.py" "${T}/api" "${REQLOG}" >"${T}/port" 2>"${T}/mock.err" &
 MOCK_PID=$!
 trap 'kill "${MOCK_PID}" 2>/dev/null' EXIT
-for _ in $(seq 1 50); do [ -s "${T}/port" ] && break; sleep 0.1; done
+for _ in $(seq 1 300); do [ -s "${T}/port" ] && break; sleep 0.1; done
 PORT="$(cat "${T}/port")"
 [ -n "${PORT}" ] || die "the stand-in API did not start: $(cat "${T}/mock.err")"
 
@@ -775,6 +775,301 @@ else
   record FAIL "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing" \
     "$(ls "${UP_DIR}" "${UP_DIR}/snapshots" | tr '\n' ' ') $(cat "${UP_DIR}/results.tsv" 2>/dev/null | head -c 200)"
 fi
+
+# --- the reruns of the cluster-scoped adoption: what the first full run showed ----------------------
+# A directory of its own for the evidence these cases read and write; the run's is restored afterwards.
+# scenario.sh (assert_snapshots_identical) sources lib.sh again, which resets the run's state: keep it.
+saved_evidence="${EVIDENCE_DIR}"; saved_results="${RESULTS_FILE}"; saved_scenario="${SCENARIO}"
+# shellcheck source=scenario.sh
+. "${HERE}/scenario.sh"
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"; SCENARIO="${saved_scenario}"
+# shellcheck disable=SC2034  # read by render in lib.sh
+RUNTIME_ENV=/nonexistent
+rec() { local r="${RESULTS_FILE}"; RESULTS_FILE="${saved_results}"; record "$@"; RESULTS_FILE="${r}"; } # the verdicts go to the run's results
+RR="${T}/rerun"
+rm -rf "${RR}"
+mkdir -p "${RR}/snapshots"
+EVIDENCE_DIR="${RR}"; RESULTS_FILE="${RR}/results.tsv"; : >"${RESULTS_FILE}"
+
+# The connection secrets the baseline wrote come back for the objects that name one, in both scopes.
+cat >"${RR}/baseline-conn-secrets.json" <<'JSON'
+[{"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"secret":"YXBwbGllZA=="},"metadata":{"name":"pgh-mig-hook-wcs-conn"}},
+ {"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"secret":"cmVwbw=="},"metadata":{"name":"pgh-mig-repo-main-conn"}},
+ {"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"x":"eA=="},"metadata":{"name":"pgh-mig-unrelated-conn"}}]
+JSON
+KCLOG="${RR}/applied.jsonl"
+kc() { # records what is applied: one JSON document per line
+  case "$1" in
+    apply) yq -o=json -I=0 '.' >>"${KCLOG}" ;;
+    *) return 0 ;;
+  esac
+}
+restored() { # restored -- "<namespace>/<name>:<data keys>" of everything applied, sorted
+  jq -r '"\(.metadata.namespace)/\(.metadata.name):\((.data // {}) | keys | join(","))"' "${KCLOG}" 2>/dev/null | sort | paste -sd' '
+}
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${T}/derived" 2>/dev/null
+cluster_restored="$(restored)"
+: >"${KCLOG}"
+adopt_restore_conn_secrets namespaced "${T}/ns-observe" 2>/dev/null
+ns_restored="$(restored)"
+if [ "${cluster_restored}" = "crossplane-system/pgh-mig-hook-wcs-conn:secret crossplane-system/pgh-mig-repo-main-conn:secret" ]; then
+  rec PASS "cluster scope: the baseline's connection secrets named by the Observe manifests are applied into the namespace the manifests name, and no others (a secret the baseline never wrote is not invented)"
+else
+  rec FAIL "cluster scope: the baseline's connection secrets named by the Observe manifests are applied into the namespace the manifests name, and no others" "got: ${cluster_restored}"
+fi
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${T}/derived" 2>/dev/null
+cluster_data="$(jq -r 'select(.metadata.name == "pgh-mig-hook-wcs-conn") | .data.secret' "${KCLOG}")"
+if [ "${cluster_data}" = "YXBwbGllZA==" ] \
+  && [ "${ns_restored}" = "pgh-mig-ns-a/pgh-mig-repo-main-conn:secret pgh-mig-ns-b/pgh-mig-hook-ess-wcs-conn: pgh-mig-ns-b/pgh-mig-hook-wcs-conn:secret" ]; then
+  rec PASS "namespaced scope: the baseline's connection secrets go into the namespace of the object that names them, with their data; one the baseline never wrote is created empty"
+else
+  rec FAIL "namespaced scope: the baseline's connection secrets go into the namespace of the object that names them, with their data; one the baseline never wrote is created empty" "cluster data ${cluster_data}; namespaced: ${ns_restored}"
+fi
+mkdir -p "${RR}/noconn"
+cp "${T}/derived"/*-team-pgh-mig-team-parent.yaml "${RR}/noconn/"
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${RR}/noconn" 2>/dev/null
+adopt_restore_conn_secrets namespaced "${RR}/noconn" 2>/dev/null
+if [ ! -s "${KCLOG}" ]; then
+  rec PASS "a manifest without writeConnectionSecretToRef restores nothing, in either scope"
+else
+  rec FAIL "a manifest without writeConnectionSecretToRef restores nothing, in either scope" "applied: $(restored)"
+fi
+
+# The Ready message of every object that is not Ready, with the reason, is in the report.
+cat >"${RR}/k8s-observe.json" <<'JSON'
+[{"kind":"Organization","name":"pgh-mig-org","namespace":"","providerConfigKind":"ProviderConfig","ready":"False","synced":"True","readyReason":"Unavailable","readyMessage":"drift: description: GitHub has \"a|b\", spec declares \"c\"","syncedMessage":""},
+ {"kind":"Team","name":"pgh-mig-team-parent","namespace":"","providerConfigKind":"ProviderConfig","ready":"True","synced":"True","readyReason":"Available","readyMessage":"","syncedMessage":""},
+ {"kind":"Repository","name":"pgh-mig-repo-main","namespace":"","providerConfigKind":"ProviderConfig","ready":"False","synced":"False","readyReason":"","readyMessage":"","syncedMessage":"observe failed: x"}]
+JSON
+for t in mr nested change refs both notready; do : >"${RR}/table-${t}.tsv"; done
+adopt_note_not_ready observe "${RR}/k8s-observe.json"
+write_adopt_tables
+if [ "$(wc -l <"${RR}/table-notready.tsv")" -eq 2 ] \
+  && grep -qF '| observe | cluster | Organization | pgh-mig-org | False | Unavailable | True | drift: description: GitHub has "a\|b", spec declares "c" | - |' "${RR}/report-tables.md" \
+  && grep -qF '| observe | cluster | Repository | pgh-mig-repo-main | False | - | False | - | observe failed: x |' "${RR}/report-tables.md" \
+  && ! grep -q 'pgh-mig-team-parent' "${RR}/table-notready.tsv"; then
+  rec PASS "the report prints the Ready reason, the Ready message and the Synced message of every object that is not Ready, and nothing for a Ready one"
+else
+  rec FAIL "the report prints the Ready reason, the Ready message and the Synced message of every object that is not Ready, and nothing for a Ready one" "$(cat "${RR}/table-notready.tsv")"
+fi
+
+# --- a changed team's description, echoed inside the parent object of its child under branch protection
+# Two repositories' protections list the child team (restrictions, reviews); GitHub embeds the parent.
+echo_snapshot() { # echo_snapshot <out> <parent description> <child team description> <parent slug>
+  jq -c --arg pd "$2" --arg cd "$3" --arg ps "$4" '
+    .repos["pgh-mig-repo-main"].branchProtection = {main: {
+      restrictions: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]},
+      required_pull_request_reviews: {
+        dismissal_restrictions: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]},
+        bypass_pull_request_allowances: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]}}}}' \
+    "${T}/a.json" >"$1"
+}
+echo_snapshot "${RR}/echo-before.json" "old parent" "child" pgh-mig-team-parent
+echo_snapshot "${RR}/echo-after.json" "pgh-mig parent team (changed)" "child" pgh-mig-team-parent
+printf '%s\n' '^teams/pgh-mig-team-parent/description$' >"${RR}/echo-allowed.txt"
+team_echo_allowed "${RR}/echo-after.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"' >>"${RR}/echo-allowed.txt"
+classify_with() { # classify_with <before> <after> <slug> <json value> -- UNEXPECTED/REWRITE lines
+  local allowed="${RR}/allowed.$$.txt"
+  printf '%s\n' '^teams/pgh-mig-team-parent/description$' >"${allowed}"
+  team_echo_allowed "$2" "$3" "$4" >>"${allowed}"
+  snapshot_changed_paths "$1" "$2" >"${RR}/paths.tsv"
+  classify_changes "${RR}/paths.tsv" "${allowed}"
+}
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-after.json" >"${RR}/echo-after-team.json"
+jq -c '.teams["pgh-mig-team-parent"].description = "old parent"' "${RR}/echo-before.json" >"${RR}/echo-before-team.json"
+allowed_lines="$(grep -c . "${RR}/echo-allowed.txt")"
+if [ -z "$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-after-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')" ] && [ "${allowed_lines}" -eq 4 ]; then
+  rec PASS "the changed team's new description is allowed where GitHub echoes it as the parent of a team under branch protection (restrictions, dismissal restrictions, bypass allowances)"
+else
+  rec FAIL "the changed team's new description is allowed where GitHub echoes it as the parent of a team under branch protection" "$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-after-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"' | head -3 | tr '\n' ';') allowed regexes: ${allowed_lines}"
+fi
+# A parent echo holding another value than the one the harness set is a change.
+echo_snapshot "${RR}/echo-other-value.json" "somebody else's text" "child" pgh-mig-team-parent
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-other-value.json" >"${RR}/echo-other-value-team.json"
+other_value="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-other-value-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# The description of the child team itself, in the same place, is not the parent's echo.
+echo_snapshot "${RR}/echo-child.json" "pgh-mig parent team (changed)" "child edited" pgh-mig-team-parent
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-child.json" >"${RR}/echo-child-team.json"
+child_desc="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-child-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# A parent that is another team than the changed one.
+echo_snapshot "${RR}/echo-other-parent.json" "pgh-mig parent team (changed)" "child" pgh-mig-team-other
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-other-parent.json" >"${RR}/echo-other-parent-team.json"
+other_parent="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-other-parent-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# Any other path under the same protection.
+jq -c '.repos["pgh-mig-repo-main"].branchProtection.main.restrictions.teams[0].parent.privacy = "secret"' "${RR}/echo-after-team.json" >"${RR}/echo-other-path.json"
+other_path="$(classify_with "${RR}/echo-after-team.json" "${RR}/echo-other-path.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+if [ "$(grep -c '^UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/.*/parent/description$' <<<"${other_value}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/.*/teams/0/description$' <<<"${child_desc}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/description$' <<<"${child_desc}")" -eq 0 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/description$' <<<"${other_parent}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/slug$' <<<"${other_parent}")" -eq 3 ] \
+  && [ "${other_path}" = "UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/restrictions/teams/0/parent/privacy" ]; then
+  rec PASS "a parent echo with another value, the description of the child team itself, a different parent and any other path under branch protection are still unexpected changes"
+else
+  rec FAIL "a parent echo with another value, the description of the child team itself, a different parent and any other path under branch protection are still unexpected changes" \
+    "value: $(head -c 150 <<<"${other_value}" | tr '\n' ';') child: $(head -c 150 <<<"${child_desc}" | tr '\n' ';') parent: $(head -c 150 <<<"${other_parent}" | tr '\n' ';') path: ${other_path}"
+fi
+
+# --- the Organization the external writer resets ------------------------------------------------------
+cat >"${RR}/baseline.json" <<'JSON'
+{"org":{"id":9,"description":"pgh-test","actionsEnabledRepos":[{"id":2,"name":"demo-repository-2"},{"id":1,"name":"demo-repository-1"}]}}
+JSON
+org_baseline_load "${RR}/baseline.json"
+SIG_MSG="drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2], spec declares [pgh-mig-repo-main pgh-mig-repo-rules]"
+m_ok=1
+org_reset_match Organization False True "${SIG_MSG}" || m_ok=0
+org_reset_match Organization False True "drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2 other], spec declares [x]" && m_ok=0
+org_reset_match Organization False True "drift: description: GitHub has \"pgh-test\", spec declares \"x\"" && m_ok=0
+org_reset_match Organization False True "" && m_ok=0
+org_reset_match Organization True True "${SIG_MSG}" && m_ok=0
+org_reset_match Organization False False "${SIG_MSG}" && m_ok=0
+org_reset_match Repository False True "${SIG_MSG}" && m_ok=0
+if [ "${m_ok}" -eq 1 ] && [ "${ORG_RESET_PREFIX}" = "drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2]" ]; then
+  rec PASS "the external-reset signature is the drift message of the baseline's enabled repositories on an Organization that is Synced and Ready=False; another list, another message, another state and another kind are not"
+else
+  rec FAIL "the external-reset signature is the drift message of the baseline's enabled repositories on an Organization that is Synced and Ready=False; another list, another message, another state and another kind are not" "prefix '${ORG_RESET_PREFIX}' m_ok ${m_ok}"
+fi
+
+# adopt_check_state over one Organization (or another kind) and a reconciled Team.
+ADOPT_SCOPE=cluster; ADOPT_GROUP="${GROUP_CLUSTER}"; ADOPT_WINDOW_SINCE="2026-10-10T15:00:00Z"
+: "${ADOPT_SCOPE}${ADOPT_GROUP}${ADOPT_WINDOW_SINCE}" # read by adopt_check_state and the org helpers
+BASE_SAMPLE=$'2026-10-10T15:20:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+FIX_SAMPLE=$'2026-10-10T15:21:00Z\tpgh-mig organization description\t["pgh-mig-repo-main","pgh-mig-repo-rules"]'
+# state_case <phase> <kind> <ready> <synced> <ready message> <samples...> -- sets CASE_FAILS, CASE_WARNS, CASE_INFOS
+state_case() {
+  local phase="$1" kind="$2" ready="$3" synced="$4" msg="$5"
+  shift 5
+  : >"${RESULTS_FILE}"
+  : >"${RR}/org-samples.log"
+  [ "$#" -eq 0 ] || printf '%s\n' "$@" >"${RR}/org-samples.log"
+  jq -n --arg k "${kind}" --arg r "${ready}" --arg s "${synced}" --arg m "${msg}" '
+    [{kind: $k, name: "pgh-mig-obj", namespace: "", providerConfigKind: "ProviderConfig", ready: $r, synced: $s, readyMessage: $m, readyReason: "", syncedMessage: "",
+      atProviderId: "pgh-mig-obj", externalName: "pgh-mig-obj"}]' >"${RR}/k8s-${phase}.json"
+  mkdir -p "${RR}/snapshots"
+  echo '{}' >"${RR}/snapshots/adopted.json"; echo '{}' >"${RR}/snapshots/full.json"
+  {
+    printf '2026-10-10T15:25:00Z\tDEBUG\tprovider-github\tReconciling\t{"controller": "managed/%s.organizations.github.crossplane.io", "request": {"name":"pgh-mig-obj"}}\n' "$(tr 'A-Z' 'a-z' <<<"${kind}")"
+    [ -z "${CASE_UPDATE_AT:-}" ] || printf '%s\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/%s.organizations.github.crossplane.io", "request": {"name":"pgh-mig-obj"}}\n' "${CASE_UPDATE_AT}" "$(tr 'A-Z' 'a-z' <<<"${kind}")"
+  } >"${RR}/window-${phase}.log"
+  for t in mr nested change refs both notready; do : >"${RR}/table-${t}.tsv"; done
+  adopt_check_state "${phase}" 2>/dev/null
+  CASE_FAILS="$(grep -c '^FAIL' "${RESULTS_FILE}" || true)"
+  CASE_WARNS="$(grep -c '^WARN' "${RESULTS_FILE}" || true)"
+  CASE_INFOS="$(grep -c '^INFO' "${RESULTS_FILE}" || true)"
+}
+CASE_UPDATE_AT=""
+state_case observe Organization False True "${SIG_MSG}" "${FIX_SAMPLE}" "${BASE_SAMPLE}"
+obs_reset="${CASE_FAILS}/${CASE_WARNS}"; obs_warn_text="$(grep '^WARN' "${RESULTS_FILE}")"
+state_case observe Organization False True "${SIG_MSG}" "${FIX_SAMPLE}"
+obs_nosample="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization False True "${SIG_MSG}"
+obs_nolog="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization False True "drift: description: GitHub has \"pgh-test\", spec declares \"x\"" "${BASE_SAMPLE}"
+obs_other_msg="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Repository False True "${SIG_MSG}" "${BASE_SAMPLE}"
+obs_repo="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization False False "${SIG_MSG}" "${BASE_SAMPLE}"
+obs_unsynced="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization True True "" "${FIX_SAMPLE}"
+obs_ready="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization False True "${SIG_MSG}" $'2026-10-09T15:20:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+obs_old_sample="${CASE_FAILS}/${CASE_WARNS}"
+if [ "${obs_reset}" = 0/1 ] && [[ "${obs_warn_text}" == *"reset to its baseline by something outside the cluster"* ]] && [[ "${obs_warn_text}" == *"2026-10-10T15:20:00Z | pgh-test"* ]] \
+  && [ "${obs_ready}" = 0/0 ]; then
+  rec PASS "an Observe Organization with the baseline signature is a WARN naming the sample that shows the baseline values, not a failure"
+else
+  rec FAIL "an Observe Organization with the baseline signature is a WARN naming the sample that shows the baseline values, not a failure" "fails/warns ${obs_reset}, ready ${obs_ready}: ${obs_warn_text:0:300}"
+fi
+if [ "${obs_nosample}" = 1/0 ] && [ "${obs_nolog}" = 1/0 ] && [ "${obs_old_sample}" = 1/0 ] && [ "${obs_other_msg}" = 1/0 ] && [ "${obs_repo}" = 1/0 ] && [ "${obs_unsynced}" = 1/0 ]; then
+  rec PASS "the signature without a sample of the window showing the baseline values, another drift message, a Repository with the same signature and an unsynced Organization are all failures"
+else
+  rec FAIL "the signature without a sample of the window showing the baseline values, another drift message, a Repository with the same signature and an unsynced Organization are all failures" \
+    "no sample ${obs_nosample}, no samples at all ${obs_nolog}, sample before the window ${obs_old_sample}, other message ${obs_other_msg}, repository ${obs_repo}, unsynced ${obs_unsynced}"
+fi
+
+# Under full management: the provider's Organization update is the correction of the reset only when a
+# sample within the poll before it shows the baseline values.
+CASE_UPDATE_AT="2026-10-10T15:26:10Z"
+state_case full Organization True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+full_attributed="${CASE_FAILS}/${CASE_INFOS}"
+state_case full Organization True True ""
+full_nosample="${CASE_FAILS}"
+state_case full Organization True True "" $'2026-10-10T15:24:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+full_early="${CASE_FAILS}"
+state_case full Organization True True "" "${FIX_SAMPLE}" $'2026-10-10T15:25:40Z\tpgh-mig organization description\t["pgh-mig-repo-main","pgh-mig-repo-rules"]'
+full_fixture_values="${CASE_FAILS}"
+state_case full Team True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+full_team="${CASE_FAILS}"
+state_case observe Organization True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
+observe_update="${CASE_FAILS}"
+CASE_UPDATE_AT=""
+if [ "${full_attributed}" = 0/1 ] && [ "${full_nosample}" = 1 ] && [ "${full_early}" = 1 ] && [ "${full_fixture_values}" = 1 ]; then
+  rec PASS "under full management an Organization update is attributed to the external reset (INFO) only when a sample within the previous poll shows the baseline values; without one it is a FAIL"
+else
+  rec FAIL "under full management an Organization update is attributed to the external reset (INFO) only when a sample within the previous poll shows the baseline values; without one it is a FAIL" \
+    "attributed ${full_attributed}, no sample ${full_nosample}, sample older than a poll ${full_early}, samples at the declared values ${full_fixture_values}"
+fi
+if [ "${full_team}" = 1 ] && [ "${observe_update}" = 1 ]; then
+  rec PASS "every other kind keeps the strict write check, and an Organization update under Observe is a FAIL whatever the samples show"
+else
+  rec FAIL "every other kind keeps the strict write check, and an Organization update under Observe is a FAIL whatever the samples show" "team ${full_team}, observe ${observe_update}"
+fi
+
+# The zero-write comparison leaves the organization's own values out only with a sample of the baseline
+# and no Organization write the reset does not explain.
+jq -c '.org.description = "pgh-test" | .org.actionsEnabledRepos = [{id: 1, name: "demo-repository-1"}] | .org._ts.updated_at = "2026-10-10T14:57:17Z"' "${T}/a.json" >"${RR}/snapshots/adopted.json"
+cp "${T}/a.json" "${RR}/snapshots/orphaned.json"
+jq -c '.repos["pgh-mig-repo-main"].settings.description = "moved"' "${RR}/snapshots/adopted.json" >"${RR}/snapshots/adopted-repo.json"
+zero_case() { # zero_case <phase> <snapshot b> <update at|-> <samples...> -- PASS/FAIL of the comparison
+  local phase="$1" b="$2" upd="$3"
+  shift 3
+  : >"${RESULTS_FILE}"
+  : >"${RR}/org-samples.log"
+  [ "$#" -eq 0 ] || printf '%s\n' "$@" >"${RR}/org-samples.log"
+  : >"${RR}/window-${phase}.log"
+  [ "${upd}" = - ] || printf '%s\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/organization.organizations.github.crossplane.io", "request": {"name":"pgh-mig-org"}}\n' "${upd}" >"${RR}/window-${phase}.log"
+  adopt_assert_zero_write "zero-write case" orphaned "${b}" "${phase}" 2>/dev/null
+  awk -F'\t' '$2 == "zero-write case" { print $1 }' "${RESULTS_FILE}"
+}
+z_exempt="$(zero_case observe adopted - "${BASE_SAMPLE}")"
+z_nosample="$(zero_case observe adopted - "${FIX_SAMPLE}")"
+z_update="$(zero_case observe adopted 2026-10-10T15:21:00Z "${BASE_SAMPLE}")"
+z_repo="$(zero_case observe adopted-repo - "${BASE_SAMPLE}")"
+z_full_attr="$(zero_case full adopted 2026-10-10T15:20:30Z "${BASE_SAMPLE}")"
+z_full_unattr="$(zero_case full adopted 2026-10-10T15:26:10Z "${BASE_SAMPLE}")"
+if [ "${z_exempt}" = PASS ] && [ "${z_nosample}" = FAIL ] && [ "${z_update}" = FAIL ] && [ "${z_repo}" = FAIL ] && [ "${z_full_attr}" = PASS ] && [ "${z_full_unattr}" = FAIL ]; then
+  rec PASS "the org description, Actions settings and updated_at leave the zero-write comparison only with a baseline sample and no unexplained Organization write; a change anywhere else still fails it"
+else
+  rec FAIL "the org description, Actions settings and updated_at leave the zero-write comparison only with a baseline sample and no unexplained Organization write; a change anywhere else still fails it" \
+    "exempt ${z_exempt}, no baseline sample ${z_nosample}, Observe update ${z_update}, repository moved ${z_repo}, full attributed ${z_full_attr}, full unattributed ${z_full_unattr}"
+fi
+
+# An Organization the external writer reset is settled for the wait loops (the cluster cannot heal it).
+mr_state() { cat "${RR}/mr-state.json"; }
+jq -n --arg m "${SIG_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:$m},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_org=0; adopt_settled "${GROUP_CLUSTER}" 2 && settled_org=1
+jq -n '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:"drift: description: GitHub has x"},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_other=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_other=0
+jq -n --arg m "${SIG_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"True",synced:"True",readyMessage:""},{kind:"Repository",name:"pgh-mig-repo-main",ready:"False",synced:"True",readyMessage:$m}]' >"${RR}/mr-state.json"
+settled_repo=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_repo=0
+if [ "${settled_org}" = 1 ] && [ "${settled_other}" = 1 ] && [ "${settled_repo}" = 1 ]; then
+  rec PASS "waiting for the adopted objects accepts an Organization reset to its baseline as settled, and nothing else that is not Ready"
+else
+  rec FAIL "waiting for the adopted objects accepts an Organization reset to its baseline as settled, and nothing else that is not Ready" "reset org ${settled_org}, other drift ${settled_other}, repository ${settled_repo}"
+fi
+unset -f mr_state
+
+# The sampler's two requests: a sample line is "<timestamp>\t<description>\t<repositories>".
+org_samp="$(MIGRATION_API_URL="http://127.0.0.1:${PORT}" MIGRATION_GITHUB_TOKEN=selftest MIGRATION_ORG=pgh-test org_sample_once 2>/dev/null)"
+if [ "$(awk -F'\t' '{ print NF }' <<<"${org_samp}")" -eq 3 ] && jq -e . >/dev/null 2>&1 <<<"$(cut -f3 <<<"${org_samp}")" && [[ "${org_samp}" == 20??-??-??T??:??:??Z$'\t'* ]]; then
+  rec PASS "a sample of the organization is a timestamp, the description and the Actions-enabled repositories, read with two GETs"
+else
+  rec FAIL "a sample of the organization is a timestamp, the description and the Actions-enabled repositories, read with two GETs" "got: ${org_samp:0:200}"
+fi
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
 
 # --- entry point fails fast and names the input -----------------------------------
 creds=(PROVIDER_GITHUB_APP_ID=1 PROVIDER_GITHUB_APP_INSTALLATION_ID=2 "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64=$(printf x | base64)")
