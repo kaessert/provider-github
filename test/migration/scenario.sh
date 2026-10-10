@@ -124,13 +124,3 @@ settle_pause() {
   log "letting the provider run ${polls} poll cycles (${seconds}s)"
   sleep "${seconds}"
 }
-
-cluster_crds() { # cluster_crds <cluster|all> -- the CRDs a healthy install provides
-  local p
-  echo "providerconfigs.github.crossplane.io"
-  for p in ${PLURALS}; do echo "${p}.${GROUP_CLUSTER}"; done
-  if [ "$1" = "all" ]; then
-    echo "clusterproviderconfigs.github.m.crossplane.io"
-    for p in ${PLURALS}; do echo "${p}.${GROUP_NAMESPACED}"; done
-  fi
-}

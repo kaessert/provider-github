@@ -272,6 +272,16 @@ wait_provider() { # wait_provider <digest> <crd...>
   kc -n "${CROSSPLANE_NS}" rollout status deploy -l "pkg.crossplane.io/provider=${PROVIDER_NAME}" --timeout=240s >/dev/null 2>&1 || true
 }
 
+cluster_crds() { # cluster_crds <cluster|all> -- the CRDs a healthy install provides
+  local p
+  echo "providerconfigs.github.crossplane.io"
+  for p in ${PLURALS}; do echo "${p}.${GROUP_CLUSTER}"; done
+  if [ "$1" = "all" ]; then
+    echo "clusterproviderconfigs.github.m.crossplane.io"
+    for p in ${PLURALS}; do echo "${p}.${GROUP_NAMESPACED}"; done
+  fi
+}
+
 # provider_pod_images prints the images of the running provider pods.
 provider_pod_images() {
   kc -n "${CROSSPLANE_NS}" get pods -l "pkg.crossplane.io/provider=${PROVIDER_NAME}" \

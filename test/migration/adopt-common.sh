@@ -91,7 +91,64 @@ provider_pods_gone() {
   [ "$(kc -n "${CROSSPLANE_NS}" get pods -l "pkg.crossplane.io/provider=${PROVIDER_NAME}" -o name 2>/dev/null | wc -l)" -eq 0 ]
 }
 
-crd_gone() { ! kc get "crd/organizations.${GROUP_CLUSTER}" >/dev/null 2>&1; }
+# baseline_crds -- every CRD the baseline package installs: the cluster-scoped kinds, the
+# ProviderConfig, and the ProviderConfigUsage and StoreConfig kinds crossplane-runtime adds.
+baseline_crds() {
+  cluster_crds cluster
+  echo "providerconfigusages.github.crossplane.io"
+  echo "storeconfigs.github.crossplane.io"
+}
+
+# baseline_crds_left -- the CRDs of the baseline package that are still in the cluster.
+baseline_crds_left() {
+  local crd
+  for crd in $(baseline_crds); do
+    ! kc get "crd/${crd}" >/dev/null 2>&1 || echo "${crd}"
+  done
+}
+
+baseline_crds_gone() { [ -z "$(baseline_crds_left)" ]; }
+
+baseline_provider_configs_gone() { [ "$(kc get providerconfigs.github.crossplane.io -o name 2>/dev/null | wc -l)" -eq 0 ]; }
+
+# delete_baseline_provider_configs -- deletes the ProviderConfig objects of the baseline while
+# its Provider still runs: a ProviderConfig carries the provider's in-use finalizer, and with
+# the Provider gone nothing clears it. The CRD of a kind that still has an instance is kept,
+# and its owner, the old package revision, then keeps control of it: the next Provider cannot
+# take it over. The credentials Secret stays.
+delete_baseline_provider_configs() {
+  kc delete providerconfigs.github.crossplane.io --all --wait=false >/dev/null 2>&1 || true
+  if wait_until 120 3 baseline_provider_configs_gone; then
+    record PASS "the baseline's ProviderConfig objects are deleted while its Provider still runs"
+    return 0
+  fi
+  record WARN "the baseline's ProviderConfig objects did not go while its Provider ran; their finalizers are removed" \
+    "$(kc get providerconfigs.github.crossplane.io -o name 2>/dev/null | tr '\n' ' ')"
+  kc get providerconfigs.github.crossplane.io -o name 2>/dev/null | while read -r res; do
+    kc patch "${res}" --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
+  done
+}
+
+# remove_baseline_provider -- what a user does to move from the baseline to another build:
+# delete the ProviderConfig objects, uninstall the Provider, and wait until EVERY CRD of the
+# baseline package is gone. A CRD that stays is a failure naming it: the next install cannot
+# become Healthy while the old revision controls it.
+remove_baseline_provider() {
+  local left crd
+  delete_baseline_provider_configs
+  remove_provider
+  wait_until 180 3 provider_pods_gone || warn "the baseline provider pods are still present"
+  if wait_until 120 3 baseline_crds_gone; then
+    record PASS "every CRD of the baseline package is gone after its Provider was removed"
+    return 0
+  fi
+  left="$(baseline_crds_left | tr '\n' ' ')"
+  for crd in ${left}; do
+    kc get "crd/${crd}" -o yaml >"${EVIDENCE_DIR}/baseline-crd-left-${crd}.yaml" 2>&1 || true
+  done
+  record FAIL "every CRD of the baseline package is gone after its Provider was removed" "still present: ${left}"
+  exit 1
+}
 
 # adopt_settled <group> <count> -- <count> adopted objects, each Synced and Ready; the
 # drift probe, when present, only Synced (it is Ready=False by design). The helper objects
@@ -103,7 +160,28 @@ adopt_settled() {
   [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" '[.[] | select(.synced != "True" or (.ready != "True" and .name != $p))] | length')" -eq 0 ]
 }
 
-# drop_excluded <dir> -- removes the manifests of the objects the baseline never got Ready.
+# baseline_excluded <k8s-v1.json> -- "Kind/name" of the objects the baseline never created on
+# GitHub: not Synced. An object that is Synced but not Ready exists on GitHub (the baseline
+# created it and reports a problem with it) and is adopted like the others.
+baseline_excluded() {
+  jq -r '.[] | select(.synced != "True") | "\(.kind)/\(.name)"' "$1"
+}
+
+# baseline_not_ready <k8s-v1.json> -- "Kind/name: Ready=.. Synced=.." of the adopted objects
+# the baseline did not report Ready.
+baseline_not_ready() {
+  jq -r '.[] | select(.synced == "True" and .ready != "True") | "\(.kind)/\(.name): Ready=\(.ready) Synced=\(.synced)"' "$1"
+}
+
+# baseline_state <k8s-v1.json> <Kind> <name> -- "Ready=.. Synced=.." the baseline reported for
+# an object, "-" for one that was not a v1 object.
+baseline_state() {
+  jq -r --arg k "$2" --arg n "$3" '[.[] | select(.kind == $k and .name == $n)][0]
+    | if . == null then "-" else "Ready=\(.ready) Synced=\(.synced)" end' "$1" 2>/dev/null || echo "-"
+}
+
+# drop_excluded <dir> [list] -- removes the manifests of the objects the baseline never
+# created (v1-excluded.txt, or the list given).
 drop_excluded() {
   local entry kind name
   while IFS= read -r entry; do
@@ -111,7 +189,7 @@ drop_excluded() {
     kind="${entry%%/*}"
     name="${entry#*/}"
     rm -f "$1"/*-"$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')-${name}.yaml"
-  done <"${EVIDENCE_DIR}/v1-excluded.txt"
+  done <"${2:-${EVIDENCE_DIR}/v1-excluded.txt}"
 }
 
 run_adopt_full() {
@@ -216,14 +294,19 @@ adopt_baseline_phase() {
       record FAIL "the baseline created every v1 fixture: all Synced and Ready" "$(head -3 "${EVIDENCE_DIR}/baseline-not-ready.txt" | tr '\n' ';')"
       exit 1
     fi
-    record WARN "some v1 fixtures are not Ready on the baseline; GitHub does not hold them, so they are left out of the adoption" \
+    record WARN "some v1 fixtures are not Synced and Ready on the baseline; those that are not Synced were never created, and are left out of the adoption" \
       "$(wc -l <"${EVIDENCE_DIR}/baseline-not-ready.txt") object(s), see baseline-not-ready.txt"
   fi
   # Two cycles are enough for the baseline to finish late initialisation; the zero-write
   # windows of the adoption phases use MIGRATION_SETTLE_POLLS.
   settle_pause 2
   mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-v1.json"
-  jq -r '.[] | select(.synced != "True" or .ready != "True") | "\(.kind)/\(.name)"' "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-excluded.txt"
+  baseline_excluded "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-excluded.txt"
+  baseline_not_ready "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-synced-not-ready.txt"
+  if [ -s "${EVIDENCE_DIR}/v1-synced-not-ready.txt" ]; then
+    record WARN "v1 objects the baseline created but reports not Ready; they exist on GitHub and are adopted like the others" \
+      "$(tr '\n' ';' <"${EVIDENCE_DIR}/v1-synced-not-ready.txt")"
+  fi
   take_snapshot v1
   capture_provider_logs baseline
   # The connection secrets the baseline wrote (the webhook secrets it applied are recorded in
@@ -253,15 +336,7 @@ adopt_orphan_phase() {
   take_snapshot orphaned
   assert_snapshots_identical "orphaning writes nothing: GitHub is identical before and after the v0.22.0 managed resources were deleted (IDs, settings, timestamps)" v1 orphaned
 
-  remove_provider
-  wait_until 180 3 provider_pods_gone || warn "the baseline provider pods are still present"
-  if crd_gone; then
-    record INFO "the baseline's CRDs after its Provider was removed" "removed with the Provider"
-  elif wait_until 120 3 crd_gone; then
-    record INFO "the baseline's CRDs after its Provider was removed" "removed with the Provider (after a delay)"
-  else
-    record INFO "the baseline's CRDs after its Provider was removed" "kept; the candidate replaces them"
-  fi
+  remove_baseline_provider
 }
 
 # --- step 3: Observe-only adoption ---------------------------------------------------
@@ -272,7 +347,7 @@ adopt_observe_phase() {
   install_provider "${MIGRATION_CANDIDATE_DIR}" v2 "${DIGEST_CANDIDATE}" --debug "--poll=${MIGRATION_POLL}"
   mapfile -t crds < <(cluster_crds "${crd_scope}")
   wait_provider "${DIGEST_CANDIDATE}" "${crds[@]}"
-  # The baseline's ProviderConfig may have gone with its CRD.
+  # The baseline's ProviderConfig was deleted before its Provider was removed.
   apply_provider_config cluster
   kc apply -f "${EVIDENCE_DIR}/rendered/v1/00-prerequisites.yaml" >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the prerequisite Secrets failed"
   if [ "${ADOPT_SCOPE}" = namespaced ]; then
@@ -288,7 +363,7 @@ adopt_observe_phase() {
   drop_excluded "${EVIDENCE_DIR}/rendered/full"
   derive_probe "${EVIDENCE_DIR}/rendered/observe"
   ADOPT_COUNT="$(find "${EVIDENCE_DIR}/rendered/full" -name '*.yaml' | wc -l)"
-  [ "${ADOPT_COUNT}" -gt 0 ] || die "no v1 object was Ready on the baseline: nothing to adopt"
+  [ "${ADOPT_COUNT}" -gt 0 ] || die "no v1 object was Synced on the baseline: nothing to adopt"
   [ "${ADOPT_SCOPE}" != namespaced ] || adopt_prepare_namespaces
 
   log "applying ${ADOPT_COUNT} Observe-only adoption manifests (and the drift probe)"
@@ -413,8 +488,8 @@ adopt_check_state() {
     case "${idcheck}" in MISMATCH*) bad_id+="${kind}/${name} id=${id} external-name=${ext}; " ;; esac
     { [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; } || bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
     [ "${recs}" -gt 0 ] || bad_idle+="${kind}/${name}; "
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${name}" "${ready}" "${synced}" "${id}" "${ext}" \
-      "${idcheck}" "${creates}" "${updates}" "${recs}" >>"${EVIDENCE_DIR}/table-mr.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${name}" "${ready}" "${synced}" "${id}" "${ext}" \
+      "${idcheck}" "${creates}" "${updates}" "${recs}" "$(baseline_state "${EVIDENCE_DIR}/k8s-v1.json" "${kind}" "${name}")" >>"${EVIDENCE_DIR}/table-mr.tsv"
   done < <(jq -r '.[] | [.kind, .name, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end)] | @tsv' "${state}")
 
   if [ -z "${bad_state}" ] && [ "${total}" -gt 0 ]; then
@@ -533,9 +608,9 @@ write_adopt_tables() {
     echo
     echo "Writes are the creates and updates the provider's debug log records for the object over the phase's window; reconciles is the positive control. Path is the namespace and the kind of ProviderConfig the object reaches GitHub through (cluster: the cluster-scoped ProviderConfig)."
     echo
-    echo "| Phase | Path | Kind | Object | Ready | Synced | atProvider.id | external-name | id check | creates | updates | reconciles |"
-    echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
-    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "${EVIDENCE_DIR}/table-mr.tsv"
+    echo "| Phase | Path | Kind | Object | Ready | Synced | atProvider.id | external-name | id check | creates | updates | reconciles | On the baseline (v0.22.0) |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 }' "${EVIDENCE_DIR}/table-mr.tsv"
     echo
     echo "## Per nested sub-object: status.atProvider against the GitHub snapshot"
     echo
