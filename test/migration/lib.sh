@@ -30,6 +30,8 @@
 #                              Team under full management of a cluster-scoped and a
 #                              namespaced object at once [1]
 #   MIGRATION_READY_TIMEOUT    seconds to wait for fixtures to become Ready [1500]
+#   MIGRATION_SEED_TIMEOUT     seconds to wait for a template-based Repository to get its default
+#                              branch and for the baseline to settle on its branch protection [600]
 #   MIGRATION_BASELINE_REPO    where the baseline tag is fetched from
 #   MIGRATION_BASELINE_REF     baseline tag [v0.22.0]
 #   MIGRATION_BASELINE_DIR     an existing checkout of the baseline tag (skips the fetch)

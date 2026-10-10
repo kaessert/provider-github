@@ -88,6 +88,7 @@ managed-resource state, the provider logs and the rendered fixtures.
 | `validate-fixtures.sh` | fixtures against the CRDs, offline |
 | `snapshot.sh` | GitHub state snapshot and diff |
 | `oob.sh` | out-of-band setup, seeding and cleanup through the GitHub API |
+| `baseline.sh` | makes the baseline state of the Repository that carries branch protection deterministic: waits for the generated default branch, seeds the declared protection when v0.22.0 is stuck on `branch is not protected`; the allowed baseline exclusions |
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
 | `upgrade-compare.sh` | the upgrade scenario's comparisons: which objects the GitHub comparison narrows, the Kubernetes regression check with its re-read, and the attribution of `updated_at` moves |
 | `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds the full adoption flow, `run_adopt_full <cluster\|namespaced>`) |
@@ -221,7 +222,10 @@ The test organization pre-exists. `oob.sh prepare` first removes leftovers of ea
 runs (by prefix), picks the organization member the fixtures use, and **takes the
 baseline snapshot before changing anything**. Then, through the GitHub API:
 
-* creates the template repository `pgh-mig-template`;
+* creates the template repository `pgh-mig-template` and **waits until it has `main` with a
+  commit** (`oob.sh wait-branch`, bounded to 300 s; the run stops with the precondition named if
+  GitHub has not generated it), because GitHub generates a repository's content
+  asynchronously and every template-based fixture is created from it;
 * **upgrade:** sets the organization Actions policy to `selected` if it is not (the
   Organization fixture manages the enabled-repository list, which GitHub accepts only
   then), and creates four organization secrets, two Actions and two Dependabot, of
@@ -305,22 +309,53 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 
 1. Build the baseline tag and this tree; the `upgrade` setup (above).
 2. **The baseline creates.** Install the baseline Provider, apply the `v1` fixtures,
-   wait for Synced and Ready, let it run two poll cycles, snapshot GitHub (`v1`) and the
-   managed resources. What is adopted is decided by what GitHub holds, not by Synced alone
-   (`adopt-unsynced.sh`): a fixture that is not Synced and that the `v1` snapshot does not
-   hold (for example a spec the baseline rejects) was never created; it is reported and left
-   out of the adoption (`MIGRATION_REQUIRE_BASELINE_READY=1` fails instead). A fixture that is
-   Synced but not Ready exists on GitHub: it is adopted like the others and its baseline state
-   is shown in the per-object table, so a fix for the baseline's problem with it is proven on
-   the adopted object. A fixture that is NOT Synced but that the snapshot holds is adopted too,
-   listed with the message the baseline gave (`v1-unsynced-adopted.txt`) and shown with it in
-   the per-object table's "On the baseline" column. `Repository/pgh-mig-repo-main` is the case
-   that matters: the baseline creates the repository, its webhook and its ruleset, then reports
-   Synced=False (`observe failed: branch is not protected`) because the default branch is
-   protected by the ruleset and not by classic branch protection, and the repository holds most
-   of the nested sub-objects, so leaving it out would leave them unevaluated. The key of an
-   object in the snapshot is its external name (a webhook's URL); a webhook the baseline never
-   recorded takes the hook ID GitHub holds.
+   make the Repository that carries branch protection deterministic (below), wait for
+   Synced and Ready, let it run two poll cycles, snapshot GitHub (`v1`) and the managed
+   resources. What is adopted is decided by what GitHub holds, not by Synced alone
+   (`adopt-unsynced.sh`). A fixture that is not Synced and that the `v1` snapshot does not
+   hold was never created: it is left out of the adoption, and unless it is
+   `OrganizationVariable/pgh-mig-var-policies` (`managementPolicies` not enabled on the
+   baseline, the only object v0.22.0 cannot create at all) the run FAILS with `the baseline
+   created <Kind/name>`: dropping it would drop the nested rows it carries and leave the run
+   green without testing them (`MIGRATION_REQUIRE_BASELINE_READY=1` fails on any fixture
+   that is not Synced and Ready). A fixture that is Synced but not Ready exists on GitHub: it
+   is adopted like the others and its baseline state is shown in the per-object table, so a
+   fix for the baseline's problem with it is proven on the adopted object. A fixture that is
+   NOT Synced but that the snapshot holds is adopted too, listed with the message the
+   baseline gave (`v1-unsynced-adopted.txt`) and shown with it in the per-object table's "On
+   the baseline" column; its one completing Update under full management is allowed. The key
+   of an object in the snapshot is its external name (a webhook's URL); a webhook the
+   baseline never recorded takes the hook ID GitHub holds.
+
+   **The Repository with branch protection.** `pgh-mig-repo-main` carries branch protection,
+   rulesets, webhooks with a secret and team/user permissions: 24 of the nested rows. It is
+   created from the template repository, and GitHub generates the new repository's content
+   asynchronously while v0.22.0 reconciles it within seconds. Which side of the generation
+   the first Observe lands on used to decide the whole baseline: before it, v0.22.0 applies
+   the protection (or fails `422 default_branch ... empty repository` while the repository is
+   empty); after it, the branch exists without a rule, v0.22.0 Observe errors
+   `branch is not protected` and never reaches Update, so the object stays Synced=False.
+   The harness no longer leaves that to chance (`baseline.sh`), and this runs before the
+   exclusion rule above, so repo-main is normally Synced when the baseline is read:
+   * the template repository has `main` with a commit before any fixture is applied, and the
+     repository has its default branch with a commit before the baseline is read; if GitHub
+     did not generate it the run fails with `GitHub did not generate pgh-mig-repo-main from
+     the template: no commits (precondition, not a provider defect)`;
+   * if v0.22.0 is Synced=False with `branch is not protected`, the harness seeds the
+     protection the fixture declares through the GitHub API (`oob.sh seed-protection`: the
+     team and user access the rule names, the protection request derived from the fixture's
+     `branchProtectionRules`, the signed-commits switch), once, and waits for Synced=True.
+     The report says the protection was seeded and why. Retrying a delete and a re-create
+     would be the same coin flip;
+   * a Repository that is still not Synced after that is adopted when GitHub holds it
+     (the rule above), and a FAIL when it does not.
+
+   The same wait and seeding run in scenario (a). The SKIPPED rows of the nested table are
+   counted in its result line, and a SKIPPED row of any object other than the allowed
+   exclusion ends the run FAIL. Note for a user moving from the baseline: a repository that
+   exists on GitHub with the declared branch but without the protection rule cannot be
+   observed by v0.22.0 (`branch is not protected`); the candidate does not fail on it (it
+   skips a missing branch, reports it, and treats an unprotected one as having no rule).
 3. **Orphan.** Give every v1 managed resource `deletionPolicy: Orphan` (the run stops
    before any delete if one lacks it), delete them, snapshot (`orphaned`): GitHub must be
    identical to `v1`. Then leave the baseline the way a user must: delete the baseline's
@@ -528,3 +563,7 @@ example the runner-group workflow restriction, which not every organization plan
 accepts, or branch-protection actor lists) and build details of the baseline tag. Those
 surface as a fixture that never becomes Ready, which the upgrade scenario reports and
 excludes from the Ready-after-upgrade check unless `MIGRATION_REQUIRE_BASELINE_READY=1`.
+In the adoption scenarios a SKIPPED nested row (the object was not adopted) is allowed only for
+an object v0.22.0 cannot create; any other SKIPPED row, and any deliberate change skipped for
+the same reason, ends the run FAIL, and the result line of the nested comparison states the
+SKIPPED count.

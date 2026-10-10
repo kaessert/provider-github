@@ -11,6 +11,15 @@
 #                                    adoption fixtures name (adopt)
 #   oob.sh ensure-environment <repo> <environment> [timeout-seconds]
 #                                    wait for <repo>, then create the environment
+#   oob.sh wait-branch <repo> <branch> [timeout-seconds]
+#                                    wait until <repo> has <branch> with a commit (a
+#                                    repository generated from a template gets its content
+#                                    asynchronously); exit 3 when the repository itself is
+#                                    missing at the timeout, 1 when only the branch is
+#   oob.sh seed-protection <rendered-dir> <repo>
+#                                    apply the branch protection the rendered Repository
+#                                    fixture declares, through the API, after granting the
+#                                    team and user access the rule names
 #   oob.sh sweep                     delete everything the harness created and
 #                                    restore the organization settings recorded
 #                                    in the baseline snapshot
@@ -30,6 +39,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "${HERE}/lib.sh"
+# shellcheck source=baseline.sh
+. "${HERE}/baseline.sh"
 
 ORG="${MIGRATION_ORG}"
 BASELINE="${MIGRATION_WORKDIR}/baseline.json"
@@ -78,10 +89,72 @@ discover_member() {
 # Creation
 # ---------------------------------------------------------------------------
 
+# wait_branch <repo> <branch> [timeout] -- 0 once GET /repos/<org>/<repo>/branches/<branch> answers
+# 200 (the branch has a commit); 3 when the repository never appeared, 1 when only the branch did not.
+wait_branch() {
+  local repo="$1" branch="$2" timeout="${3:-600}" deadline repo_seen=0 status
+  deadline=$(($(date +%s) + timeout))
+  while :; do
+    status="$(gh_status "$(gh_call GET "/repos/${ORG}/${repo}/branches/${branch}")")"
+    [ "${status}" != "200" ] || return 0
+    if [ "${repo_seen}" -eq 0 ] && [ "$(gh_status "$(gh_call GET "/repos/${ORG}/${repo}")")" = "200" ]; then
+      repo_seen=1
+    fi
+    [ "$(date +%s)" -lt "${deadline}" ] || break
+    sleep 5
+  done
+  if [ "${repo_seen}" -eq 0 ]; then
+    warn "repository ${repo} does not exist after ${timeout}s"
+    return 3
+  fi
+  warn "repository ${repo} has no ${branch} branch with a commit after ${timeout}s (GET branches/${branch} answered ${status})"
+  return 1
+}
+
 create_template_repo() {
   log "creating template repository ${TEMPLATE_REPO}"
   gh_write POST "/orgs/${ORG}/repos" "$(jq -cn --arg n "${TEMPLATE_REPO}" '
     {name: $n, description: "pgh-mig template repository", private: true, auto_init: true, is_template: true}')" >/dev/null
+  # GitHub generates the content asynchronously; a repository created from the template before
+  # that has no branch, and v0.22.0 meets it in the middle (see baseline.sh).
+  wait_branch "${TEMPLATE_REPO}" main 300 \
+    || die "GitHub did not generate ${TEMPLATE_REPO}: no commits on main (precondition, not a provider defect)"
+  log "${TEMPLATE_REPO} has main with a commit"
+}
+
+# seed_protection <rendered-dir> <repo> -- the branch protection the Repository fixture declares,
+# applied through the API. The rule names teams and users, and GitHub accepts those only when they
+# have push access to the repository: v0.22.0 grants that access in the Update it never reaches, so
+# the access the fixture declares is granted first (the same values the baseline would apply).
+seed_protection() {
+  local dir="$1" repo="$2" branch doc org rule perms kind who role resp status slug
+  while IFS=$'\t' read -r _ branch; do
+    doc="$(baseline_repo_rule "${dir}" "${repo}" "${branch}")"
+    [ -n "${doc}" ] || die "no branch protection rule for ${repo}/${branch} in the rendered fixtures of ${dir}"
+    org="$(jq -r '.org' <<<"${doc}")"
+    rule="$(jq -c '.rule' <<<"${doc}")"
+    perms="$(jq -c '.permissions' <<<"${doc}")"
+    while IFS=$'\t' read -r kind who role; do
+      [ -n "${kind}" ] || continue
+      if [ "${kind}" = team ]; then
+        slug="${who}"
+        for _ in $(seq 1 60); do
+          [ "$(gh_status "$(gh_call GET "/orgs/${org}/teams/${slug}")")" != "200" ] || break
+          sleep 5
+        done
+        gh_write PUT "/orgs/${org}/teams/${slug}/repos/${org}/${repo}" "$(jq -cn --arg p "${role}" '{permission: $p}')" >/dev/null
+      else
+        resp="$(gh_call PUT "/repos/${org}/${repo}/collaborators/${who}" "$(jq -cn --arg p "${role}" '{permission: $p}')")"
+        status="$(gh_status "${resp}")"
+        case "${status}" in 2??) ;; *) warn "granting ${who} ${role} on ${repo} answered HTTP ${status}: $(gh_body "${resp}" | head -c 200)" ;; esac
+      fi
+    done < <(baseline_rule_actors <<<"${perms}")
+    gh_write PUT "/repos/${org}/${repo}/branches/${branch}/protection" "$(baseline_protection_body <<<"${rule}")" >/dev/null
+    if [ "$(baseline_wants_signatures <<<"${rule}")" = true ]; then
+      gh_write POST "/repos/${org}/${repo}/branches/${branch}/protection/required_signatures" >/dev/null
+    fi
+    log "branch protection of ${repo}/${branch} seeded from the fixture"
+  done < <(baseline_protected_repos "${dir}" | awk -F'\t' -v r="${repo}" '$1 == r')
 }
 
 # Organization-level Actions settings: the Organization fixture sets the list of
@@ -316,10 +389,20 @@ case "${1:-}" in
     need_api
     ensure_environment "${1:?usage: oob.sh ensure-environment <repo> <environment> [timeout]}" "${2:?environment}" "${3:-900}"
     ;;
+  wait-branch)
+    shift
+    need_api
+    wait_branch "${1:?usage: oob.sh wait-branch <repo> <branch> [timeout]}" "${2:?branch}" "${3:-600}"
+    ;;
+  seed-protection)
+    shift
+    need_api
+    seed_protection "${1:?usage: oob.sh seed-protection <rendered-dir> <repo>}" "${2:?repo}"
+    ;;
   sweep) shift; cmd_sweep "$@" ;;
   verify-baseline) shift; cmd_verify_baseline "$@" ;;
   *)
-    echo "usage: ${0##*/} prepare <upgrade|adopt> | ensure-environment <repo> <env> [timeout] | sweep | verify-baseline" >&2
+    echo "usage: ${0##*/} prepare <upgrade|adopt> | ensure-environment <repo> <env> [timeout] | wait-branch <repo> <branch> [timeout] | seed-protection <dir> <repo> | sweep | verify-baseline" >&2
     exit 2
     ;;
 esac

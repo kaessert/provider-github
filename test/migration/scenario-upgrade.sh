@@ -38,7 +38,10 @@ build_tree "${BASELINE_DIR}" "${BASELINE_VERSION_LABEL}"
 build_tree "${MIGRATION_CANDIDATE_DIR}" "${CANDIDATE_VERSION_LABEL}"
 
 # --- out-of-band setup -------------------------------------------------------
-"${MIGRATION_DIR}/oob.sh" prepare upgrade || die "out-of-band setup failed"
+if ! "${MIGRATION_DIR}/oob.sh" prepare upgrade; then
+  record FAIL "the out-of-band setup completed (organization snapshot, template repository with a main branch, secrets)" "oob.sh prepare upgrade failed, see the log above"
+  exit 1
+fi
 load_runtime_env
 render_fixtures "${FIXTURES_DIR}/v1" "${EVIDENCE_DIR}/rendered/v1"
 
@@ -62,6 +65,11 @@ log "applying the v0.22.0 fixtures"
 apply_fixtures "${EVIDENCE_DIR}/rendered/v1"
 "${MIGRATION_DIR}/oob.sh" ensure-environment pgh-mig-repo-rules pgh-mig-env 900 >>"${EVIDENCE_DIR}/oob-env.log" 2>&1 &
 BACKGROUND_PIDS+=("$!")
+
+# The Repository fixtures that declare branch protection: wait for GitHub to generate their default
+# branch and, when v0.22.0 is stuck on the unprotected branch, seed the declared protection (baseline.sh).
+baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" \
+  || record WARN "a Repository with declared branch protection is not Synced on the baseline" "see the not-Ready list below"
 
 if wait_settled "${GROUP_CLUSTER}" "${MIGRATION_READY_TIMEOUT}"; then
   record PASS "every v1 fixture is Synced and Ready on the baseline"
