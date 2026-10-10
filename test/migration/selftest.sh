@@ -1140,13 +1140,19 @@ n_observe_plain="$(nested_case observe no "${RR}/nested-atprovider.json" "${RR}/
 n_full_created="$(nested_case full yes "${RR}/nested-atprovider-held.json" "${RR}/snapshots/full-completed.json")"
 n_full_missing="$(nested_case full yes "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
 n_full_unlisted="$(nested_case full no "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
+# the same row when the full manifest does not declare the sub-object: nothing to create, so "GitHub holds none"
+mf="$(adopt_file "${RR}/rendered/full" Repository "${MAIN}")"
+cp "${mf}" "${mf}.bak"
+yq -i 'del(.spec.forProvider.branchProtectionRules)' "${mf}"
+n_full_undeclared="$(nested_case full no "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
+mv "${mf}.bak" "${mf}"
 n_reports_extra="$(nested_case observe yes "${RR}/nested-atprovider-held.json" "${RR}/snapshots/v1.json")"
 if [ "${n_observe}" = EXEMPT ] && [ "${n_observe_detail}" = "GitHub holds none" ] && [ "${n_observe_plain}" = EXEMPT ] \
-  && [ "${n_full_created}" = PASS ] && [ "${n_full_missing}" = FAIL ] && [ "${n_full_unlisted}" = EXEMPT ] && [ "${n_reports_extra}" = FAIL ]; then
-  rec PASS "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management an object the baseline never finished must hold what its manifest declares; status.atProvider reporting what GitHub lacks still fails"
+  && [ "${n_full_created}" = PASS ] && [ "${n_full_missing}" = FAIL ] && [ "${n_full_unlisted}" = FAIL ] && [ "${n_full_undeclared}" = EXEMPT ] && [ "${n_reports_extra}" = FAIL ]; then
+  rec PASS "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management any object must hold the sub-objects its manifest declares (a declared one GitHub lacks fails, an undeclared one is 'GitHub holds none'); status.atProvider reporting what GitHub lacks still fails"
 else
-  rec FAIL "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management an object the baseline never finished must hold what its manifest declares; status.atProvider reporting what GitHub lacks still fails" \
-    "observe ${n_observe} (${n_observe_detail}), unlisted ${n_observe_plain}, full created ${n_full_created}, full missing ${n_full_missing}, full unlisted ${n_full_unlisted}, extra in atProvider ${n_reports_extra}"
+  rec FAIL "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management any object must hold the sub-objects its manifest declares (a declared one GitHub lacks fails, an undeclared one is 'GitHub holds none'); status.atProvider reporting what GitHub lacks still fails" \
+    "observe ${n_observe} (${n_observe_detail}), unlisted ${n_observe_plain}, full created ${n_full_created}, full missing ${n_full_missing}, full unlisted ${n_full_unlisted}, full undeclared ${n_full_undeclared}, extra in atProvider ${n_reports_extra}"
 fi
 EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
 

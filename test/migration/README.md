@@ -379,7 +379,7 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    and no create: the candidate finishes what the baseline could not. That update's writes
    are left out of the snapshot comparison (the sub-objects the `v1` snapshot held none of,
    and the repository's `updated_at`; IDs and every other value stay compared) and the
-   sub-objects the manifest declares must exist afterwards, else the row fails. A second
+   sub-objects the manifest declares must exist afterwards, else the row fails (for every object, not only that one). A second
    update, a create, an update under Observe and the same update of any other object are
    failures.
 6. **One deliberate change per kind** (`expect-adopt-change.tsv`): a description, a

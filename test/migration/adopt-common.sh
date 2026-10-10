@@ -634,13 +634,13 @@ adopt_check_nested() {
       sv="$(eval_expr "${s}" "${snap}")"
       verdict="$(nested_verdict "${cond}" "${phase}" "${av}" "${sv}")"
       if [ "${verdict}" = FAIL ] && nested_none "${kind}" "${mr}" "${rid}" "${atprov}" "${snap}"; then
-        # GitHub holds nothing of this sub-object (the baseline never finished the object), and
-        # status.atProvider reports nothing either: not a mismatch under Observe. Once the one
-        # completing update has run, a sub-object the manifest declares must exist.
-        if [ "${phase}" = full ] && adopt_completing "${kind}/${mr}" \
+        # GitHub holds nothing of this sub-object, and status.atProvider reports nothing either:
+        # not a mismatch under Observe. Under full management a sub-object the manifest declares
+        # must exist, whether or not the baseline finished the object.
+        if [ "${phase}" = full ] \
           && manifest_declares "$(adopt_file "${EVIDENCE_DIR}/rendered/full" "${kind}" "${mr}")" "${rid}"; then
           verdict=FAIL
-          detail="GitHub still holds none after the completing update; the manifest declares it"
+          detail="GitHub holds none after full management; the manifest declares it"
         else
           verdict=EXEMPT
           detail="GitHub holds none"
