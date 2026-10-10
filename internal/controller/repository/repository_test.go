@@ -783,27 +783,11 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		// An archived repo with matching teams, collaborators and topics is up to
-		// date. Branch protection, rulesets and webhooks are frozen while archived,
-		// so no mocks are wired for them — a call would be a nil-func panic, proving
-		// Observe does not read the frozen dimensions.
+		// date. Branch protection, rulesets and webhooks are frozen for writing while
+		// archived, not for reading, so they are read for the mirror and compared
+		// with nothing.
 		"ArchivedUpToDate": {
-			fields: fields{github: &ghclient.Client{
-				Services: &ghclient.Services{
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							r := githubRepository()
-							r.Archived = github.Ptr(true)
-							return r, nil, nil
-						},
-						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
-							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
-						},
-						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
-							return githubTeams(), fake.GenerateEmptyResponse(), nil
-						},
-					},
-				},
-			}},
+			fields: fields{github: clientFor(archivedRepositories())},
 			args: args{
 				mg: repository(withArchived(true)),
 			},

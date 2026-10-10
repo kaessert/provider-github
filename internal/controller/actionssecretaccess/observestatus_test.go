@@ -21,8 +21,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-github/v90/github"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
@@ -96,5 +98,34 @@ func TestObserveStatusOmittedVisibilityNoMismatch(t *testing.T) {
 				t.Errorf("selectedRepositories: -want, +got:\n%s", diff)
 			}
 		})
+	}
+}
+
+// A visibility mismatch is reported in Ready even when the repository list
+// cannot be read, since the report does not depend on the list. Without a
+// mismatch, a failed read is an error.
+func TestObserveVisibilityMismatchSurvivesFailedListRead(t *testing.T) {
+	boom := errors.New("boom")
+	failList := func(context.Context, string, string, *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+		return nil, nil, boom
+	}
+	e := newExternal(&fake.MockActionsClient{
+		MockGetOrgSecret:                  getSecret(visibilitySelected),
+		MockListSelectedReposForOrgSecret: failList,
+	}, nil)
+
+	cr := newCR(visibilityAll)
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if diff := cmp.Diff(upToDate, got); diff != "" {
+		t.Errorf("Observe: -want, +got:\n%s", diff)
+	}
+	assertReady(t, cr, corev1.ConditionFalse, "VisibilityMismatch")
+
+	cr = newCR(visibilitySelected, testRepoA)
+	if _, err := e.Observe(context.Background(), cr); !errors.Is(err, boom) {
+		t.Errorf("Observe without a mismatch: error = %v, want %v", err, boom)
 	}
 }

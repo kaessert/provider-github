@@ -343,11 +343,68 @@ func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension strin
 	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
 }
 
+// mirrorFrozenSections reads webhooks, branch protection and rulesets, which
+// GitHub refuses to write while the repository is archived but still returns, and
+// mirrors them into status.atProvider. Each section is read only while the spec
+// declares it, as when the repository is not archived, and cleared otherwise.
+// None of them takes part in drift: they cannot be reconciled while archived.
+func (c *external) mirrorFrozenSections(ctx context.Context, cr *v1alpha1.Repository, name string) error {
+	org := cr.Spec.ForProvider.Org
+
+	cr.Status.AtProvider.Webhooks = nil
+	if cr.Spec.ForProvider.Webhooks != nil {
+		hooks, err := getRepoWebhooks(ctx, c.github, org, name)
+		if err != nil {
+			return err
+		}
+		ghWToConfig, err := c.getRepoWebhooksWithConfig(ctx, hooks, cr)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.Webhooks, err = mirrorWebhooks(ghWToConfig); err != nil {
+			return err
+		}
+	}
+
+	cr.Status.AtProvider.BranchProtectionRules = nil
+	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		protectedBranches, err := listProtectedBranches(ctx, c.github, org, name)
+		if err != nil {
+			return err
+		}
+		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, org, name, protectedBranches)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.BranchProtectionRules, err = mirrorBranchProtection(ghBPRToConfig); err != nil {
+			return err
+		}
+	}
+
+	cr.Status.AtProvider.RepositoryRules = nil
+	if cr.Spec.ForProvider.RepositoryRules != nil {
+		// As when not archived, a failed list reads as no rulesets: an organization
+		// whose plan has no rulesets answers the list with an error.
+		ghRulesets, _ := getRepositoryRules(ctx, c.github, org, name)
+		// No ruleset is named here, so rule types this provider does not manage are
+		// mirrored rather than rejected: only a write needs them rejected.
+		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, nil)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // observeArchived reports drift for an archived repo. Only team access, topics and
 // collaborator removals are reconcilable while archived; settings, branch protection,
 // rulesets, webhooks and collaborator additions are frozen and surfaced via a
-// condition. The frozen dimensions aren't even read here. drift is true when an
-// earlier check, the spec's archived flag against GitHub's, already differed.
+// condition. The frozen sections are read and mirrored, but never compared. drift
+// is true when an earlier check, the spec's archived flag against GitHub's, already
+// differed.
 func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string, drift bool) (managed.ExternalObservation, error) {
 	org := cr.Spec.ForProvider.Org
 
@@ -366,18 +423,21 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	// Neither is reconciled while archived; skipped adds are named in the archived condition.
 	setCollaboratorPartialCondition(cr, nil, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
+	// The unapplied records hold writes that were attempted and not applied, not
+	// what GitHub has. Nothing is written while archived, so both stay empty.
 	cr.Status.AtProvider.UnappliedBranchProtection = nil
-	cr.Status.AtProvider.BranchProtectionRules = nil
-	cr.Status.AtProvider.Webhooks = nil
-	cr.Status.AtProvider.RepositoryRules = nil
+	cr.Status.AtProvider.UnappliedSettings = nil
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
-	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
+
+	if err := c.mirrorFrozenSections(ctx, cr, name); err != nil {
+		return managed.ExternalObservation{}, err
+	}
 
 	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)

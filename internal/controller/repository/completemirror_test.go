@@ -144,3 +144,59 @@ func TestObserveMirrorsArchivedRepositoryTheSpecDoesNotArchive(t *testing.T) {
 		})
 	}
 }
+
+// Webhooks, branch protection and rulesets are frozen while a repository is
+// archived, but GitHub still returns them, so Observe mirrors them as it does
+// otherwise, whether or not the spec archives the repository. The records of
+// attempted writes are not mirrors of GitHub and stay empty: nothing is written
+// while archived.
+func TestObserveMirrorsFrozenSectionsOfArchivedRepository(t *testing.T) {
+	inSync := observeBoth(t, upToDateRepositories(nil), repository())["Cluster"]
+	want := mirrorOf(inSync.ap)
+	if len(want.Webhooks) == 0 || len(want.BranchProtectionRules) == 0 || len(want.RepositoryRules) == 0 {
+		t.Fatalf("baseline mirror is empty: %+v", want)
+	}
+
+	cases := map[string]struct {
+		mods         []repositoryModifier
+		wantUpToDate bool
+	}{
+		"SpecArchives":         {mods: []repositoryModifier{withArchived(true)}, wantUpToDate: true},
+		"SpecDoesNotArchive":   {mods: nil, wantUpToDate: false},
+		"SpecDeclaresArchived": {mods: []repositoryModifier{withArchived(false)}, wantUpToDate: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mods := append([]repositoryModifier{withStaleUnappliedRecords()}, tc.mods...)
+			for scope, got := range observeBoth(t, archivedRepositories(), repository(mods...)) {
+				t.Run(scope, func(t *testing.T) {
+					if !got.obs.ResourceExists || got.obs.ResourceUpToDate != tc.wantUpToDate {
+						t.Fatalf("Observe = %+v, want exists and up to date = %v", got.obs, tc.wantUpToDate)
+					}
+					gotMirror := mirrorOf(got.ap)
+					if diff := cmp.Diff(want.Webhooks, gotMirror.Webhooks); diff != "" {
+						t.Errorf("webhooks: -GitHub, +atProvider:\n%s", diff)
+					}
+					if diff := cmp.Diff(want.BranchProtectionRules, gotMirror.BranchProtectionRules); diff != "" {
+						t.Errorf("branchProtectionRules: -GitHub, +atProvider:\n%s", diff)
+					}
+					if diff := cmp.Diff(want.RepositoryRules, gotMirror.RepositoryRules); diff != "" {
+						t.Errorf("repositoryRules: -GitHub, +atProvider:\n%s", diff)
+					}
+					if got.ap.UnappliedBranchProtection != nil || got.ap.UnappliedSettings != nil {
+						t.Errorf("unapplied records = %+v, %+v, want none while archived", got.ap.UnappliedBranchProtection, got.ap.UnappliedSettings)
+					}
+				})
+			}
+		})
+	}
+}
+
+// withStaleUnappliedRecords leaves records from an earlier poll of a repository
+// that was not archived.
+func withStaleUnappliedRecords() repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{{Branch: "main"}}
+		r.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "description"}}
+	}
+}
