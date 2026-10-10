@@ -724,7 +724,9 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 // iterating pages. The Protected=true filter on GitHub keeps the
 // page count tiny (typically 1 page) regardless of how many feature
 // branches the repo has, so per-Observe pagination cost stays
-// constant even on monorepos with thousands of branches.
+// constant even on monorepos with thousands of branches. The filter also
+// matches branches protected only by a ruleset, so a listed branch may have
+// no classic protection (see getBPRWithConfig).
 func listProtectedBranches(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Branch, error) {
 	opts := &github.BranchListOptions{
 		Protected:   github.Ptr(true),
@@ -1365,12 +1367,18 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 // getBPRWithConfig creates a map of BranchProtectionRules for a GitHub repository based on its branches' current protection settings.
 // It fetches each branch's protection settings from GitHub and maps them to BranchProtectionRule objects.
 // Any lists of users, teams, or apps in the rules are sorted.
-// It returns the BranchProtectionRules map, and any error encountered during the process.
+// GitHub's protected-branch listing also returns branches guarded only by a ruleset; the classic
+// endpoint answers those with "Branch not protected". Such a branch has no classic rule, so it is
+// left out of the map (like an unprotected branch) rather than failing the whole read. Any other
+// error is returned.
 func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
 	bprToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(branches))
 
 	for _, branch := range branches {
 		protection, _, err := gh.Repositories.GetBranchProtection(ctx, owner, repo, branch.GetName())
+		if errors.Is(err, github.ErrBranchNotProtected) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
