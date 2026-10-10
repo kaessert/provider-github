@@ -312,12 +312,27 @@ both_scopes_observe_verdict() {
   fi
 }
 
+# both_scopes_unsynced_sides <namespaced Synced> <cluster Synced> -- names the side(s) not Synced=True.
+both_scopes_unsynced_sides() {
+  if [ "$1" != True ] && [ "$2" != True ]; then
+    echo "both the namespaced and the cluster-scoped object are"
+  elif [ "$1" != True ]; then
+    echo "the namespaced object is"
+  else
+    echo "the cluster-scoped object is"
+  fi
+}
+
 # both_scopes_write_verdict <namespaced updates> <cluster updates> <namespaced Synced> <cluster Synced>
 # The updates are the ones each controller issued for the one Team, from the moment the second
 # object was applied.
 both_scopes_write_verdict() {
   if [ "$1" -ge 1 ] && [ "$2" -ge 1 ]; then
     echo "NO GUARD: a cluster-scoped and a namespaced Team managed one GitHub team at once and both wrote (namespaced $1 updates, cluster-scoped $2 updates): each controller overwrote the other's description"
+  elif [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && { [ "$3" != True ] || [ "$4" != True ]; }; then
+    # Nobody wrote and a side lost Synced: a guard that refuses the late claimant leaves exactly
+    # this (the refused object is Synced=False, the holder sees no drift).
+    echo "GUARDED: neither controller issued an update in the window and $(both_scopes_unsynced_sides "$3" "$4") not Synced=True (namespaced Synced=$3, cluster-scoped Synced=$4), so something refused a scope"
   elif [ "$1" -eq 0 ] && [ "$2" -eq 0 ]; then
     echo "inconclusive: neither controller issued an update in the window (namespaced Synced=$3, cluster-scoped Synced=$4)"
   elif [ "$1" -ge 1 ]; then
@@ -330,11 +345,12 @@ both_scopes_write_verdict() {
 # both_scopes_write_status <write verdict> -- how the report classifies the verdict. One GitHub
 # object is managed by exactly one managed resource in exactly one scope, so two scopes naming it
 # both writing is the predicted outcome (PASS). One side not writing means something kept it from
-# writing: cross-scope behaviour nobody documented (WARN). Anything else is INFO.
+# writing, or a side lost Synced with nobody writing (GUARDED): cross-scope behaviour nobody
+# documented (WARN). Anything else is INFO.
 both_scopes_write_status() {
   case "$1" in
     "NO GUARD"*) echo PASS ;;
-    "ONE SCOPE WROTE"*) echo WARN ;;
+    "ONE SCOPE WROTE"*|"GUARDED"*) echo WARN ;;
     *) echo INFO ;;
   esac
 }
@@ -345,6 +361,7 @@ both_scopes_summary() {
   case "$2" in
     "NO GUARD"*) echo "No, as documented. One GitHub object is managed by exactly one managed resource in exactly one scope; the provider has no guard that stops a cluster-scoped and a namespaced managed resource from managing the same GitHub object at once, and the two controllers both wrote to the same team, as two cluster-scoped resources naming one object would. Adopt into one scope at a time." ;;
     "ONE SCOPE WROTE"*) echo "Something stopped one scope from writing, which is not documented behaviour (see the write verdict above); the Observe-only probe: $1." ;;
+    "GUARDED"*) echo "Something refused one scope, which is not documented behaviour (see the write verdict above); the Observe-only probe: $1." ;;
     "inconclusive"*) echo "Not established: the full-management probe was inconclusive; the Observe-only probe: $1." ;;
     *) echo "Not measured: the full-management probe did not run; the Observe-only probe: ${1:-not measured}." ;;
   esac

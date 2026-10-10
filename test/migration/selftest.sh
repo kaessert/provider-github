@@ -462,7 +462,15 @@ v_ok=1
 [[ "$(both_scopes_write_status "$(both_scopes_write_verdict 3 0 True False)")" == WARN ]] || v_ok=0
 [[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 3 False True)")" == WARN ]] || v_ok=0
 [[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 0 True True)")" == INFO ]] || v_ok=0
-[[ "$(both_scopes_write_status 'a guard: the second scope was refused')" == INFO ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 True False)" == "GUARDED"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 False False)" == "GUARDED"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 False True)" == "GUARDED: "*"the namespaced object is not"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 True False)" == "GUARDED: "*"the cluster-scoped object is not"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 False False)" == "GUARDED: "*"both the namespaced and the cluster-scoped object are not"* ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 0 True False)")" == WARN ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 0 False False)")" == WARN ]] || v_ok=0
+[[ "$(both_scopes_write_status "$(both_scopes_write_verdict 0 0 True True)")" == INFO ]] || v_ok=0
+[[ "$(both_scopes_summary x "$(both_scopes_write_verdict 0 0 True False)")" == "Something refused"* ]] || v_ok=0
 [ "${v_ok}" -eq 1 ] && record PASS "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured" \
   || record FAIL "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured"
 

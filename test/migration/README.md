@@ -445,9 +445,11 @@ orphaned, the candidate is installed.
    resource, in exactly one scope; naming it from two scopes is an invalid configuration (Crossplane
    has never guarded it for two cluster-scoped resources either), so the predicted outcome is that
    both controllers write and overwrite each other. The step asserts that: both wrote is a PASS, and
-   the numbers are still reported. A run in which only one side wrote (a guard appeared) is a WARN,
-   because it means cross-scope behaviour exists that is not documented; one in which neither wrote
-   is recorded as inconclusive. `MIGRATION_BOTH_SCOPES_WRITE=0` skips this step.
+   the numbers are still reported. A run in which only one side wrote, or in which neither wrote and
+   a side is not `Synced=True` (a guard refused the second scope, and the holder sees no drift), is a
+   WARN (verdicts `ONE SCOPE WROTE` and `GUARDED`), because it means cross-scope behaviour exists that
+   is not documented; one in which neither wrote and both are `Synced=True` is recorded as
+   inconclusive. `MIGRATION_BOTH_SCOPES_WRITE=0` skips this step.
 9. Cleanup deletes the managed resources of both groups, the namespaces and the
    ClusterProviderConfig, removes the Provider and sweeps.
 

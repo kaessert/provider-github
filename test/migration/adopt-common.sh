@@ -1056,7 +1056,7 @@ adopt_bothscopes_write_phase() {
   # in which one side did not write.
   case "$(both_scopes_write_status "${verdict}")" in
     PASS) record PASS "both scopes under full management: both controllers wrote, as expected for an object managed from two scopes" "${verdict}" ;;
-    WARN) record WARN "both scopes under full management: only one scope wrote, undocumented cross-scope behaviour" "${verdict}" ;;
+    WARN) record WARN "both scopes under full management: only one scope wrote or a scope was refused, undocumented cross-scope behaviour" "${verdict}" ;;
     *) record INFO "both scopes under full management: verdict" "${verdict}" ;;
   esac
   # Orphan on both: deleting the objects leaves the team for the cleanup sweep.
