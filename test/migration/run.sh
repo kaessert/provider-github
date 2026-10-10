@@ -9,8 +9,9 @@
 #   selftest          offline: test the snapshot tool and the validators against
 #                     a local stand-in for the GitHub API
 #   upgrade           scenario (a): in-place upgrade from the baseline tag
-#   adopt-cluster     scenario (b): Observe-only adoption, cluster-scoped kinds
-#   adopt-namespaced  scenario (c): Observe-only adoption, namespaced kinds
+#   adopt-cluster     scenario (b): the full adoption flow, cluster-scoped kinds
+#   adopt-namespaced  scenario (c): the full adoption flow, namespaced kinds, both
+#                     ProviderConfig kinds, references, both-scopes probe
 #
 # The three scenarios call the GitHub API and need a cluster, so they refuse to
 # start without the GitHub App credentials (named when missing) and without the

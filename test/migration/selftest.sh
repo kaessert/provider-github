@@ -194,6 +194,8 @@ else
 fi
 
 # --- the adoption flow: derivation, expectations, verdicts ----------------------------
+# shellcheck source=cluster.sh
+. "${HERE}/cluster.sh"
 # shellcheck source=adopt-common.sh
 . "${HERE}/adopt-common.sh"
 # shellcheck disable=SC2034  # read by render in lib.sh
@@ -344,6 +346,157 @@ if [ "${counts}" = "0 1 2" ] && [ "${none}" = "0 0 0" ]; then
   record PASS "write counts are read per kind and object from the provider log, with the reconciles as the control"
 else
   record FAIL "write counts are read per kind and object from the provider log, with the reconciles as the control" "got '${counts}' and '${none}'"
+fi
+
+# The namespaced scope: the same v1 fixtures, moved to two namespaces and two ProviderConfig kinds.
+derive_adoption observe "${T}/ex" - "${T}/ns-observe" namespaced
+derive_adoption full "${T}/ex" - "${T}/ns-full" namespaced
+fy() { yq "$1" "$(compgen -G "$2" | head -n1)"; } # fy <yq expression> <glob of one file>
+ns_of() { yq '.metadata.namespace' "${T}/ns-observe"/*-"$1"-"$2".yaml; }
+pc_of() { yq '.spec.providerConfigRef.kind + "/" + .spec.providerConfigRef.name' "${T}/ns-observe"/*-"$1"-"$2".yaml; }
+if [ "$(ns_of team pgh-mig-team-child)" = "${ADOPT_NS_A}" ] && [ "$(pc_of team pgh-mig-team-child)" = "ProviderConfig/${ADOPT_PC_NAME}" ] \
+  && [ "$(ns_of organizationvariable pgh-mig-var-all)" = "${ADOPT_NS_B}" ] && [ "$(pc_of organizationvariable pgh-mig-var-all)" = "ClusterProviderConfig/${ADOPT_CPC_NAME}" ] \
+  && [ "$(ns_of repository pgh-mig-repo-fork)" = "${ADOPT_NS_B}" ] && [ "$(ns_of repository pgh-mig-repo-main)" = "${ADOPT_NS_A}" ] \
+  && [ "$(fy '.apiVersion' "${T}/ns-observe"/*-team-pgh-mig-team-child.yaml)" = "organizations.github.m.crossplane.io/v1alpha1" ] \
+  && [ "$(fy '.metadata.labels."pgh-mig-target"' "${T}/ns-observe"/*-team-pgh-mig-team-child.yaml)" = "pgh-mig-team-child" ]; then
+  record PASS "the namespaced derivation spreads the objects over two namespaces, a ProviderConfig in one and a ClusterProviderConfig in the other, in the namespaced group"
+else
+  record FAIL "the namespaced derivation spreads the objects over two namespaces, a ProviderConfig in one and a ClusterProviderConfig in the other, in the namespaced group"
+fi
+hook_doc="${T}/ns-observe/*-organizationwebhook-pgh-mig-hook-wcs.yaml"
+repo_doc="${T}/ns-observe/*-repository-pgh-mig-repo-main.yaml"
+if [ "$(fy '.spec.writeConnectionSecretToRef | keys | join(",")' "${hook_doc}")" = name ] \
+  && [ "$(fy '.spec.forProvider.secretKeyRef.namespace' "${hook_doc}")" = "${ADOPT_NS_B}" ] \
+  && [ "$(fy '.spec.forProvider.webhooks[0].secretKeyRef.namespace' "${repo_doc}")" = "${ADOPT_NS_A}" ] \
+  && [ "$(fy '.spec | has("publishConnectionDetailsTo")' "${T}/ns-observe"/*-organizationwebhook-pgh-mig-hook-ess.yaml)" = false ]; then
+  record PASS "a namespaced object reads its secrets from its own namespace: bare connection secret name, secretKeyRef in the object's namespace, no external secret store"
+else
+  record FAIL "a namespaced object reads its secrets from its own namespace: bare connection secret name, secretKeyRef in the object's namespace, no external secret store"
+fi
+mship="${T}/ns-full/*-membership-pgh-mig-membership.yaml"
+if [ "$(fy '.spec | has("deletionPolicy")' "${mship}")" = false ] && [ "$(fy '.spec.managementPolicies | contains(["Delete"])' "${mship}")" = false ] \
+  && [ "$(fy '.spec.managementPolicies | contains(["Update"])' "${mship}")" = true ] \
+  && [ "$(fy '.spec.managementPolicies[0]' "${T}/ns-full/"*-team-pgh-mig-team-parent.yaml)" = '*' ]; then
+  record PASS "a namespaced kind has no deletionPolicy: the Membership the baseline kept with Orphan leaves Delete out of its management policies, the others keep the default"
+else
+  record FAIL "a namespaced kind has no deletionPolicy: the Membership the baseline kept with Orphan leaves Delete out of its management policies, the others keep the default"
+fi
+
+# Reference twins: plain strings replaced by Ref and Selector fields, checks that read the declared value.
+derive_ref_twins "${T}/ns-observe" "${T}/refs"
+rt_team="${T}/refs/*-team-pgh-mig-ref-team.yaml"
+rt_repo="${T}/refs/*-repository-pgh-mig-ref-repo.yaml"
+rt_xns="${T}/refs/*-organizationvariable-pgh-mig-ref-xns-var.yaml"
+if [ "$(find "${T}/refs" -name '*.yaml' | wc -l)" -eq 5 ] \
+  && [ "$(fy '.spec.forProvider.orgRef.name' "${rt_team}")" = pgh-mig-org ] && [ "$(fy '.spec.forProvider | has("org")' "${rt_team}")" = false ] \
+  && [ "$(fy '.spec.forProvider.parentRef.name' "${rt_team}")" = pgh-mig-team-parent ] \
+  && [ "$(fy '.spec.forProvider.members[0].userRef.name' "${rt_team}")" = pgh-mig-membership ] \
+  && [ "$(fy '.spec.forProvider.orgSelector.matchLabels."pgh-mig-target"' "${rt_repo}")" = pgh-mig-org ] \
+  && [ "$(fy '.spec.forProvider.permissions.teams[0].teamSelector.matchLabels."pgh-mig-target"' "${rt_repo}")" = pgh-mig-team-child ] \
+  && [ "$(fy '.spec.forProvider.permissions.users[0].userSelector.matchLabels."pgh-mig-target"' "${rt_repo}")" = pgh-mig-membership ] \
+  && [ "$(fy '.metadata.namespace' "${rt_xns}")" = "${ADOPT_NS_B}" ] && [ "$(fy '.spec.forProvider.orgRef.name' "${rt_xns}")" = pgh-mig-org ] \
+  && [ "$(fy '.metadata | has("labels")' "${rt_team}")" = false ] \
+  && [ "$(jq -r '.resolvable | join(",")' "${T}/refs/names.meta")" = "pgh-mig-ref-membership,pgh-mig-ref-org,pgh-mig-ref-repo,pgh-mig-ref-team" ] \
+  && [ "$(jq -r '.unresolvable | join(",")' "${T}/refs/names.meta")" = pgh-mig-ref-xns-var ] \
+  && [ "$(awk -F'\t' '$1 == "pgh-mig-ref-team" && $5 == ".spec.forProvider.parent" { print $6 }' "${T}/refs/checks.tsv")" = '"pgh-mig-team-parent"' ] \
+  && [ "$(awk -F'\t' '$1 == "pgh-mig-ref-xns-var" { print $6 }' "${T}/refs/checks.tsv")" = null ]; then
+  record PASS "the reference twins hold Ref and Selector fields in place of the plain strings, in the namespace of their targets, and the cross-namespace twin names a target of the other namespace"
+else
+  record FAIL "the reference twins hold Ref and Selector fields in place of the plain strings, in the namespace of their targets, and the cross-namespace twin names a target of the other namespace"
+fi
+# A twin whose target is missing from the adopted set is skipped.
+rm -f "${T}/ns-observe"/*-team-pgh-mig-team-parent.yaml
+derive_ref_twins "${T}/ns-observe" "${T}/refs-missing"
+if [ -z "$(compgen -G "${T}/refs-missing/*-team-pgh-mig-ref-team.yaml")" ] && [ "$(find "${T}/refs-missing" -name '*.yaml' | wc -l)" -eq 4 ]; then
+  record PASS "a reference twin is skipped when an object it points at is not in the adopted set"
+else
+  record FAIL "a reference twin is skipped when an object it points at is not in the adopted set"
+fi
+ref_ok=1
+ref_value_equal '"Octocat"' '"octocat"' || ref_ok=0
+ref_value_equal '["A","b"]' '["a","B"]' || ref_ok=0
+ref_value_equal null '"x"' && ref_ok=0
+ref_value_equal '["a"]' '["a","b"]' && ref_ok=0
+[ "${ref_ok}" -eq 1 ] && record PASS "a resolved reference is compared with the declared value case-insensitively, and a missing one never matches" \
+  || record FAIL "a resolved reference is compared with the declared value case-insensitively, and a missing one never matches"
+
+# The cluster-scoped twins: one per kind, over the namespaced objects.
+derive_adoption observe "${T}/ex" - "${T}/ns-observe-all" namespaced
+derive_cluster_twins "${T}/ex" - "${T}/ns-observe-all" "${T}/cl-twins"
+if [ "$(find "${T}/cl-twins" -name '*.yaml' | wc -l)" -eq 9 ] \
+  && [ "$(fy '.metadata.name' "${T}/cl-twins"/*-team-pgh-mig-cl-pgh-mig-team-parent.yaml)" = pgh-mig-cl-pgh-mig-team-parent ] \
+  && [ "$(fy '.metadata.annotations["crossplane.io/external-name"]' "${T}/cl-twins"/*-team-pgh-mig-cl-pgh-mig-team-parent.yaml)" = pgh-mig-team-parent ] \
+  && [ "$(fy '.apiVersion' "${T}/cl-twins"/*-team-pgh-mig-cl-pgh-mig-team-parent.yaml)" = organizations.github.crossplane.io/v1alpha1 ] \
+  && [ "$(fy '.spec.managementPolicies[0]' "${T}/cl-twins"/*-team-pgh-mig-cl-pgh-mig-team-parent.yaml)" = Observe ]; then
+  record PASS "the cluster-scoped twin of an object is Observe-only, in the cluster group, with the same external name and a name of its own (9 kinds)"
+else
+  record FAIL "the cluster-scoped twin of an object is Observe-only, in the cluster group, with the same external name and a name of its own (9 kinds)"
+fi
+derive_both_teams "${T}/both"
+if [ "$(fy '.metadata.annotations["crossplane.io/external-name"]' "${T}/both/10-team-namespaced.yaml")" = "${ADOPT_BOTH_TEAM}" ] \
+  && [ "$(fy '.metadata.annotations["crossplane.io/external-name"]' "${T}/both/20-team-cluster.yaml")" = "${ADOPT_BOTH_TEAM}" ] \
+  && [ "$(fy '.spec.forProvider.description' "${T}/both/10-team-namespaced.yaml")" != "$(fy '.spec.forProvider.description' "${T}/both/20-team-cluster.yaml")" ]; then
+  record PASS "the two Teams of the both-scopes probe name one GitHub team and declare different descriptions"
+else
+  record FAIL "the two Teams of the both-scopes probe name one GitHub team and declare different descriptions"
+fi
+
+# The verdicts of the both-scopes probe, in words.
+v_ok=1
+[[ "$(both_scopes_observe_verdict 9 9 0)" == "no guard"* ]] || v_ok=0
+[[ "$(both_scopes_observe_verdict 9 7 0)" == "the second scope is treated differently"* ]] || v_ok=0
+[[ "$(both_scopes_observe_verdict 9 9 2)" == "the second scope is treated differently"* ]] || v_ok=0
+[[ "$(both_scopes_observe_verdict 0 0 0)" == "not measured"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 3 2 True True)" == "NO GUARD"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 0 True True)" == "inconclusive"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 3 0 True False)" == "ONE SCOPE WROTE: only the namespaced"* ]] || v_ok=0
+[[ "$(both_scopes_write_verdict 0 3 False True)" == "ONE SCOPE WROTE: only the cluster-scoped"* ]] || v_ok=0
+[[ "$(both_scopes_summary x "$(both_scopes_write_verdict 3 2 True True)")" == "No. The provider has no guard"* ]] || v_ok=0
+[[ "$(both_scopes_summary x "$(both_scopes_write_verdict 3 0 True False)")" == "Something stopped"* ]] || v_ok=0
+[[ "$(both_scopes_summary x '')" == "Not measured"* ]] || v_ok=0
+[ "${v_ok}" -eq 1 ] && record PASS "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured" \
+  || record FAIL "the both-scopes verdicts say a guard is absent only when both controllers wrote, and say plainly when nothing was measured"
+
+# The ProviderConfig path of an object is read from its namespace and the kind of ProviderConfig it names.
+printf '[{"kind":"Team","name":"a","namespace":"n1","providerConfigKind":"ProviderConfig"},{"kind":"Team","name":"b","namespace":"n2","providerConfigKind":"ClusterProviderConfig"},{"kind":"Team","name":"c","namespace":"","providerConfigKind":"ProviderConfig"}]' >"${T}/paths.json"
+if [ "$(adopt_path_of "${T}/paths.json" Team a)" = "n1 (ProviderConfig)" ] && [ "$(adopt_path_of "${T}/paths.json" Team b)" = "n2 (ClusterProviderConfig)" ] \
+  && [ "$(adopt_path_of "${T}/paths.json" Team c)" = cluster ] && [ "$(adopt_path_of "${T}/paths.json" Team z)" = - ]; then
+  record PASS "the ProviderConfig path of an object is its namespace and the kind of ProviderConfig it names"
+else
+  record FAIL "the ProviderConfig path of an object is its namespace and the kind of ProviderConfig it names"
+fi
+
+# Helper objects are told from the adopted ones by name.
+aux_ok=1
+for n in pgh-mig-adopt-drift pgh-mig-ref-team pgh-mig-ref-xns-var pgh-mig-cl-pgh-mig-org pgh-mig-both-team; do
+  jq -en --arg a "${ADOPT_AUX_RE}" --arg n "${n}" '$n | test($a)' >/dev/null || aux_ok=0
+done
+for n in pgh-mig-org pgh-mig-team-parent pgh-mig-repo-main pgh-mig-rg-selected pgh-mig-hook-plain pgh-mig-var-all; do
+  jq -en --arg a "${ADOPT_AUX_RE}" --arg n "${n}" '$n | test($a)' >/dev/null && aux_ok=0
+done
+[ "${aux_ok}" -eq 1 ] && record PASS "the helper objects (drift probe, reference twins, cluster-scoped twins, both-scopes Teams) are told from the adopted ones by name" \
+  || record FAIL "the helper objects (drift probe, reference twins, cluster-scoped twins, both-scopes Teams) are told from the adopted ones by name"
+
+# Write counts of a namespaced controller: the group is part of the controller name, the namespace of the request.
+cat >"${T}/provider-ns.log" <<'LOG'
+2026-10-09T21:39:20Z	DEBUG	provider-github	Reconciling	{"controller": "managed/team.organizations.github.m.crossplane.io", "request": {"name":"pgh-mig-team-parent","namespace":"pgh-mig-ns-a"}}
+2026-10-09T21:39:21Z	DEBUG	provider-github	Successfully requested update of external resource	{"controller": "managed/team.organizations.github.m.crossplane.io", "request": {"name":"pgh-mig-team-parent","namespace":"pgh-mig-ns-a"}}
+2026-10-09T21:39:22Z	DEBUG	provider-github	Reconciling	{"controller": "managed/team.organizations.github.m.crossplane.io", "request": {"namespace":"pgh-mig-ns-a","name":"pgh-mig-team-parent"}}
+2026-10-09T21:39:23Z	DEBUG	provider-github	Reconciling	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+2026-10-09T21:39:24Z	DEBUG	provider-github	Successfully requested update of external resource	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+2026-10-09T21:39:25Z	DEBUG	provider-github	Successfully requested update of external resource	{"controller": "managed/team.organizations.github.crossplane.io", "request": {"name":"pgh-mig-team-parent"}}
+LOG
+ns_counts="$(log_counts "${T}/provider-ns.log" Team pgh-mig-team-parent "${GROUP_NAMESPACED}")"
+cl_counts="$(log_counts "${T}/provider-ns.log" Team pgh-mig-team-parent "${GROUP_CLUSTER}")"
+# shellcheck disable=SC2034  # read by log_counts
+ADOPT_GROUP="${GROUP_NAMESPACED}"
+dflt_counts="$(log_counts "${T}/provider-ns.log" Team pgh-mig-team-parent)"
+# shellcheck disable=SC2034  # read by log_counts
+ADOPT_GROUP="${GROUP_CLUSTER}"
+if [ "${ns_counts}" = "0 1 2" ] && [ "${cl_counts}" = "0 2 1" ] && [ "${dflt_counts}" = "0 1 2" ]; then
+  record PASS "write counts tell the namespaced controller from the cluster-scoped one over the same object name, whatever the order of the request's fields"
+else
+  record FAIL "write counts tell the namespaced controller from the cluster-scoped one over the same object name, whatever the order of the request's fields" "namespaced '${ns_counts}', cluster '${cl_counts}', default '${dflt_counts}'"
 fi
 
 # --- entry point fails fast and names the input -----------------------------------

@@ -337,6 +337,61 @@ YAML
   fi
 }
 
+# apply_namespaced_provider_configs -- the two ways a namespaced managed resource
+# reaches GitHub, each with its credentials where that path looks for them:
+#   * a ProviderConfig (github.m.crossplane.io) in namespace A, whose Secret is in
+#     namespace A (a namespaced ProviderConfig reads its Secret from its own namespace);
+#   * a ClusterProviderConfig, whose Secret is in the Crossplane namespace, used from
+#     namespace B, which holds no credentials Secret and no ProviderConfig.
+# The ProviderConfig of namespace A and the ClusterProviderConfig have different names,
+# so a reference can only mean one of them.
+apply_namespaced_provider_configs() {
+  local ns_pc="$1" ns_cpc="$2" pc="$3" cpc="$4" pem creds ns
+  require_credentials
+  pem="$(printf '%s' "${PROVIDER_GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d)"
+  case "${pem}" in -----BEGIN*) ;; *) die "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64 does not decode to a PEM private key" ;; esac
+  creds="${PROVIDER_GITHUB_APP_ID},${PROVIDER_GITHUB_APP_INSTALLATION_ID},${pem}"
+  for ns in "${ns_pc}" "${ns_cpc}"; do
+    kc create namespace "${ns}" --dry-run=client -o yaml | kc apply -f - >/dev/null
+  done
+  for ns in "${ns_pc}" "${CROSSPLANE_NS}"; do
+    printf '%s' "${creds}" \
+      | kc create secret generic github-app-credentials --namespace "${ns}" --from-file=creds=/dev/stdin --dry-run=client -o yaml \
+      | kc apply -f - >/dev/null
+  done
+  wait_until 120 3 kc get crd/providerconfigs.github.m.crossplane.io >/dev/null 2>&1 \
+    || die "the namespaced ProviderConfig CRD did not appear"
+  wait_until 120 3 kc get crd/clusterproviderconfigs.github.m.crossplane.io >/dev/null 2>&1 \
+    || die "the ClusterProviderConfig CRD did not appear"
+  kc apply -f - >/dev/null <<YAML
+apiVersion: github.m.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: ${pc}
+  namespace: ${ns_pc}
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: ${ns_pc}
+      name: github-app-credentials
+      key: creds
+---
+apiVersion: github.m.crossplane.io/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: ${cpc}
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: ${CROSSPLANE_NS}
+      name: github-app-credentials
+      key: creds
+YAML
+  log "ProviderConfig ${pc} in ${ns_pc} (credentials in ${ns_pc}), ClusterProviderConfig ${cpc} for ${ns_cpc} (credentials in ${CROSSPLANE_NS}; ${ns_cpc} holds none)"
+}
+
 # ---------------------------------------------------------------------------
 # Managed resources
 # ---------------------------------------------------------------------------
@@ -377,6 +432,7 @@ mr_state() {
       syncedMessage: ([.status.conditions[]? | select(.type == "Synced") | .message][0] // ""),
       deleting: (.metadata.deletionTimestamp != null),
       atProviderId: (.status.atProvider.id // null),
+      providerConfigKind: (.spec.providerConfigRef.kind // "ProviderConfig"),
       managementPolicies: (.spec.managementPolicies // null),
       deletionPolicy: (.spec.deletionPolicy // null),
       hasPublishConnectionDetailsTo: (.spec | has("publishConnectionDetailsTo")),

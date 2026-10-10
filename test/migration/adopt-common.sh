@@ -1,161 +1,15 @@
 #!/usr/bin/env bash
-# test/migration/adopt-common.sh -- the body shared by scenarios (b) and (c),
-# Observe-only adoption. Sourced by scenario-adopt-cluster.sh and
-# scenario-adopt-namespaced.sh; not executable on its own.
-#
-# The setup step creates, through the GitHub API, one object of every kind the
-# provider can adopt (oob.sh, seed-adoption). The candidate provider is then
-# given managed resources with managementPolicies [Observe] that name them.
-# Observe-only adoption must:
-#
-#   * resolve every object (Synced), and report Ready for every one whose
-#     declared values match GitHub;
-#   * fill status.atProvider from GitHub, including the id and the fields the
-#     object did not declare (the relaxed schema lets Observe-only objects leave
-#     create-time fields out);
-#   * write nothing: the GitHub snapshot after adoption equals the one before,
-#     including the object whose declared description differs from GitHub;
-#   * leave GitHub alone when the managed resources are deleted.
-#
-# This file holds two flows:
-#
-#   run_adopt       the API-seeded Observe-only adoption above (scenario (c))
-#   run_adopt_full  the full adoption flow (scenario (b)): the baseline provider
-#                   creates every v1 fixture, the objects are orphaned and the
-#                   baseline removed, the candidate adopts each one with a NEW
-#                   Observe-only managed resource derived from its v1 fixture,
-#                   the same objects are then switched to full management, and
-#                   one deliberate change per kind is made. See run_adopt_full.
+# test/migration/adopt-common.sh -- the body shared by scenarios (b) and (c), the full
+# adoption flow. Sourced by scenario-adopt-cluster.sh and scenario-adopt-namespaced.sh;
+# not executable on its own. run_adopt_full <cluster|namespaced> is the entry point.
 #
 # shellcheck shell=bash
 
 # shellcheck source=adopt-derive.sh
 . "${MIGRATION_DIR}/adopt-derive.sh"
 
-# run_adopt <cluster|namespaced>
-run_adopt() {
-  local scope="$1" group fixtures ns_args=() crd_scope
-  case "${scope}" in
-    cluster) group="${GROUP_CLUSTER}"; crd_scope=cluster ;;
-    namespaced) group="${GROUP_NAMESPACED}"; ns_args=(-n default); crd_scope=all ;;
-    *) die "unknown adoption scope ${scope}" ;;
-  esac
-  fixtures="${FIXTURES_DIR}/adopt/${scope}"
-
-  scenario_begin "adopt-${scope}"
-  use_candidate_tools
-  build_tree "${MIGRATION_CANDIDATE_DIR}" "${CANDIDATE_VERSION_LABEL}"
-
-  "${MIGRATION_DIR}/oob.sh" prepare adopt || die "out-of-band setup failed"
-  load_runtime_env
-  render_fixtures "${fixtures}" "${EVIDENCE_DIR}/rendered/adopt"
-
-  cluster_up
-  load_package "${MIGRATION_CANDIDATE_DIR}" candidate "${DIGEST_CANDIDATE}"
-  install_provider "${MIGRATION_CANDIDATE_DIR}" v2 "${DIGEST_CANDIDATE}" --debug "--poll=${MIGRATION_POLL}"
-  mapfile -t crds < <(cluster_crds "${crd_scope}")
-  wait_provider "${DIGEST_CANDIDATE}" "${crds[@]}"
-  apply_provider_config all
-  record PASS "candidate provider is Healthy with the ${scope} CRDs"
-
-  take_snapshot seeded
-
-  log "applying the Observe-only ${scope} adoption fixtures"
-  apply_fixtures "${EVIDENCE_DIR}/rendered/adopt"
-
-  # Every object must be Synced; every one except the drift probe must be Ready.
-  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adoption_settled "${group}"; then
-    record PASS "every adopted object is Synced, and Ready unless it is the drift probe"
-  else
-    not_settled "${group}" >"${EVIDENCE_DIR}/adopt-not-settled.txt"
-    record FAIL "every adopted object is Synced, and Ready unless it is the drift probe" \
-      "$(head -3 "${EVIDENCE_DIR}/adopt-not-settled.txt" | tr '\n' ';')"
-  fi
-  settle_pause
-  mr_state "${group}" >"${EVIDENCE_DIR}/k8s-adopted.json"
-  capture_provider_logs adopt
-  log_findings adopt
-
-  adoption_assertions "${group}" ${ns_args[@]+"${ns_args[@]}"}
-
-  take_snapshot adopted
-  assert_snapshots_identical "no write: GitHub is identical before and after adoption (IDs, settings, timestamps)" seeded adopted
-
-  # Deleting an Observe-only managed resource must not touch the GitHub object.
-  delete_managed_resources "${group}" 300 || record WARN "deleting the adopted managed resources needed forced finalizer removal"
-  sleep 20
-  take_snapshot deleted
-  assert_snapshots_identical "deleting the Observe-only managed resources leaves GitHub untouched" seeded deleted
-  exit 0
-}
-
-# adoption_settled <group> -- Synced for all, Ready for all but the drift probe.
-adoption_settled() {
-  local state
-  state="$(mr_state "$1")"
-  [ "$(printf '%s' "${state}" | jq 'length')" -ge 11 ] || return 1
-  [ "$(printf '%s' "${state}" | jq '[.[] | select(.synced != "True" or (.ready != "True" and .name != "pgh-mig-adopt-drift"))] | length')" -eq 0 ]
-}
-
-# adoption_assertions <group> [-n namespace]
-adoption_assertions() {
-  local group="$1" bad kind name path want got plural org_desc
-  shift
-  local nsargs=("$@")
-
-  record INFO "drift probe pgh-mig-adopt-drift" "$(jq -r '.[] | select(.name == "pgh-mig-adopt-drift") | "Ready=\(.ready) Synced=\(.synced) \(.syncedMessage)"' "${EVIDENCE_DIR}/k8s-adopted.json")"
-
-  # status.atProvider.id is filled on the kinds that carry the external name.
-  bad="$(jq -r '.[] | select(.kind | IN("Organization","Membership","Team","Repository","OrganizationVariable","ActionsSecretAccess","DependabotSecretAccess"))
-    | select(.atProviderId == null or .atProviderId == "") | "\(.kind)/\(.name)"' "${EVIDENCE_DIR}/k8s-adopted.json")"
-  if [ -z "${bad}" ]; then
-    record PASS "status.atProvider.id is filled on the seven kinds that gain it"
-  else
-    record FAIL "status.atProvider.id is filled on the seven kinds that gain it" "$(printf '%s' "${bad}" | head -3 | tr '\n' ';')"
-  fi
-
-  # The numeric IDs of the webhook and the runner group are GitHub's.
-  want="${MIGRATION_ADOPT_HOOK_ID:-}"
-  got="$(jq -r '.[] | select(.kind == "OrganizationWebhook") | .atProviderId' "${EVIDENCE_DIR}/k8s-adopted.json")"
-  if [ -n "${want}" ] && [ "${got}" = "${want}" ]; then
-    record PASS "OrganizationWebhook status.atProvider.id is the GitHub hook ID (${want})"
-  else
-    record FAIL "OrganizationWebhook status.atProvider.id is the GitHub hook ID" "want ${want}, got ${got}"
-  fi
-  want="$(jq -r '.runnerGroups["pgh-mig-adopt-rg"].id' "${EVIDENCE_DIR}/snapshots/seeded.json")"
-  got="$(jq -r '.[] | select(.kind == "RunnerGroup") | .atProviderId' "${EVIDENCE_DIR}/k8s-adopted.json")"
-  if [ "${got}" = "${want}" ]; then
-    record PASS "RunnerGroup status.atProvider.id is the GitHub runner group ID (${want})"
-  else
-    record FAIL "RunnerGroup status.atProvider.id is the GitHub runner group ID" "want ${want}, got ${got}"
-  fi
-
-  # The mirror reports GitHub's values.
-  while IFS=$'\t' read -r kind name path want; do
-    case "${kind}" in '' | \#*) continue ;; esac
-    want="${want//__MEMBER_ROLE__/${MIGRATION_MEMBER_ROLE:-member}}"
-    plural="$(plural_of "${kind}")"
-    got="$(kc get "${plural}.${group}" "${name}" ${nsargs[@]+"${nsargs[@]}"} -o json 2>/dev/null | jq -c ".status.atProvider | ${path}" 2>/dev/null)"
-    if [ "${got}" = "$(printf '%s' "${want}" | jq -c .)" ]; then
-      record PASS "status.atProvider mirror ${kind}/${name} ${path} = ${want}"
-    else
-      record FAIL "status.atProvider mirror ${kind}/${name} ${path}" "want ${want}, got ${got:-nothing}"
-    fi
-  done <"${MIGRATION_DIR}/expect-adopt-mirror.tsv"
-
-  # The Organization is adopted without a declared description; the mirror reports
-  # the one the organization had before the run.
-  org_desc="$(jq -r '.org.description' "${MIGRATION_WORKDIR}/baseline.json")"
-  got="$(kc get "organizations.${group}" pgh-mig-adopt-org ${nsargs[@]+"${nsargs[@]}"} -o json 2>/dev/null | jq -r '.status.atProvider.description // ""')"
-  if [ "${got}" = "${org_desc}" ]; then
-    record PASS "status.atProvider mirror Organization/pgh-mig-adopt-org .description = the organization's own"
-  else
-    record FAIL "status.atProvider mirror Organization/pgh-mig-adopt-org .description" "want '${org_desc}', got '${got}'"
-  fi
-}
-
 # ===========================================================================
-# The full adoption flow (scenario (b))
+# The full adoption flow (scenarios (b) and (c))
 # ===========================================================================
 #
 #   1. The baseline provider (v0.22.0, built from the tag) creates every fixtures/v1
@@ -163,7 +17,7 @@ adoption_assertions() {
 #   2. Every v1 managed resource gets deletionPolicy Orphan and is deleted: GitHub
 #      must be unchanged (orphaned). The baseline Provider is removed and the
 #      candidate installed.
-#   3. For every v1 object a NEW cluster-scoped managed resource is derived
+#   3. For every v1 object a NEW managed resource of the scope under test is derived
 #      (adopt-derive.sh): managementPolicies [Observe], the external name of the
 #      live baseline object, the create-time fields the candidate lets an
 #      Observe-only object omit left out. A drift probe (a declared description that
@@ -176,7 +30,26 @@ adoption_assertions() {
 #      cycles that follow, then one deliberate spec change per kind
 #      (expect-adopt-change.tsv): exactly that change on GitHub, and nothing else.
 #
-# report.md carries the per-object and per-nested-sub-object tables of steps 3 and 4.
+# The namespaced scope (c) runs the same steps, and differs in three ways:
+#
+#   * its objects are spread over two namespaces, one reaching GitHub through a
+#     namespaced ProviderConfig (credentials in that namespace) and one through a
+#     ClusterProviderConfig (credentials in the Crossplane namespace), see adopt_target;
+#   * between steps 3 and 4 two probes run over the Observe-only objects: Observe-only
+#     twins that hold their references as Ref/Selector fields (same-namespace references
+#     must resolve, a reference to an object of another namespace must not), and the
+#     cluster-scoped Observe-only twin of one object per kind (what two scopes do when
+#     they observe one GitHub object);
+#   * after step 4 one Team is put under full management by a cluster-scoped and a
+#     namespaced object at once (does anything stop both from writing).
+#
+# report.md carries the per-object, per-nested-sub-object and per-ProviderConfig-path
+# tables, and for the namespaced scope the reference and both-scopes sections.
+
+# ADOPT_SCOPE and ADOPT_GROUP are set by run_adopt_full: the scope under test and the API
+# group of its managed resources.
+ADOPT_SCOPE=cluster
+ADOPT_GROUP="${GROUP_CLUSTER}"
 
 ADOPT_NESTED_TABLE="${MIGRATION_ADOPT_NESTED_TABLE:-${MIGRATION_DIR}/expect-adopt-nested.tsv}"
 ADOPT_CHANGE_TABLE="${MIGRATION_ADOPT_CHANGE_TABLE:-${MIGRATION_DIR}/expect-adopt-change.tsv}"
@@ -199,13 +72,15 @@ capture_window_logs() {
   done
 }
 
-# log_counts <log> <Kind> <name> -- "<creates> <updates> <reconciles>" the provider's
-# debug log records for one managed resource. A reconcile is the positive control:
-# a count of zero writes means something only if the object was reconciled.
+# log_counts <log> <Kind> <name> [group] -- "<creates> <updates> <reconciles>" the provider's
+# debug log records for one managed resource of the group (default: the scope under test).
+# A reconcile is the positive control: a count of zero writes means something only if the
+# object was reconciled. The controller is named managed/<kind>.<group>; the request carries
+# the object's name (and, for a namespaced object, its namespace, in either order).
 log_counts() {
-  local log="$1" lines
-  lines="$(grep -F "\"managed/$(printf '%s' "$2" | tr 'A-Z' 'a-z').organizations.github.crossplane.io\"" "${log}" \
-    | grep -F "\"request\": {\"name\":\"$3\"}" || true)"
+  local log="$1" group="${4:-${ADOPT_GROUP}}" lines
+  lines="$(grep -F "\"managed/$(printf '%s' "$2" | tr 'A-Z' 'a-z').${group}\"" "${log}" \
+    | grep -E "\"request\": *\{[^}]*\"name\": *\"$3\"" || true)"
   printf '%s %s %s' \
     "$(printf '%s\n' "${lines}" | grep -c 'Successfully requested creation')" \
     "$(printf '%s\n' "${lines}" | grep -c 'Successfully requested update')" \
@@ -219,11 +94,12 @@ provider_pods_gone() {
 crd_gone() { ! kc get "crd/organizations.${GROUP_CLUSTER}" >/dev/null 2>&1; }
 
 # adopt_settled <group> <count> -- <count> adopted objects, each Synced and Ready; the
-# drift probe, when present, only Synced (it is Ready=False by design).
+# drift probe, when present, only Synced (it is Ready=False by design). The helper objects
+# of the namespaced scope (ADOPT_AUX_RE) are not counted.
 adopt_settled() {
   local state
   state="$(mr_state "$1")"
-  [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" '[.[] | select(.name != $p)] | length')" -eq "$2" ] || return 1
+  [ "$(printf '%s' "${state}" | jq --arg a "${ADOPT_AUX_RE}" '[.[] | select(.name | test($a) | not)] | length')" -eq "$2" ] || return 1
   [ "$(printf '%s' "${state}" | jq --arg p "${ADOPT_PROBE_NAME}" '[.[] | select(.synced != "True" or (.ready != "True" and .name != $p))] | length')" -eq 0 ]
 }
 
@@ -239,15 +115,18 @@ drop_excluded() {
 }
 
 run_adopt_full() {
-  local scope="$1"
-  [ "${scope}" = cluster ] || die "run_adopt_full: only the cluster scope is derived from the v1 fixtures"
+  local scope="$1" t
+  case "${scope}" in
+    cluster) ADOPT_GROUP="${GROUP_CLUSTER}" ;;
+    namespaced) ADOPT_GROUP="${GROUP_NAMESPACED}" ;;
+    *) die "run_adopt_full: unknown scope ${scope}" ;;
+  esac
+  ADOPT_SCOPE="${scope}"
 
   scenario_begin "adopt-${scope}"
   # The evidence directory is reused between runs: start the tables empty.
-  rm -f "${EVIDENCE_DIR}/report-tables.md"
-  : >"${EVIDENCE_DIR}/table-mr.tsv"
-  : >"${EVIDENCE_DIR}/table-nested.tsv"
-  : >"${EVIDENCE_DIR}/table-change.tsv"
+  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt
+  for t in mr nested change refs both; do : >"${EVIDENCE_DIR}/table-${t}.tsv"; done
   use_candidate_tools
   require_rate_budget
   fetch_baseline
@@ -268,9 +147,50 @@ run_adopt_full() {
   adopt_baseline_phase
   adopt_orphan_phase
   adopt_observe_phase
+  if [ "${scope}" = namespaced ]; then
+    adopt_refs_phase
+    adopt_bothscopes_observe_phase
+  fi
   adopt_full_phase
   adopt_change_phase
+  [ "${scope}" != namespaced ] || adopt_bothscopes_write_phase
   exit 0
+}
+
+# adopt_ns_args <Kind> <name> -- "-n" and the namespace of a derived object of the adopted
+# set, one per line (for mapfile); nothing in the cluster scope.
+adopt_ns_args() {
+  local t
+  [ "${ADOPT_SCOPE}" = namespaced ] || return 0
+  t="$(adopt_target "$1" "$2")"
+  printf -- '-n\n%s\n' "${t%% *}"
+}
+
+# adopt_path_of <state.json> <Kind> <name> -- the ProviderConfig path an object reaches
+# GitHub through: its namespace and the kind of ProviderConfig it names ("cluster" for a
+# cluster-scoped object).
+adopt_path_of() {
+  jq -r --arg k "$2" --arg n "$3" '[.[] | select(.kind == $k and .name == $n)][0]
+    | if . == null then "-" elif .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end' "$1" 2>/dev/null || echo "-"
+}
+
+# mr_condition <resource> <name> <namespace|-> <condition type> -- the status of a condition
+# of one managed resource, Unknown when there is none.
+mr_condition() {
+  local nsa=() out
+  [ "$3" = - ] || nsa=(-n "$3")
+  out="$(kc get "$1" "$2" ${nsa[@]+"${nsa[@]}"} -o json 2>/dev/null | jq -r --arg t "$4" '[.status.conditions[]? | select(.type == $t) | .status][0] // "Unknown"' 2>/dev/null)"
+  printf '%s' "${out:-Unknown}"
+}
+
+# delete_mr <Kind> <group> <name> [namespace] -- deletes one managed resource and waits;
+# when the wait runs out, removes its finalizers (the caller sweeps GitHub).
+delete_mr() {
+  local nsa=() res
+  [ -z "${4:-}" ] || nsa=(-n "$4")
+  res="$(plural_of "$1").$2"
+  kc delete "${res}" "$3" ${nsa[@]+"${nsa[@]}"} --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 \
+    || kc patch "${res}" "$3" ${nsa[@]+"${nsa[@]}"} --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
 }
 
 # --- steps 1 and 2: the baseline creates, the objects are orphaned ----------------
@@ -306,6 +226,11 @@ adopt_baseline_phase() {
   jq -r '.[] | select(.synced != "True" or .ready != "True") | "\(.kind)/\(.name)"' "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-excluded.txt"
   take_snapshot v1
   capture_provider_logs baseline
+  # The connection secrets the baseline wrote (the webhook secrets it applied are recorded in
+  # them) go when their owners are deleted: keep them, the namespaced objects start from them.
+  kc -n "${CROSSPLANE_NS}" get secret -o json 2>/dev/null \
+    | jq -c '[.items[] | select(.metadata.name | test("^pgh-mig-.*-conn$")) | {apiVersion, kind, type, data, metadata: {name: .metadata.name}}]' \
+    >"${EVIDENCE_DIR}/baseline-conn-secrets.json" || echo '[]' >"${EVIDENCE_DIR}/baseline-conn-secrets.json"
 }
 
 adopt_orphan_phase() {
@@ -342,35 +267,42 @@ adopt_orphan_phase() {
 # --- step 3: Observe-only adoption ---------------------------------------------------
 
 adopt_observe_phase() {
-  local since
+  local since crd_scope=cluster
+  [ "${ADOPT_SCOPE}" = namespaced ] && crd_scope=all
   install_provider "${MIGRATION_CANDIDATE_DIR}" v2 "${DIGEST_CANDIDATE}" --debug "--poll=${MIGRATION_POLL}"
-  mapfile -t crds < <(cluster_crds cluster)
+  mapfile -t crds < <(cluster_crds "${crd_scope}")
   wait_provider "${DIGEST_CANDIDATE}" "${crds[@]}"
   # The baseline's ProviderConfig may have gone with its CRD.
   apply_provider_config cluster
   kc apply -f "${EVIDENCE_DIR}/rendered/v1/00-prerequisites.yaml" >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the prerequisite Secrets failed"
-  record PASS "the candidate provider is Healthy with the cluster CRDs"
+  if [ "${ADOPT_SCOPE}" = namespaced ]; then
+    apply_namespaced_provider_configs "${ADOPT_NS_A}" "${ADOPT_NS_B}" "${ADOPT_PC_NAME}" "${ADOPT_CPC_NAME}"
+    record PASS "the candidate provider is Healthy with the cluster and the namespaced CRDs; ProviderConfig ${ADOPT_PC_NAME} (namespace ${ADOPT_NS_A}) and ClusterProviderConfig ${ADOPT_CPC_NAME} (for ${ADOPT_NS_B}) are applied"
+  else
+    record PASS "the candidate provider is Healthy with the cluster CRDs"
+  fi
 
-  derive_adoption observe "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/observe"
-  derive_adoption full "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/full"
+  derive_adoption observe "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/observe" "${ADOPT_SCOPE}"
+  derive_adoption full "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/full" "${ADOPT_SCOPE}"
   drop_excluded "${EVIDENCE_DIR}/rendered/observe"
   drop_excluded "${EVIDENCE_DIR}/rendered/full"
   derive_probe "${EVIDENCE_DIR}/rendered/observe"
   ADOPT_COUNT="$(find "${EVIDENCE_DIR}/rendered/full" -name '*.yaml' | wc -l)"
   [ "${ADOPT_COUNT}" -gt 0 ] || die "no v1 object was Ready on the baseline: nothing to adopt"
+  [ "${ADOPT_SCOPE}" != namespaced ] || adopt_prepare_namespaces
 
   log "applying ${ADOPT_COUNT} Observe-only adoption manifests (and the drift probe)"
   since="$(now_utc)"
   apply_fixtures "${EVIDENCE_DIR}/rendered/observe"
-  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${GROUP_CLUSTER}" "${ADOPT_COUNT}"; then
+  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${ADOPT_GROUP}" "${ADOPT_COUNT}"; then
     record PASS "every adopted object is Synced and Ready (the drift probe is Synced)"
   else
     record FAIL "every adopted object is Synced and Ready (the drift probe is Synced)" \
-      "$(not_settled "${GROUP_CLUSTER}" | head -3 | tr '\n' ';')"
+      "$(not_settled "${ADOPT_GROUP}" | head -3 | tr '\n' ';')"
   fi
   settle_pause
-  mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-observe.json"
-  mr_atprovider "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/atprovider-observe.json"
+  mr_state "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/k8s-observe.json"
+  mr_atprovider "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/atprovider-observe.json"
   capture_window_logs observe "${since}"
   capture_provider_logs adopt
   log_findings adopt
@@ -378,6 +310,7 @@ adopt_observe_phase() {
 
   assert_snapshots_identical "no write: GitHub is identical before and after Observe-only adoption (IDs, settings, timestamps)" orphaned adopted
   adopt_new_objects
+  [ "${ADOPT_SCOPE}" != namespaced ] || adopt_check_paths
   adopt_check_state observe
   adopt_check_probe
   adopt_check_nested observe
@@ -385,7 +318,56 @@ adopt_observe_phase() {
 
   # An Observe-only object that is deleted leaves GitHub alone; the probe watched a team
   # that the fully managed objects manage next.
-  kc delete "$(plural_of Team).${GROUP_CLUSTER}" "${ADOPT_PROBE_NAME}" --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
+  mapfile -t nsargs < <(adopt_ns_args Team "${ADOPT_PROBE_NAME}")
+  kc delete "$(plural_of Team).${ADOPT_GROUP}" "${ADOPT_PROBE_NAME}" ${nsargs[@]+"${nsargs[@]}"} --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
+}
+
+# adopt_prepare_namespaces -- what the namespaced objects read from their own namespace:
+# the Secret the webhook fixtures name, and the connection secrets the baseline wrote under
+# the names the objects give (an empty connection secret when the baseline left none).
+adopt_prepare_namespaces() {
+  local ns f cname n=0
+  for ns in "${ADOPT_NS_A}" "${ADOPT_NS_B}"; do
+    kc create namespace "${ns}" --dry-run=client -o yaml | kc apply -f - >/dev/null
+    yq "select(.metadata.name == \"pgh-mig-hook-secret\") | .metadata.namespace = \"${ns}\"" "${EVIDENCE_DIR}/rendered/v1/00-prerequisites.yaml" \
+      | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the webhook Secret in ${ns} failed"
+  done
+  for f in "${EVIDENCE_DIR}"/rendered/observe/*.yaml; do
+    read -r ns cname < <(yq -o=json -I=0 '.' "${f}" | jq -r '[.metadata.namespace, (.spec.writeConnectionSecretToRef.name // "-")] | @tsv')
+    [ "${cname}" != "-" ] || continue
+    if jq -e --arg n "${cname}" 'any(.[]; .metadata.name == $n)' "${EVIDENCE_DIR}/baseline-conn-secrets.json" >/dev/null 2>&1; then
+      jq -c --arg n "${cname}" --arg ns "${ns}" '.[] | select(.metadata.name == $n) | .metadata.namespace = $ns' "${EVIDENCE_DIR}/baseline-conn-secrets.json" \
+        | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "copying the connection secret ${cname} into ${ns} failed"
+    else
+      kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 <<YAML || warn "creating the connection secret ${cname} in ${ns} failed"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${cname}
+  namespace: ${ns}
+type: connection.crossplane.io/v1alpha1
+YAML
+    fi
+    n=$((n + 1))
+  done
+  log "prepared ${ADOPT_NS_A} and ${ADOPT_NS_B}: the webhook Secret and ${n} connection secret(s)"
+}
+
+# adopt_check_paths -- every object is on the ProviderConfig path adopt_target gives it, and
+# both paths carry objects.
+adopt_check_paths() {
+  local kind name ns pckind bad="" wns wpck a=0 b=0 state="${EVIDENCE_DIR}/k8s-observe.json"
+  while IFS=$'\t' read -r kind name ns pckind; do
+    read -r wns wpck _ <<<"$(adopt_target "${kind}" "${name}")"
+    { [ "${ns}" = "${wns}" ] && [ "${pckind}" = "${wpck}" ]; } || bad+="${kind}/${name} is in ${ns} through ${pckind}; "
+    [ "${ns}" = "${ADOPT_NS_A}" ] && a=$((a + 1))
+    [ "${ns}" = "${ADOPT_NS_B}" ] && b=$((b + 1))
+  done < <(jq -r --arg a "${ADOPT_AUX_RE}" '.[] | select(.name | test($a) | not) | [.kind, .name, .namespace, .providerConfigKind] | @tsv' "${state}")
+  if [ -z "${bad}" ] && [ "${a}" -gt 0 ] && [ "${b}" -gt 0 ]; then
+    record PASS "the objects reach GitHub through both ProviderConfig paths: ${a} in ${ADOPT_NS_A} through a ProviderConfig, ${b} in ${ADOPT_NS_B} through a ClusterProviderConfig"
+  else
+    record FAIL "the objects reach GitHub through both ProviderConfig paths" "${bad:-${ADOPT_NS_A}: ${a} objects, ${ADOPT_NS_B}: ${b} objects}"
+  fi
 }
 
 # The adopting objects are new: none carries the UID of a v1 object.
@@ -406,12 +388,12 @@ adopt_new_objects() {
 # window-<phase>.log and the snapshot of the phase (adopted | full); one row per
 # managed resource in the per-object table; PASS or FAIL for the aggregate checks.
 adopt_check_state() {
-  local phase="$1" state snap log kind name ready synced id ext idcheck gid counts creates updates recs
+  local phase="$1" state snap log kind name path ready synced id ext idcheck gid counts creates updates recs p total_p bad_p
   local bad_state="" bad_id="" bad_writes="" bad_idle="" total=0
   state="${EVIDENCE_DIR}/k8s-${phase}.json"
   log="${EVIDENCE_DIR}/window-${phase}.log"
   snap="${EVIDENCE_DIR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
-  while IFS=$'\t' read -r kind name ready synced id ext; do
+  while IFS=$'\t' read -r kind name path ready synced id ext; do
     [ "${name}" = "${ADOPT_PROBE_NAME}" ] && continue
     total=$((total + 1))
     case "${kind}" in
@@ -431,14 +413,25 @@ adopt_check_state() {
     case "${idcheck}" in MISMATCH*) bad_id+="${kind}/${name} id=${id} external-name=${ext}; " ;; esac
     { [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; } || bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
     [ "${recs}" -gt 0 ] || bad_idle+="${kind}/${name}; "
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${kind}" "${name}" "${ready}" "${synced}" "${id}" "${ext}" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${name}" "${ready}" "${synced}" "${id}" "${ext}" \
       "${idcheck}" "${creates}" "${updates}" "${recs}" >>"${EVIDENCE_DIR}/table-mr.tsv"
-  done < <(jq -r '.[] | [.kind, .name, .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end)] | @tsv' "${state}")
+  done < <(jq -r '.[] | [.kind, .name, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end)] | @tsv' "${state}")
 
   if [ -z "${bad_state}" ] && [ "${total}" -gt 0 ]; then
     record PASS "${phase}: every managed resource is Synced=True and Ready=True (${total} objects)"
   else
     record FAIL "${phase}: every managed resource is Synced=True and Ready=True" "${bad_state:-no managed resource found}"
+  fi
+  if [ "${ADOPT_SCOPE}" = namespaced ]; then
+    # Synced and Ready through each ProviderConfig path.
+    while IFS=$'\t' read -r p total_p bad_p; do
+      if [ "${bad_p}" -eq 0 ]; then
+        record PASS "${phase}: every object that reaches GitHub through ${p} is Synced and Ready (${total_p} objects)"
+      else
+        record FAIL "${phase}: every object that reaches GitHub through ${p} is Synced and Ready" "${bad_p} of ${total_p} objects are not"
+      fi
+    done < <(jq -r --arg a "${ADOPT_AUX_RE}" '[.[] | select(.name | test($a) | not)] | group_by("\(.namespace) (\(.providerConfigKind))")[]
+      | [(.[0] | "\(.namespace) (\(.providerConfigKind))"), length, ([.[] | select(.synced != "True" or .ready != "True")] | length)] | @tsv' "${state}")
   fi
   if [ -z "${bad_id}" ]; then
     record PASS "${phase}: status.atProvider.id equals the external name; the webhook and runner group IDs are GitHub's"
@@ -488,12 +481,14 @@ adopt_check_probe() {
 # adopt_check_nested <observe|full> -- every row of expect-adopt-nested.tsv: what
 # status.atProvider reports against what the GitHub snapshot holds.
 adopt_check_nested() {
-  local phase="$1" atprov snap kind mr rid cond a s av sv verdict detail
+  local phase="$1" atprov snap kind mr rid cond a s av sv verdict detail state path
   local pass=0 fail=0 nm=0 ex=0 skip=0 not_mirrored=""
   atprov="${EVIDENCE_DIR}/atprovider-${phase}.json"
+  state="${EVIDENCE_DIR}/k8s-${phase}.json"
   snap="${EVIDENCE_DIR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
   while IFS=$'\t' read -r kind mr rid cond a s; do
     detail=""
+    path="$(adopt_path_of "${state}" "${kind}" "${mr}")"
     if [ "${a}" = "-" ]; then
       verdict=EXEMPT
       detail="${s}"
@@ -518,7 +513,7 @@ adopt_check_nested() {
       EXEMPT) ex=$((ex + 1)) ;;
       SKIPPED) skip=$((skip + 1)) ;;
     esac
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${kind}" "${mr}" "${rid#.spec.forProvider}" "${verdict}" "${detail}" >>"${EVIDENCE_DIR}/table-nested.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${mr}" "${rid#.spec.forProvider}" "${verdict}" "${detail}" >>"${EVIDENCE_DIR}/table-nested.tsv"
   done < <(expectation_rows "${ADOPT_NESTED_TABLE}")
   if [ "${fail}" -eq 0 ] && [ "${pass}" -gt 0 ]; then
     record PASS "${phase}: status.atProvider mirrors the GitHub snapshot for every nested sub-object and adopted setting (${pass} compared, ${ex} without a GitHub value, ${skip} skipped)"
@@ -531,22 +526,33 @@ adopt_check_nested() {
 # write_adopt_tables -- the tables of report.md, rewritten after every phase so that a
 # run that stops early still reports what it measured.
 write_adopt_tables() {
-  local out="${EVIDENCE_DIR}/report-tables.md"
+  local out="${EVIDENCE_DIR}/report-tables.md" obs wr
   {
     echo
     echo "## Per managed resource: Ready/Synced, atProvider.id against the external name, writes observed"
     echo
-    echo "Writes are the creates and updates the provider's debug log records for the object over the phase's window; reconciles is the positive control."
+    echo "Writes are the creates and updates the provider's debug log records for the object over the phase's window; reconciles is the positive control. Path is the namespace and the kind of ProviderConfig the object reaches GitHub through (cluster: the cluster-scoped ProviderConfig)."
     echo
-    echo "| Phase | Kind | Object | Ready | Synced | atProvider.id | external-name | id check | creates | updates | reconciles |"
-    echo "|---|---|---|---|---|---|---|---|---|---|---|"
-    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11 }' "${EVIDENCE_DIR}/table-mr.tsv"
+    echo "| Phase | Path | Kind | Object | Ready | Synced | atProvider.id | external-name | id check | creates | updates | reconciles |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "${EVIDENCE_DIR}/table-mr.tsv"
     echo
     echo "## Per nested sub-object: status.atProvider against the GitHub snapshot"
     echo
-    echo "| Phase | Kind | Object | Sub-object | Result | Detail |"
-    echo "|---|---|---|---|---|---|"
-    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6 }' "${EVIDENCE_DIR}/table-nested.tsv"
+    echo "| Phase | Path | Kind | Object | Sub-object | Result | Detail |"
+    echo "|---|---|---|---|---|---|---|"
+    awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7 }' "${EVIDENCE_DIR}/table-nested.tsv"
+    echo
+    echo "## Per ProviderConfig path"
+    echo
+    echo "| Phase | Path | Objects | Ready and Synced | creates + updates | Nested rows compared | Pass | Fail | Not mirrored |"
+    echo "|---|---|---|---|---|---|---|---|---|"
+    awk -F'\t' '
+      FNR == NR { k = $1 "\t" $2; keys[k] = 1; objs[k]++; if ($5 == "True" && $6 == "True") ok[k]++; wr[k] += $10 + $11; next }
+      { k = $1 "\t" $2; keys[k] = 1
+        if ($6 == "PASS") { cmp[k]++; pass[k]++ } else if ($6 == "FAIL") { cmp[k]++; fail[k]++ } else if ($6 == "NOT-MIRRORED") { cmp[k]++; nm[k]++ } }
+      END { for (k in keys) { split(k, f, "\t"); printf "| %s | %s | %d | %d | %d | %d | %d | %d | %d |\n", f[1], f[2], objs[k], ok[k], wr[k], cmp[k], pass[k], fail[k], nm[k] } }' \
+      "${EVIDENCE_DIR}/table-mr.tsv" "${EVIDENCE_DIR}/table-nested.tsv" | sort
     if [ -s "${EVIDENCE_DIR}/table-change.tsv" ]; then
       echo
       echo "## Deliberate change per kind"
@@ -555,34 +561,65 @@ write_adopt_tables() {
       echo "|---|---|---|---|---|---|"
       awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6 }' "${EVIDENCE_DIR}/table-change.tsv"
     fi
+    if [ -s "${EVIDENCE_DIR}/table-refs.tsv" ]; then
+      echo
+      echo "## References between objects of one namespace"
+      echo
+      echo "Each twin is an Observe-only object over the same GitHub object as an adopted one, holding its references as Ref or Selector fields instead of plain strings. \"Declared by the plain-string object\" is what the adopted object states for the field; \"Filled in by the resolver\" is what the twin's spec holds once the reference resolver has run. The cross-namespace twin names an object that exists only in the other namespace: its field must stay unset."
+      echo
+      echo "| Twin | Kind | Namespace | Field | Declared by the plain-string object | Filled in by the resolver | Result |"
+      echo "|---|---|---|---|---|---|---|"
+      awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7 }' "${EVIDENCE_DIR}/table-refs.tsv"
+    fi
+    if [ -s "${EVIDENCE_DIR}/table-both.tsv" ] || [ -s "${EVIDENCE_DIR}/both-observe-verdict.txt" ] || [ -s "${EVIDENCE_DIR}/both-write-verdict.txt" ]; then
+      obs="$(cat "${EVIDENCE_DIR}/both-observe-verdict.txt" 2>/dev/null)"
+      wr="$(cat "${EVIDENCE_DIR}/both-write-verdict.txt" 2>/dev/null)"
+      echo
+      echo "## Both scopes at once"
+      echo
+      echo "Observe-only: the cluster-scoped Observe-only twin of one object per kind, applied while the namespaced object is Ready (same external name). Recorded, not asserted."
+      echo
+      echo "| Kind | Object | Namespaced Ready | Namespaced Synced | Namespaced creates/updates/reconciles | Cluster-scoped Ready | Cluster-scoped Synced | Cluster-scoped creates/updates/reconciles | Cluster-scoped message |"
+      echo "|---|---|---|---|---|---|---|---|---|"
+      awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9 }' "${EVIDENCE_DIR}/table-both.tsv"
+      echo
+      echo "- **Observe-only probe:** ${obs:-not measured}"
+      echo "- **Full management of one Team by both scopes:** ${wr:-not measured}"
+      echo
+      echo "**Does the provider have a guard that stops two scopes managing one object?** $(both_scopes_summary "${obs}" "${wr}")"
+    fi
   } >"${out}"
 }
 
 # --- step 4: full management --------------------------------------------------------
 
 adopt_full_phase() {
-  local since bad
+  local since bad f
   log "switching the adopted objects to full management"
   since="$(now_utc)"
   apply_fixtures "${EVIDENCE_DIR}/rendered/full"
-  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${GROUP_CLUSTER}" "${ADOPT_COUNT}"; then
+  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 adopt_settled "${ADOPT_GROUP}" "${ADOPT_COUNT}"; then
     record PASS "every object is Synced and Ready under full management"
   else
-    record FAIL "every object is Synced and Ready under full management" "$(not_settled "${GROUP_CLUSTER}" | head -3 | tr '\n' ';')"
+    record FAIL "every object is Synced and Ready under full management" "$(not_settled "${ADOPT_GROUP}" | head -3 | tr '\n' ';')"
   fi
   settle_pause
-  mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-full.json"
-  mr_atprovider "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/atprovider-full.json"
+  mr_state "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/k8s-full.json"
+  mr_atprovider "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/atprovider-full.json"
   capture_window_logs full "${since}"
   capture_provider_logs full
   log_findings full
   take_snapshot full
 
-  bad="$(jq -r '.[] | select(.managementPolicies != ["*"]) | "\(.kind)/\(.name) \(.managementPolicies)"' "${EVIDENCE_DIR}/k8s-full.json")"
+  # The default policies, except an object the baseline kept with deletionPolicy Orphan in a
+  # namespaced kind (no deletionPolicy there): its policies leave Delete out.
+  for f in "${EVIDENCE_DIR}"/rendered/full/*.yaml; do yq -o=json -I=0 '.' "${f}"; done \
+    | jq -s -c 'map({key: "\(.kind)/\(.metadata.name)", value: .spec.managementPolicies}) | from_entries' >"${EVIDENCE_DIR}/expected-policies.json"
+  bad="$(jq -r --slurpfile e "${EVIDENCE_DIR}/expected-policies.json" '.[] | select(.managementPolicies != $e[0]["\(.kind)/\(.name)"]) | "\(.kind)/\(.name) \(.managementPolicies)"' "${EVIDENCE_DIR}/k8s-full.json")"
   if [ -z "${bad}" ]; then
-    record PASS "every object runs under the default management policies"
+    record PASS "every object runs under the management policies of its full manifest (the default ones, with no Delete only where the baseline kept Orphan)"
   else
-    record FAIL "every object runs under the default management policies" "$(printf '%s' "${bad}" | head -3 | tr '\n' ';')"
+    record FAIL "every object runs under the management policies of its full manifest" "$(printf '%s' "${bad}" | head -3 | tr '\n' ';')"
   fi
   assert_snapshots_identical "full management with a matching forProvider writes nothing: GitHub is identical from adoption through ${MIGRATION_SETTLE_POLLS} poll cycles (IDs, settings, timestamps)" adopted full
   adopt_check_state full
@@ -595,8 +632,8 @@ adopt_full_phase() {
 # adopt_changes_reflected -- every patched object reports the change and is Synced and Ready.
 adopt_changes_reflected() {
   local atprov kind mr check got
-  atprov="$(mr_atprovider "${GROUP_CLUSTER}")"
-  [ "$(mr_state "${GROUP_CLUSTER}" | jq '[.[] | select(.synced != "True" or .ready != "True")] | length')" -eq 0 ] || return 1
+  atprov="$(mr_atprovider "${ADOPT_GROUP}")"
+  [ "$(mr_state "${ADOPT_GROUP}" | jq '[.[] | select(.synced != "True" or .ready != "True")] | length')" -eq 0 ] || return 1
   while IFS=$'\t' read -r kind mr check; do
     got="$(printf '%s' "${atprov}" | jq -cS ".[\"${kind}/${mr}\"] | (${check})" 2>/dev/null)"
     [ "${got}" = true ] || return 1
@@ -605,7 +642,7 @@ adopt_changes_reflected() {
 
 adopt_change_phase() {
   local kind mr patch check allowed required note since applied=0 waived="" skipped="" counts creates updates recs
-  local changed_kinds=" " reflected on_github bad_unexpected bad_rewrite bad_other bad_unchanged_writes="" lacking_update=""
+  local nsargs=() changed_kinds=" " reflected on_github bad_unexpected bad_rewrite bad_other bad_unchanged_writes="" lacking_update=""
   : >"${EVIDENCE_DIR}/changes-applied.tsv"
   : >"${EVIDENCE_DIR}/changes-allowed.txt"
   since="$(now_utc)"
@@ -619,7 +656,8 @@ adopt_change_phase() {
       skipped+="${kind}/${mr}; "
       continue
     fi
-    if kc patch "$(plural_of "${kind}").${GROUP_CLUSTER}" "${mr}" --type merge -p "${patch}" </dev/null >>"${EVIDENCE_DIR}/change.log" 2>&1; then
+    mapfile -t nsargs < <(adopt_ns_args "${kind}" "${mr}")
+    if kc patch "$(plural_of "${kind}").${ADOPT_GROUP}" "${mr}" ${nsargs[@]+"${nsargs[@]}"} --type merge -p "${patch}" </dev/null >>"${EVIDENCE_DIR}/change.log" 2>&1; then
       printf '%s\t%s\t%s\n' "${kind}" "${mr}" "${check}" >>"${EVIDENCE_DIR}/changes-applied.tsv"
       printf '%s\n' "${allowed}" >>"${EVIDENCE_DIR}/changes-allowed.txt"
       applied=$((applied + 1))
@@ -635,12 +673,12 @@ adopt_change_phase() {
     record PASS "every deliberate change is in status.atProvider and every object is Synced and Ready again (ResourceUpToDate)"
   else
     record FAIL "every deliberate change is in status.atProvider and every object is Synced and Ready again (ResourceUpToDate)" \
-      "$(not_settled "${GROUP_CLUSTER}" | head -3 | tr '\n' ';')"
+      "$(not_settled "${ADOPT_GROUP}" | head -3 | tr '\n' ';')"
   fi
   # Two more cycles: a second write caused by the first would show in the snapshot.
   sleep "$(($(poll_seconds "${MIGRATION_POLL}") * 2 + 15))"
-  mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-change.json"
-  mr_atprovider "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/atprovider-change.json"
+  mr_state "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/k8s-change.json"
+  mr_atprovider "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/atprovider-change.json"
   capture_window_logs change "${since}"
   capture_provider_logs change
   take_snapshot changed
@@ -690,4 +728,210 @@ adopt_change_phase() {
   bad_other="$(jq -r '.[] | select(.synced != "True" or .ready != "True") | "\(.kind)/\(.name) Ready=\(.ready) Synced=\(.synced)"' "${EVIDENCE_DIR}/k8s-change.json" | head -3 | tr '\n' ';')"
   [ -z "${bad_other}" ] || record FAIL "every object is Synced and Ready after the changes settled" "${bad_other}"
   write_adopt_tables
+}
+
+# ===========================================================================
+# The namespaced scope: references, and two scopes over one object
+# ===========================================================================
+
+# --- references between objects of one namespace -------------------------------------
+
+# refs_settled <names.meta> -- every twin that must resolve is Synced and Ready, and every
+# twin that must not is Synced=False.
+refs_settled() {
+  mr_state "${ADOPT_GROUP}" | jq -e --slurpfile n "$1" '
+    . as $s
+    | ($n[0].resolvable | all(. as $x | any($s[]; .name == $x and .synced == "True" and .ready == "True")))
+      and ($n[0].unresolvable | all(. as $x | any($s[]; .name == $x and .synced == "False")))' >/dev/null 2>&1
+}
+
+# adopt_refs_phase -- Observe-only twins of adopted objects that hold their references as
+# Ref and Selector fields. A reference resolves inside the namespace of the object that holds
+# it: the twins in the namespace of their targets must come out with the spec fields filled
+# in by the reference resolver and Synced=True; the twin whose target exists only in the
+# other namespace must not resolve.
+adopt_refs_phase() {
+  local dir="${EVIDENCE_DIR}/rendered/refs" since twin kind ns resolvable path want got result
+  local fails=0 compared=0 bad_writes="" bad_idle="" counts creates updates recs state="${EVIDENCE_DIR}/k8s-refs.json"
+  derive_ref_twins "${EVIDENCE_DIR}/rendered/observe" "${dir}"
+  if [ ! -s "${dir}/checks.tsv" ]; then
+    record WARN "no reference twin could be derived: the objects they point at are not in the adopted set"
+    return 0
+  fi
+  log "applying the reference twins"
+  since="$(now_utc)"
+  apply_fixtures "${dir}"
+  if wait_until "${MIGRATION_READY_TIMEOUT}" 10 refs_settled "${dir}/names.meta"; then
+    record PASS "the reference twins in the namespace of their targets are Synced and Ready; the twin that names an object of the other namespace is Synced=False"
+  else
+    record FAIL "the reference twins in the namespace of their targets are Synced and Ready; the twin that names an object of the other namespace is Synced=False" \
+      "$(mr_state "${ADOPT_GROUP}" | jq -r --slurpfile n "${dir}/names.meta" '.[] | select(.name as $x | ($n[0].resolvable + $n[0].unresolvable) | index($x)) | "\(.kind)/\(.name): Ready=\(.ready) Synced=\(.synced) \(.syncedMessage)"' | head -3 | tr '\n' ';')"
+  fi
+  settle_pause 2
+  mr_state "${ADOPT_GROUP}" >"${state}"
+  capture_window_logs refs "${since}"
+
+  while IFS=$'\t' read -r twin kind ns resolvable path want; do
+    got="$(kc get "$(plural_of "${kind}").${ADOPT_GROUP}" "${twin}" -n "${ns}" -o json 2>/dev/null | jq -c "${path}" 2>/dev/null)"
+    [ -n "${got}" ] || got=null
+    compared=$((compared + 1))
+    if [ "${resolvable}" = yes ]; then
+      if [ "${got}" != null ] && ref_value_equal "${got}" "${want}"; then result=PASS; else result=FAIL; fi
+    else
+      if [ "${got}" = null ]; then result=PASS; else result=FAIL; fi
+    fi
+    [ "${result}" = PASS ] || fails=$((fails + 1))
+    if [ "${result}" = FAIL ]; then
+      record FAIL "reference ${kind}/${twin} ${path}$([ "${resolvable}" = yes ] || echo ' stays unset')" "declared by the plain-string object: ${want}; the spec holds: ${got}"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${twin}" "${kind}" "${ns}" "${path#.spec.forProvider.}" \
+      "$([ "${resolvable}" = yes ] && echo "${want:0:70}" || echo "- (the target exists only in the other namespace)")" "${got:0:70}" "${result}" >>"${EVIDENCE_DIR}/table-refs.tsv"
+  done <"${dir}/checks.tsv"
+  if [ "${fails}" -eq 0 ]; then
+    record PASS "every same-namespace reference is resolved into spec.forProvider, and the reference to an object of another namespace is not (${compared} fields)"
+  fi
+  record INFO "the cross-namespace reference" "$(jq -r --slurpfile n "${dir}/names.meta" '.[] | select(.name as $x | $n[0].unresolvable | index($x)) | "\(.kind)/\(.name): Ready=\(.ready) Synced=\(.synced) \(.syncedMessage)"' "${state}" | head -2 | tr '\n' ';')"
+
+  # Observe-only twins write nothing, and every one was reconciled.
+  while IFS=$'\t' read -r twin kind; do
+    counts="$(log_counts "${EVIDENCE_DIR}/window-refs.log" "${kind}" "${twin}")"
+    read -r creates updates recs <<<"${counts}"
+    { [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; } || bad_writes+="${kind}/${twin} created ${creates} updated ${updates}; "
+    [ "${recs}" -gt 0 ] || bad_idle+="${kind}/${twin}; "
+  done < <(cut -f1,2 "${dir}/checks.tsv" | sort -u)
+  if [ -z "${bad_writes}" ] && [ -z "${bad_idle}" ]; then
+    record PASS "no reference twin issued a create or an update, and every one was reconciled (provider debug log)"
+  else
+    record FAIL "no reference twin issued a create or an update, and every one was reconciled (provider debug log)" "${bad_writes}${bad_idle:+not reconciled: ${bad_idle}}"
+  fi
+
+  # The twins have served: the objects they observe are changed next.
+  while IFS=$'\t' read -r twin kind ns; do
+    delete_mr "${kind}" "${ADOPT_GROUP}" "${twin}" "${ns}"
+  done < <(cut -f1-3 "${dir}/checks.tsv" | sort -u)
+  write_adopt_tables
+}
+
+# --- the cluster-scoped twins of Observe-only objects ---------------------------------
+
+# twins_decided <names...> -- every cluster-scoped twin has a Synced condition that is not Unknown.
+twins_decided() {
+  local state
+  state="$(mr_state "${GROUP_CLUSTER}")"
+  [ "$(printf '%s' "${state}" | jq 'length')" -ge "${ADOPT_TWIN_COUNT}" ] || return 1
+  [ "$(printf '%s' "${state}" | jq '[.[] | select(.synced == "Unknown")] | length')" -eq 0 ]
+}
+
+# adopt_bothscopes_observe_phase -- a cluster-scoped Observe-only object over the same GitHub
+# object as a Ready, Observe-only namespaced one (same external name), for one object per kind.
+# The driver adopts into one scope at a time; this records what happens when both are
+# applied: what each controller does, what the status shows, whether either writes.
+adopt_bothscopes_observe_phase() {
+  local dir="${EVIDENCE_DIR}/rendered/cluster-twins" since twin kind name total=0 synced=0 degraded=0
+  local nready nsynced ncounts cready csynced ccounts cmsg cid nid verdict
+  derive_cluster_twins "${EVIDENCE_DIR}/rendered/v1" "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/rendered/observe" "${dir}"
+  ADOPT_TWIN_COUNT="$(find "${dir}" -name '*.yaml' | wc -l)"
+  if [ "${ADOPT_TWIN_COUNT}" -eq 0 ]; then
+    record WARN "no cluster-scoped twin could be derived: none of the twinned objects is in the adopted set"
+    return 0
+  fi
+  log "applying ${ADOPT_TWIN_COUNT} cluster-scoped Observe-only twins of namespaced objects"
+  since="$(now_utc)"
+  apply_fixtures "${dir}"
+  wait_until "${MIGRATION_READY_TIMEOUT}" 10 twins_decided || warn "not every cluster-scoped twin reported a Synced condition"
+  settle_pause 2
+  mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-twins-cluster.json"
+  mr_state "${ADOPT_GROUP}" >"${EVIDENCE_DIR}/k8s-twins-ns.json"
+  capture_window_logs twins "${since}"
+  capture_provider_logs twins
+  take_snapshot twins
+
+  while IFS=$'\t' read -r kind twin cready csynced cmsg cid; do
+    name="${twin#pgh-mig-cl-}"
+    nready="$(jq -r --arg k "${kind}" --arg n "${name}" '[.[] | select(.kind == $k and .name == $n)][0].ready // "-"' "${EVIDENCE_DIR}/k8s-twins-ns.json")"
+    nsynced="$(jq -r --arg k "${kind}" --arg n "${name}" '[.[] | select(.kind == $k and .name == $n)][0].synced // "-"' "${EVIDENCE_DIR}/k8s-twins-ns.json")"
+    nid="$(jq -r --arg k "${kind}" --arg n "${name}" '[.[] | select(.kind == $k and .name == $n)][0].atProviderId // "-"' "${EVIDENCE_DIR}/k8s-twins-ns.json")"
+    ncounts="$(log_counts "${EVIDENCE_DIR}/window-twins.log" "${kind}" "${name}" "${ADOPT_GROUP}" | tr ' ' /)"
+    ccounts="$(log_counts "${EVIDENCE_DIR}/window-twins.log" "${kind}" "${twin}" "${GROUP_CLUSTER}" | tr ' ' /)"
+    total=$((total + 1))
+    [ "${csynced}" = True ] && synced=$((synced + 1))
+    [ "${nsynced}" = True ] || degraded=$((degraded + 1))
+    record INFO "both scopes observe ${kind}/${name}" \
+      "namespaced: Ready=${nready} Synced=${nsynced} id=${nid} (creates/updates/reconciles ${ncounts}); cluster-scoped ${twin}: Ready=${cready} Synced=${csynced} id=${cid} (${ccounts}) ${cmsg:0:120}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${kind}" "${name}" "${nready}" "${nsynced}" "${ncounts}" "${cready}" "${csynced}" "${ccounts}" "${cmsg:0:100}" >>"${EVIDENCE_DIR}/table-both.tsv"
+  done < <(jq -r '.[] | [.kind, .name, .ready, .synced, (.syncedMessage | if . == "" then "-" else . end), ((.atProviderId // "-") | tostring)] | @tsv' "${EVIDENCE_DIR}/k8s-twins-cluster.json")
+
+  if "${MIGRATION_DIR}/snapshot.sh" diff "${EVIDENCE_DIR}/snapshots/adopted.json" "${EVIDENCE_DIR}/snapshots/twins.json" >"${EVIDENCE_DIR}/diff-adopted-vs-twins.txt" 2>&1; then
+    record INFO "both scopes (Observe-only): GitHub is identical before and after the cluster-scoped twins, timestamps included" "neither controller wrote"
+  else
+    record WARN "both scopes (Observe-only): GitHub differs between before and after the cluster-scoped twins, an Observe-only object wrote" \
+      "$(grep -c '^[-+][^-+]' "${EVIDENCE_DIR}/diff-adopted-vs-twins.txt" || true) differing line(s), see diff-adopted-vs-twins.txt"
+  fi
+  verdict="$(both_scopes_observe_verdict "${total}" "${synced}" "${degraded}")"
+  printf '%s' "${verdict}" >"${EVIDENCE_DIR}/both-observe-verdict.txt"
+  record INFO "both scopes (Observe-only) verdict" "${verdict}"
+
+  # The twins served; the namespaced objects are switched to full management next.
+  while IFS=$'\t' read -r kind twin; do
+    delete_mr "${kind}" "${GROUP_CLUSTER}" "${twin}"
+  done < <(jq -r '.[] | [.kind, .name] | @tsv' "${EVIDENCE_DIR}/k8s-twins-cluster.json")
+  write_adopt_tables
+}
+
+# --- one Team under full management by both scopes -----------------------------------
+
+# adopt_bothscopes_write_phase -- guarded: one disposable Team (pgh-mig-both-team, swept with
+# the rest), a harmless field (its description), Orphan on both objects. The namespaced object
+# creates the team; a cluster-scoped object adopts it with a different description. If nothing
+# stops two scopes managing one object, each controller keeps overwriting the other's value.
+# MIGRATION_BOTH_SCOPES_WRITE=0 skips it.
+adopt_bothscopes_write_phase() {
+  local dir="${EVIDENCE_DIR}/rendered/both" since nsu clu creates recs ns_synced cl_synced gh_desc ns_desc cl_desc verdict
+  if [ "${MIGRATION_BOTH_SCOPES_WRITE:-1}" != 1 ]; then
+    record INFO "both scopes under full management" "skipped (MIGRATION_BOTH_SCOPES_WRITE=0)"
+    return 0
+  fi
+  derive_both_teams "${dir}"
+  log "creating the disposable Team ${ADOPT_BOTH_TEAM} through a namespaced object, then adopting it with a cluster-scoped one"
+  kc apply -f "${dir}/10-team-namespaced.yaml" >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the namespaced Team failed"
+  wait_until 600 10 both_ns_ready || record WARN "both scopes: the namespaced Team did not become Synced and Ready before the cluster-scoped one was applied"
+  since="$(now_utc)"
+  kc apply -f "${dir}/20-team-cluster.yaml" >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the cluster-scoped Team failed"
+  wait_until 300 10 both_cluster_decided || warn "the cluster-scoped Team reported no Synced condition"
+  settle_pause
+  capture_window_logs both "${since}"
+  capture_provider_logs both
+  read -r creates nsu recs <<<"$(log_counts "${EVIDENCE_DIR}/window-both.log" Team "${ADOPT_BOTH_TEAM}" "${GROUP_NAMESPACED}")"
+  read -r creates clu recs <<<"$(log_counts "${EVIDENCE_DIR}/window-both.log" Team pgh-mig-cl-both-team "${GROUP_CLUSTER}")"
+  ns_synced="$(mr_condition "$(plural_of Team).${GROUP_NAMESPACED}" "${ADOPT_BOTH_TEAM}" "${ADOPT_NS_A}" Synced)"
+  cl_synced="$(mr_condition "$(plural_of Team).${GROUP_CLUSTER}" pgh-mig-cl-both-team - Synced)"
+  gh_desc="$(gh_get "/orgs/${MIGRATION_ORG}/teams/${ADOPT_BOTH_TEAM}" 2>/dev/null)" \
+    && gh_desc="$(jq -r '.description // ""' <<<"${gh_desc}")" || gh_desc="unreadable"
+  ns_desc="$(kc get "$(plural_of Team).${GROUP_NAMESPACED}" "${ADOPT_BOTH_TEAM}" -n "${ADOPT_NS_A}" -o json 2>/dev/null | jq -r '.status.atProvider.description // ""')"
+  cl_desc="$(kc get "$(plural_of Team).${GROUP_CLUSTER}" pgh-mig-cl-both-team -o json 2>/dev/null | jq -r '.status.atProvider.description // ""')"
+  record INFO "both scopes under full management: updates the controllers issued over ${MIGRATION_SETTLE_POLLS} poll cycles" \
+    "namespaced ${nsu} (Synced=${ns_synced}), cluster-scoped ${clu} (Synced=${cl_synced})"
+  record INFO "both scopes under full management: the description now" \
+    "GitHub '${gh_desc}'; namespaced status.atProvider '${ns_desc}'; cluster-scoped status.atProvider '${cl_desc}'"
+  record INFO "both scopes under full management: the messages" \
+    "namespaced: $(mr_state "${GROUP_NAMESPACED}" | jq -r --arg n "${ADOPT_BOTH_TEAM}" '[.[] | select(.name == $n)][0].syncedMessage // ""' | cut -c1-120); cluster-scoped: $(mr_state "${GROUP_CLUSTER}" | jq -r '[.[] | select(.name == "pgh-mig-cl-both-team")][0].syncedMessage // ""' | cut -c1-120)"
+  verdict="$(both_scopes_write_verdict "${nsu}" "${clu}" "${ns_synced}" "${cl_synced}")"
+  printf '%s' "${verdict}" >"${EVIDENCE_DIR}/both-write-verdict.txt"
+  case "${verdict}" in
+    "NO GUARD"*) record WARN "both scopes under full management: finding" "${verdict}" ;;
+    *) record INFO "both scopes under full management: verdict" "${verdict}" ;;
+  esac
+  # Orphan on both: deleting the objects leaves the team for the cleanup sweep.
+  delete_mr Team "${GROUP_CLUSTER}" pgh-mig-cl-both-team
+  delete_mr Team "${GROUP_NAMESPACED}" "${ADOPT_BOTH_TEAM}" "${ADOPT_NS_A}"
+  write_adopt_tables
+}
+
+both_ns_ready() {
+  [ "$(mr_condition "$(plural_of Team).${GROUP_NAMESPACED}" "${ADOPT_BOTH_TEAM}" "${ADOPT_NS_A}" Synced)" = True ] \
+    && [ "$(mr_condition "$(plural_of Team).${GROUP_NAMESPACED}" "${ADOPT_BOTH_TEAM}" "${ADOPT_NS_A}" Ready)" = True ]
+}
+
+both_cluster_decided() {
+  [ "$(mr_condition "$(plural_of Team).${GROUP_CLUSTER}" pgh-mig-cl-both-team - Synced)" != Unknown ]
 }

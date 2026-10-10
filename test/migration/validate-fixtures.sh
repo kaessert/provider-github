@@ -22,7 +22,12 @@
 #      (adopt-derive.sh) validate against the candidate CRDs and their CEL rules,
 #      in both modes (Observe-only, and the default management policies), and the
 #      list of create-time fields the Observe-only derivation omits is exactly the
-#      list of fields the candidate CRDs re-require.
+#      list of fields the candidate CRDs re-require;
+#   7. the same for the namespaced scope, which also moves the objects into two
+#      namespaces (one per kind of ProviderConfig), and the objects that sit beside the
+#      adopted set: the reference twins (Ref and Selector fields in place of plain
+#      strings, one that must not resolve), the cluster-scoped twins (one per kind) and
+#      the two Teams of the both-scopes probe.
 #
 # Baseline CRDs come from MIGRATION_BASELINE_CRDS (a directory), else from
 # MIGRATION_BASELINE_DIR/package/crds (a checkout of the baseline tag), else
@@ -293,6 +298,156 @@ if [ -z "${bad_obs}" ]; then
   record PASS "derived Observe-only manifests are Observe-only and omit the create-time fields"
 else
   record FAIL "derived Observe-only manifests are Observe-only and omit the create-time fields" "$(printf '%s' "${bad_obs}" | head -3 | tr '\n' ';')"
+fi
+
+# ---------------------------------------------------------------------------
+# The namespaced scope: the derived manifests, the reference twins, the cluster-scoped
+# twins and the two Teams of the both-scopes probe
+# ---------------------------------------------------------------------------
+derive_adoption observe "${WORK}/rendered/v1" - "${WORK}/rendered/derived-ns-observe" namespaced
+derive_probe "${WORK}/rendered/derived-ns-observe"
+derive_adoption full "${WORK}/rendered/v1" - "${WORK}/rendered/derived-ns-full" namespaced
+derive_ref_twins "${WORK}/rendered/derived-ns-observe" "${WORK}/rendered/ref-twins"
+derive_cluster_twins "${WORK}/rendered/v1" - "${WORK}/rendered/derived-ns-observe" "${WORK}/rendered/cluster-twins"
+derive_both_teams "${WORK}/rendered/both-teams"
+kc_check "derived namespaced Observe-only manifests validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/derived-ns-observe"
+kc_check "derived namespaced fully managed manifests validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/derived-ns-full"
+kc_check "reference twins validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/ref-twins"
+kc_check "cluster-scoped twins validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/cluster-twins"
+kc_check "the Teams of the both-scopes probe validate against the candidate CRDs" "${WORK}/schemas-candidate" "${WORK}/rendered/both-teams"
+cel_check "CEL rules of the candidate CRDs hold for the derived namespaced Observe-only manifests" "${CAND_CRDS}" "${WORK}/rendered/derived-ns-observe"
+cel_check "CEL rules of the candidate CRDs hold for the derived namespaced fully managed manifests" "${CAND_CRDS}" "${WORK}/rendered/derived-ns-full"
+cel_check "CEL rules of the candidate CRDs hold for the reference twins" "${CAND_CRDS}" "${WORK}/rendered/ref-twins"
+cel_check "CEL rules of the candidate CRDs hold for the cluster-scoped twins" "${CAND_CRDS}" "${WORK}/rendered/cluster-twins"
+cel_check "CEL rules of the candidate CRDs hold for the Teams of the both-scopes probe" "${CAND_CRDS}" "${WORK}/rendered/both-teams"
+
+ns_obs_count="$(find "${WORK}/rendered/derived-ns-observe" -name '*.yaml' ! -name "*-${ADOPT_PROBE_NAME}.yaml" | wc -l)"
+ns_full_count="$(find "${WORK}/rendered/derived-ns-full" -name '*.yaml' | wc -l)"
+if [ "${v1_count}" -gt 0 ] && [ "${v1_count}" -eq "${ns_obs_count}" ] && [ "${v1_count}" -eq "${ns_full_count}" ]; then
+  record PASS "one namespaced adoption manifest is derived per v1 managed resource (${v1_count})"
+else
+  record FAIL "one namespaced adoption manifest is derived per v1 managed resource" "v1 ${v1_count}, observe ${ns_obs_count}, full ${ns_full_count}"
+fi
+
+# Every derived namespaced object: its group, the namespace and ProviderConfig kind adopt_target
+# gives it, a label of its own name for Selectors, a connection secret reference that is a bare
+# name, secretKeyRef pointing at its own namespace; both namespaces and both ProviderConfig
+# kinds are used; names are unique across the namespaces (the report keys on Kind/name).
+bad_ns="$(for d in derived-ns-observe derived-ns-full; do
+  for f in "${WORK}/rendered/${d}"/*.yaml; do
+    yq -o=json -I=0 '.' "${f}" | jq -r --arg a "${ADOPT_NS_A}" --arg b "${ADOPT_NS_B}" '
+      . as $d
+      | [ (if ($d.apiVersion | test("\\.github\\.m\\.crossplane\\.io/")) then empty else "group" end),
+          (if ([$a, $b] | index($d.metadata.namespace)) != null then empty else "namespace" end),
+          (if $d.spec.providerConfigRef.kind == (if $d.metadata.namespace == $a then "ProviderConfig" else "ClusterProviderConfig" end) then empty else "providerConfigRef.kind" end),
+          (if $d.metadata.labels["pgh-mig-target"] == $d.metadata.name or $d.metadata.name == "pgh-mig-adopt-drift" then empty else "target label" end),
+          (if ($d.spec.writeConnectionSecretToRef // {name: "x"} | keys) == ["name"] then empty else "writeConnectionSecretToRef" end),
+          ([$d.spec.forProvider | .. | objects | select(has("secretKeyRef")) | .secretKeyRef.namespace | select(. != $d.metadata.namespace)] | if length == 0 then empty else "secretKeyRef namespace" end) ]
+      | select(length > 0) | "\($d.kind)/\($d.metadata.name): \(join(","))"'
+  done
+done)"
+ns_used="$(for f in "${WORK}"/rendered/derived-ns-observe/*.yaml; do yq -o=json -I=0 '.' "${f}" | jq -r '"\(.metadata.namespace) \(.spec.providerConfigRef.kind)"'; done | sort -u | paste -sd, -)"
+dup_names="$(for f in "${WORK}"/rendered/derived-ns-observe/*.yaml; do yq -o=json -I=0 '.' "${f}" | jq -r '.metadata.name'; done | sort | uniq -d | paste -sd, -)"
+if [ -z "${bad_ns}" ] && [ -z "${dup_names}" ] && [ "${ns_used}" = "${ADOPT_NS_A} ProviderConfig,${ADOPT_NS_B} ClusterProviderConfig" ]; then
+  record PASS "derived namespaced manifests sit in two namespaces, one per ProviderConfig kind, with unique names, own-namespace secret references and a target label"
+else
+  record FAIL "derived namespaced manifests sit in two namespaces, one per ProviderConfig kind, with unique names, own-namespace secret references and a target label" \
+    "${bad_ns:+$(printf '%s' "${bad_ns}" | head -3 | tr '\n' ';')}${dup_names:+duplicate names: ${dup_names}; }used: ${ns_used}"
+fi
+
+# The omitted create-time fields are the ones the namespaced CRDs re-require as well.
+ns_cel_fields="$(for crd in "${CAND_CRDS}"/organizations.github.m.crossplane.io_*.yaml; do
+  yq -o=json '.' "${crd}" | jq -c '.spec.names.kind as $k
+    | [.. | objects | select(has("x-kubernetes-validations")) | .["x-kubernetes-validations"][].rule
+       | capture("has\\(self\\.spec\\.forProvider\\.(?<f>[A-Za-z0-9]+)\\)$").f] as $f
+    | select(($f | length) > 0) | {($k): ($f | sort)}'
+done | jq -sS 'add')"
+if [ "${ns_cel_fields}" = "${want_fields}" ]; then
+  record PASS "the namespaced CRDs re-require exactly the fields the Observe-only derivation omits"
+else
+  record FAIL "the namespaced CRDs re-require exactly the fields the Observe-only derivation omits" "CRDs: $(jq -c . <<<"${ns_cel_fields}") derivation: $(jq -c . <<<"${want_fields}")"
+fi
+bad_ns_obs="$(for f in "${WORK}"/rendered/derived-ns-observe/*.yaml; do
+  yq -o=json -I=0 '.' "${f}" | jq -r --argjson omitted "${ADOPT_OMITTED_FIELDS}" '
+    . as $d | [ (($omitted[$d.kind] // [])[] | select(. as $x | $d.spec.forProvider | has($x))),
+                (if $d.spec.managementPolicies == ["Observe"] then empty else "managementPolicies" end),
+                (if ($d.spec | has("publishConnectionDetailsTo") or has("providerRef")) then "removed field" else empty end) ]
+    | select(length > 0) | "\($d.kind)/\($d.metadata.name): \(join(","))"'
+done)"
+if [ -z "${bad_ns_obs}" ]; then
+  record PASS "derived namespaced Observe-only manifests are Observe-only and omit the create-time fields"
+else
+  record FAIL "derived namespaced Observe-only manifests are Observe-only and omit the create-time fields" "$(printf '%s' "${bad_ns_obs}" | head -3 | tr '\n' ';')"
+fi
+
+# The reference twins: Observe-only, every one holds at least one Ref or Selector, the plain
+# strings they replace are gone, no twin carries the target label (a Selector would find it),
+# each twin names the GitHub object of its source, and the cross-namespace twin sits in the
+# namespace that does NOT hold the Organization it names.
+twin_count="$(find "${WORK}/rendered/ref-twins" -name '*.yaml' | wc -l)"
+bad_twin="$(while IFS=$'\t' read -r twin kind _ _ path _; do
+  doc="$(yq -o=json -I=0 '.' "$(adopt_file "${WORK}/rendered/ref-twins" "${kind}" "${twin}")")"
+  got="$(jq -c "${path}" <<<"${doc}")"
+  case "${got}" in null | '[null'*) ;; *) echo "${twin} ${path} still holds ${got}" ;; esac
+done <"${WORK}/rendered/ref-twins/checks.tsv"
+for f in "${WORK}"/rendered/ref-twins/*.yaml; do
+  yq -o=json -I=0 '.' "${f}" | jq -r '
+    [ (if ([.. | objects | keys[] | select(test("Ref$|Selector$") and . != "secretKeyRef")] | length) > 0 then empty else "no Ref or Selector" end),
+      (if .spec.managementPolicies == ["Observe"] then empty else "managementPolicies" end),
+      (if (.metadata.labels // {}) | has("pgh-mig-target") then "target label" else empty end) ]
+    | select(length > 0) | "\(.metadata.name): \(join(","))"'
+done)"
+xns_ns="$(jq -r 'select(.metadata.name == "pgh-mig-ref-xns-var") | .metadata.namespace' <(yq -o=json -I=0 '.' "${WORK}"/rendered/ref-twins/*-pgh-mig-ref-xns-var.yaml) 2>/dev/null)"
+xns_target="$(jq -r 'select(.spec.forProvider.orgRef.name != null) | .spec.forProvider.orgRef.name' <(yq -o=json -I=0 '.' "${WORK}"/rendered/ref-twins/*-pgh-mig-ref-xns-var.yaml) 2>/dev/null)"
+xns_target_ns="$(jq -r --arg n "${xns_target}" 'select(.kind == "Organization" and .metadata.name == $n) | .metadata.namespace' <(for f in "${WORK}"/rendered/derived-ns-observe/*.yaml; do yq -o=json -I=0 '.' "${f}"; done))"
+if [ "${twin_count}" -eq 5 ] && [ -z "${bad_twin}" ] && [ -n "${xns_ns}" ] && [ -n "${xns_target_ns}" ] && [ "${xns_ns}" != "${xns_target_ns}" ]; then
+  record PASS "five Observe-only reference twins replace plain strings with Ref and Selector fields; the cross-namespace twin names an object of the other namespace (${xns_ns} -> ${xns_target_ns})"
+else
+  record FAIL "five Observe-only reference twins replace plain strings with Ref and Selector fields; the cross-namespace twin names an object of the other namespace" \
+    "twins ${twin_count}; ${bad_twin:+$(printf '%s' "${bad_twin}" | head -3 | tr '\n' ';')}; cross-namespace twin in '${xns_ns}', target in '${xns_target_ns}'"
+fi
+
+# The reference fields are the ones the candidate CRDs carry (so a renamed field is caught here).
+ref_fields_missing="$(for fld in orgRef orgSelector parentRef userRef repoRef teamSelector userSelector; do
+  grep -qE "^ +${fld}:" "${CAND_CRDS}"/organizations.github.m.crossplane.io_*.yaml || echo "${fld}"
+done | paste -sd, -)"
+if [ -z "${ref_fields_missing}" ]; then
+  record PASS "the Ref and Selector fields the twins use exist in the namespaced candidate CRDs"
+else
+  record FAIL "the Ref and Selector fields the twins use exist in the namespaced candidate CRDs" "missing: ${ref_fields_missing}"
+fi
+
+# The cluster-scoped twins: one per kind, Observe-only, the external name of the source.
+twin_kinds="$(for f in "${WORK}"/rendered/cluster-twins/*.yaml; do yq -o=json -I=0 '.' "${f}" | jq -r '.kind'; done | sort | uniq -c | awk '{print $1}' | sort -u | paste -sd, -)"
+bad_cl="$(for f in "${WORK}"/rendered/cluster-twins/*.yaml; do
+  yq -o=json -I=0 '.' "${f}" | jq -r '
+    (.metadata.name | ltrimstr("pgh-mig-cl-")) as $src
+    | [ (if (.apiVersion | test("\\.github\\.crossplane\\.io/")) then empty else "group" end),
+        (if (.metadata.name | startswith("pgh-mig-cl-")) then empty else "name" end),
+        (if .spec.managementPolicies == ["Observe"] then empty else "managementPolicies" end),
+        (if .metadata.annotations["crossplane.io/external-name"] != null then empty else "external name" end) ]
+    | select(length > 0) | "\(.kind)/\(.metadata.name): \(join(","))"'
+done)"
+cl_total="$(find "${WORK}/rendered/cluster-twins" -name '*.yaml' | wc -l)"
+if [ "${cl_total}" -eq 9 ] && [ "${twin_kinds}" = 1 ] && [ -z "${bad_cl}" ]; then
+  record PASS "one cluster-scoped Observe-only twin per kind (9), named pgh-mig-cl-<object>, with the external name of its source"
+else
+  record FAIL "one cluster-scoped Observe-only twin per kind (9), named pgh-mig-cl-<object>, with the external name of its source" "twins ${cl_total}, per kind ${twin_kinds}; ${bad_cl}"
+fi
+
+# The two Teams of the both-scopes probe: one GitHub team, two scopes, two descriptions, Orphan on both.
+bt="$(for f in "${WORK}"/rendered/both-teams/*.yaml; do yq -o=json -I=0 '.' "${f}"; done | jq -s -r '
+  if (length == 2)
+     and (map(.metadata.annotations["crossplane.io/external-name"]) | unique | length == 1)
+     and (map(.spec.forProvider.description) | unique | length == 2)
+     and (map(select(.apiVersion | test("\\.m\\.") | not) | .spec.deletionPolicy) == ["Orphan"])
+     and (map(select(.apiVersion | test("\\.m\\.")) | .spec.managementPolicies | index("Delete")) == [null])
+     and (map(select(.apiVersion | test("\\.m\\.")) | .spec | has("deletionPolicy")) == [false])
+  then "ok" else "bad" end')"
+if [ "${bt}" = ok ]; then
+  record PASS "the both-scopes Teams name one GitHub team, declare different descriptions and neither deletes the team"
+else
+  record FAIL "the both-scopes Teams name one GitHub team, declare different descriptions and neither deletes the team"
 fi
 
 summarize

@@ -25,6 +25,9 @@
 #                              post-upgrade snapshot is taken [4]
 #   MIGRATION_MIN_RATE_BUDGET  GitHub requests that must be left in the hour for
 #                              the adoption scenario to start, 0 = no check [3500]
+#   MIGRATION_BOTH_SCOPES_WRITE  0 = skip the step of adopt-namespaced that puts one
+#                              Team under full management of a cluster-scoped and a
+#                              namespaced object at once [1]
 #   MIGRATION_READY_TIMEOUT    seconds to wait for fixtures to become Ready [1500]
 #   MIGRATION_BASELINE_REPO    where the baseline tag is fetched from
 #   MIGRATION_BASELINE_REF     baseline tag [v0.22.0]
@@ -69,6 +72,16 @@ HOOK_URL_PREFIX="https://example.com/pgh-mig"
 TEMPLATE_REPO="pgh-mig-template"
 
 KUBECTL_BIN="${KUBECTL:-kubectl}"
+
+# The namespaced adoption scenario spreads its objects over two namespaces, one per
+# way a namespaced managed resource reaches its credentials: a ProviderConfig of the
+# namespace (with its own credentials Secret in that namespace), and a
+# ClusterProviderConfig (credentials in the Crossplane namespace) used from a
+# namespace that holds no credentials of its own.
+ADOPT_NS_A="pgh-mig-ns-a"
+ADOPT_NS_B="pgh-mig-ns-b"
+ADOPT_PC_NAME="pgh-mig-ns-pc"
+ADOPT_CPC_NAME="pgh-mig-ns-cpc"
 
 # ---------------------------------------------------------------------------
 # Logging and results

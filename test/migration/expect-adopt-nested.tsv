@@ -80,5 +80,5 @@ OrganizationWebhook	pgh-mig-hook-ess	.spec.publishConnectionDetailsTo	-	-	remove
 OrganizationWebhook	pgh-mig-hook-ess	.spec.publishConnectionDetailsTo.configRef	-	-	removed with External Secret Stores (crossplane-runtime v2); the derived manifest drops it
 OrganizationWebhook	pgh-mig-hook-ess	.spec.publishConnectionDetailsTo.metadata	-	-	removed with External Secret Stores (crossplane-runtime v2); the derived manifest drops it
 OrganizationVariable	pgh-mig-var-policies	.spec.managementPolicies	-	-	spec-level: the adoption sets Observe, then the default policies
-Team	pgh-mig-team-orphan	.spec.deletionPolicy	-	-	spec-level: the baseline objects are orphaned, the derived Team keeps Orphan
+Team	pgh-mig-team-orphan	.spec.deletionPolicy	-	-	spec-level: the baseline objects are orphaned; the derived cluster-scoped Team keeps Orphan, a namespaced Team (no deletionPolicy) leaves Delete out of its management policies
 OrganizationVariable	pgh-mig-var-providerref	.spec.providerRef	-	-	removed with the move to crossplane-runtime v2; the derived manifest uses providerConfigRef
