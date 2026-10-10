@@ -14,8 +14,11 @@ organization:
    and write nothing? Can the same objects then be switched to full management
    with zero writes, and changed once per kind with exactly that change reaching
    GitHub?
-3. **Observe-only adoption, namespaced kinds.** Objects seeded through the GitHub
-   API are adopted by the namespaced kinds in `organizations.github.m.crossplane.io`.
+3. **Adoption into the namespaced kinds.** The same flow as 2, into the namespaced kinds
+   in `organizations.github.m.crossplane.io`: through a namespaced `ProviderConfig` in
+   one namespace and a `ClusterProviderConfig` in another, with references between
+   objects of one namespace, and with a record of what a cluster-scoped and a namespaced
+   object do when both manage one GitHub object.
 
 It is **not part of the end-to-end suite**. No `e2e` target, `UPTEST_MANIFESTS_*`
 variable, CI workflow or file under `examples/` reaches it, and nothing gates on
@@ -56,7 +59,7 @@ default: the first user member found), `MIGRATION_FORK_SOURCE` (public `owner/re
 to fork, default `actions/hello-world-docker-action`, chosen because it carries `.github/workflows/ci.yml`, which the runner-group workflow fixture names), `MIGRATION_WORKDIR` (evidence and scratch,
 default `$TMPDIR/provider-github-migration`), `MIGRATION_POLL` (provider `--poll`,
 default `60s`: at 15s a run exhausted the GitHub App installation's 5000 requests an hour), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
-`MIGRATION_MIN_RATE_BUDGET` (GitHub requests that must be left in the hour for `adopt-cluster` to start,
+`MIGRATION_MIN_RATE_BUDGET` (GitHub requests that must be left in the hour for `adopt-cluster` and `adopt-namespaced` to start,
 default `3500`, `0` disables the check), `MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
 baseline), `MIGRATION_REQUIRE_BASELINE_READY=1` (fail rather than warn when a
 fixture is not Ready on the baseline) and `MIGRATION_KEEP_V1_FLAGS=1` (upgrade
@@ -80,17 +83,17 @@ managed-resource state, the provider logs and the rendered fixtures.
 | Path | Purpose |
 |---|---|
 | `fixtures/v1/` | the baseline-schema fixtures: all nine kinds, every nested sub-object |
-| `fixtures/adopt/cluster/`, `fixtures/adopt/namespaced/` | Observe-only adoption fixtures, one set per scope |
+| `fixtures/adopt/cluster/`, `fixtures/adopt/namespaced/` | hand-written Observe-only adoption fixtures, one set per scope. No scenario applies them since the full flow derives its manifests from `fixtures/v1/`; they are still validated against the candidate CRDs |
 | `coverage.tsv`, `check-coverage.sh` | the kind x sub-object coverage table and its checker |
 | `validate-fixtures.sh` | fixtures against the CRDs, offline |
 | `snapshot.sh` | GitHub state snapshot and diff |
 | `oob.sh` | out-of-band setup, seeding and cleanup through the GitHub API |
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
-| `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds both adoption flows) |
-| `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures; the evaluation helpers of the expectation tables |
-| `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenario (b)) |
-| `expect-adopt-change.tsv` | the one deliberate change per kind of scenario (b), and what it may change on GitHub |
-| `expect-adopt-mirror.tsv` | what `status.atProvider` must report for the objects seeded through the API (scenario (c)) |
+| `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds the full adoption flow, `run_adopt_full <cluster\|namespaced>`) |
+| `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures (both scopes), the reference twins, the cluster-scoped twins and the both-scopes Teams; the evaluation helpers of the expectation tables and the both-scopes verdicts |
+| `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenarios (b) and (c)) |
+| `expect-adopt-change.tsv` | the one deliberate change per kind of scenarios (b) and (c), and what it may change on GitHub |
+| `expect-adopt-mirror.tsv` | what `status.atProvider` must report for the objects the old API-seeded adoption created; unused since the full flow |
 | `check-separation.sh` | proof the harness is unreachable from the end-to-end suite |
 | `selftest.sh`, `testdata/` | offline tests of the harness against a read-only local stand-in for the GitHub API |
 | `run.sh` | entry point used by the Makefile |
@@ -196,7 +199,14 @@ Fields no fixture sets are listed by `check-coverage.sh` as information:
 * that the `v1` fixtures fail the candidate schema only on `publishConnectionDetailsTo`
   and `providerRef`;
 * that each namespaced adoption fixture is its cluster counterpart moved to the
-  namespaced scope and nothing else.
+  namespaced scope and nothing else;
+* the manifests the adoption scenarios derive, in both scopes, against the candidate
+  CRDs and their CEL rules: the namespaced ones sit in two namespaces, one per kind of
+  ProviderConfig, read their secrets from their own namespace and carry no
+  `deletionPolicy` (a namespaced kind has none); the reference twins hold `*Ref` and
+  `*Selector` fields in place of plain strings, the cross-namespace twin names an object of
+  the other namespace; there is one cluster-scoped twin per kind; the two Teams of the
+  both-scopes probe name one GitHub team.
 
 The baseline CRDs are read from `MIGRATION_BASELINE_CRDS`, else from
 `MIGRATION_BASELINE_DIR/package/crds`, else from this repository's history at
@@ -215,9 +225,11 @@ baseline snapshot before changing anything**. Then, through the GitHub API:
   then), and creates four organization secrets, two Actions and two Dependabot, of
   visibility `selected` (the provider never creates a secret; sealed with
   `test/sealedbox`);
-* **adopt** (scenario (c) only; scenario (b) uses the `upgrade` setup, because the baseline provider creates its own objects): seeds one object of every adoptable kind: a repository, a parent and a
-  child team (with the member) and a team that will drift, a variable, an organization
-  webhook, a runner group and two secrets, and records the webhook's numeric ID.
+* **adopt** (no scenario uses it any more; scenarios (b) and (c) use the `upgrade` setup,
+  because the baseline provider creates its own objects): seeds one object of every
+  adoptable kind: a repository, a parent and a child team (with the member) and a team
+  that will drift, a variable, an organization webhook, a runner group and two secrets,
+  and records the webhook's numeric ID.
 
 ## Snapshot tool
 
@@ -335,23 +347,66 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 provider log and the reconciles that make zero meaningful), per nested sub-object
 (phase, result, the two values when they differ), and per deliberate change. A run takes
 about an hour and polls dozens of objects, which is why it checks the request budget
-first.
+first. (c) adds the reference and both-scopes steps to that, so it needs the budget as well.
 
 ### (c) `adopt-namespaced`
 
-1. Build this tree; seed the adoption targets; install the candidate Provider and the
-   ProviderConfigs; snapshot GitHub (`seeded`).
-2. Apply the Observe-only fixtures of the scope. Several omit fields that are required
-   for a writing object (Organization `description`, Membership `role`, variable
-   `value`/`visibility`, webhook `url`/`contentType`/`events`, runner group and
-   SecretAccess `visibility`), which the relaxed schema allows. One Team declares a
-   description that differs from GitHub.
-3. Assert: every object is Synced, and Ready unless it is the drift probe;
-   `status.atProvider.id` is filled; the webhook and runner group IDs are GitHub's;
-   `status.atProvider` reports GitHub's values for the seeded objects
-   (`expect-adopt-mirror.tsv`), including, for the drift probe, GitHub's description
-   rather than the declared one; the GitHub snapshot after adoption equals `seeded`.
-4. Delete the managed resources and assert GitHub still equals `seeded`.
+The full adoption flow of (b), into the namespaced kinds, plus three probes that only the
+namespaced scope has. Steps 1 to 3 are (b)'s: the baseline creates, the objects are
+orphaned, the candidate is installed.
+
+4. **Two ways to reach GitHub.** Two namespaces, each with the credentials its path reads:
+   * `pgh-mig-ns-a` holds a namespaced `ProviderConfig` (`github.m.crossplane.io`,
+     `pgh-mig-ns-pc`) whose Secret is in `pgh-mig-ns-a`: a namespaced ProviderConfig reads its Secret
+     from its own namespace;
+   * `pgh-mig-ns-b` holds no ProviderConfig and no credentials Secret; its objects name a
+     `ClusterProviderConfig` (`pgh-mig-ns-cpc`) whose Secret is in `crossplane-system`.
+
+   Every v1 object is adopted by one NEW namespaced managed resource, derived as in (b) and
+   moved into one of the two namespaces (`adopt_target` in `adopt-derive.sh`): the organization,
+   the membership, the three teams and two repositories go to `pgh-mig-ns-a`, everything else to
+   `pgh-mig-ns-b`. A namespaced kind has no `deletionPolicy` and reads the webhook and connection
+   secrets from its own namespace, so the derivation drops the field (an object the baseline
+   kept with `Orphan`, a Membership above all, leaves `Delete` out of its management policies
+   instead), reduces `writeConnectionSecretToRef` to its name, and the scenario copies the
+   connection secrets the baseline wrote (the applied webhook secrets) into the namespaces. Assert
+   what (b) asserts (Synced, Ready, `atProvider.id`, `status.atProvider` per nested sub-object,
+   zero writes, the GitHub snapshot unchanged), and in addition that every object is on the path
+   it was given and that every object reaching GitHub through each path is Synced and Ready.
+5. **References.** Five Observe-only twins over objects of `pgh-mig-ns-a` (and one of
+   `pgh-mig-ns-b`), each holding its references as `*Ref` and `*Selector` fields in place of the
+   plain strings of the object it twins:
+
+   | Twin | Fields |
+   |---|---|
+   | `pgh-mig-ref-team` (Team) | `orgRef`, `parentRef`, `members[].userRef` |
+   | `pgh-mig-ref-membership` (Membership) | `orgRef` |
+   | `pgh-mig-ref-org` (Organization) | `repoRef` in the Actions and the secrets repository lists |
+   | `pgh-mig-ref-repo` (Repository) | `orgSelector`, `permissions.teams[].teamSelector`, `permissions.users[].userSelector` |
+   | `pgh-mig-ref-xns-var` (OrganizationVariable, in `pgh-mig-ns-b`) | `orgRef` naming the Organization of `pgh-mig-ns-a` |
+
+   Assert: the four twins in the namespace of their targets are Synced and Ready and the resolver
+   has filled `spec.forProvider.<field>` with the value the plain-string object declares; the
+   cross-namespace twin is Synced=False and its field stays unset (a reference resolves inside
+   the namespace of the object that holds it); no twin writes. The twins are deleted afterwards.
+6. **Both scopes, Observe-only.** The cluster-scoped Observe-only twin of one object per kind
+   (same external name, named `pgh-mig-cl-<object>`) is applied while the namespaced object is
+   Ready. Recorded, not asserted: Ready, Synced and message of each, what each controller did,
+   whether GitHub changed (snapshot `twins` against `adopted`, timestamps included).
+7. **Full management and one deliberate change per kind**, as in (b) (`Membership` is waived).
+8. **Both scopes, full management.** Guarded: one disposable Team (`pgh-mig-both-team`, removed by
+   the sweep) is created by a namespaced object, then adopted by a cluster-scoped one that declares
+   another description. Both have full management of the description, neither deletes the team.
+   Recorded after `MIGRATION_SETTLE_POLLS` poll cycles: the updates each controller issued, the
+   description on GitHub and in each status. If both controllers wrote, the report says so as a
+   finding. `MIGRATION_BOTH_SCOPES_WRITE=0` skips this step.
+9. Cleanup deletes the managed resources of both groups, the namespaces and the
+   ClusterProviderConfig, removes the Provider and sweeps.
+
+`report.md` carries the tables of (b) with the ProviderConfig path added to the per-object and
+per-sub-object tables (one row per `coverage.tsv` row and path), a per-path summary, the reference
+table (declared value against the value the resolver filled in, per field), the both-scopes table
+and a plain statement whether the provider has a guard that stops two scopes managing one object.
 
 ## Safety
 
@@ -389,11 +444,14 @@ directory and the Makefile's `Migration Validation` block refers to it.
 ## Status of this harness
 
 The offline parts (fixture validation, coverage, separation and the self-test) run
-without a cluster or a GitHub call. They check the manifests `adopt-cluster` derives
+without a cluster or a GitHub call. They check the manifests `adopt-cluster` and `adopt-namespaced` derive
 against the candidate CRDs and their CEL rules, and the expectation tables against the
 fixtures and the stand-in API; what GitHub itself reports for a nested sub-object (the
 shape of a branch protection or a ruleset) is known only from a live run, so the first run
-of `adopt-cluster` may fail a row whose expectation is mis-stated rather than the provider.
+of `adopt-cluster` or `adopt-namespaced` may fail a row whose expectation is mis-stated rather than the provider.
+`adopt-namespaced` also depends on what the resolver and the controllers log: the write counts read the
+provider's debug lines for the namespaced controllers (`managed/<kind>.organizations.github.m.crossplane.io`,
+the request carrying the namespace), which the self-test checks against the format of the cluster-scoped ones.
 The first run of the other scenarios may surface GitHub-side validation differences (for
 example the runner-group workflow restriction, which not every organization plan
 accepts, or branch-protection actor lists) and build details of the baseline tag. Those

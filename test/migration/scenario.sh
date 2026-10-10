@@ -43,6 +43,9 @@ scenario_cleanup() {
     delete_managed_resources "${GROUP_CLUSTER}" 300 || record WARN "cluster-scoped managed resources needed forced finalizer removal"
     delete_managed_resources "${GROUP_NAMESPACED}" 300 || record WARN "namespaced managed resources needed forced finalizer removal"
     remove_provider
+    # The namespaces of the namespaced adoption scenario (a no-op for the others).
+    kc delete namespace "${ADOPT_NS_A}" "${ADOPT_NS_B}" --ignore-not-found --wait=false >/dev/null 2>&1
+    kc delete clusterproviderconfigs.github.m.crossplane.io "${ADOPT_CPC_NAME}" --ignore-not-found >/dev/null 2>&1
     kc delete secret pgh-mig-hook-secret -n "${CROSSPLANE_NS}" --ignore-not-found >/dev/null 2>&1
     kc delete secret pgh-mig-hook-wcs-conn pgh-mig-hook-ess-wcs-conn pgh-mig-hook-ess-conn -n "${CROSSPLANE_NS}" --ignore-not-found >/dev/null 2>&1
   else
