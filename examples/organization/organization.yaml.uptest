@@ -6,10 +6,36 @@ crossplane.io/update-test: |
   - field: description
     value: Crossplane provider-github updated organization description
   - field: actions
-    skip:
-      reason: fixture-missing
-      evidence: "the suite never changes the shared test organization's Actions policy or its secret access lists"
+    value:
+      enabledRepos:
+        - repo: demo-repository-1
+        - repo: demo-repository-2
+        - repo: pgh-e2e-workflows
+  - field: actions
+    value:
+      enabledRepos:
+        - repo: demo-repository-1
+        - repo: demo-repository-2
   - field: secrets
-    skip:
-      reason: fixture-missing
-      evidence: "the suite never changes the shared test organization's Actions policy or its secret access lists"
+    value:
+      actionsSecrets:
+        - name: PGH_E2E_ORG_ACTIONS_SECRET
+          repositoryAccessList:
+            - repo: demo-repository-2
+      dependabotSecrets:
+        - name: PGH_E2E_ORG_DEPENDABOT_SECRET
+          repositoryAccessList:
+            - repo: demo-repository-2
+  - field: secrets
+    value:
+      actionsSecrets:
+        - name: PGH_E2E_ORG_ACTIONS_SECRET
+          repositoryAccessList: []
+      dependabotSecrets:
+        - name: PGH_E2E_ORG_DEPENDABOT_SECRET
+          repositoryAccessList: []
+  - field: description
+    value: Crossplane provider-github organization description once the lists are dropped
+    clear:
+      - actions
+      - secrets

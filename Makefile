@@ -405,12 +405,16 @@ UPTEST_MANIFESTS_ORGANIZATION_NS := examples/organization/organization-namespace
 UPTEST_MANIFESTS_ORGANIZATION_VARIABLE := examples/organization-variable/organization-variable.yaml,examples/organization-variable/organization-variable-namespaced.yaml
 UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK := examples/organization-webhook/organization-webhook.yaml,examples/organization-webhook/organization-webhook-namespaced.yaml
 UPTEST_MANIFESTS_REPOSITORY := examples/repository/repository.yaml,examples/repository/repository-namespaced.yaml
+# A repository created from a template that has more than one branch, which is what
+# lets its update test protect a branch and move the default branch; test/setup.sh
+# creates that template (see E2E_REPO_FIXTURES below).
+UPTEST_MANIFESTS_REPOSITORY_BRANCHES := examples/repository-branches/repository-branches.yaml,examples/repository-branches/repository-branches-namespaced.yaml
 UPTEST_MANIFESTS_RUNNER_GROUP := examples/runner-group/runner-group.yaml,examples/runner-group/runner-group-namespaced.yaml
 UPTEST_MANIFESTS_TEAM := examples/team/team.yaml,examples/team/team-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that need nothing beyond the GitHub App credentials and the test organization.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_REPOSITORY_BRANCHES),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
 # GATED: resources that need an out-of-band prerequisite (an inviteable user, the
 # shared organization itself).
 UPTEST_MANIFESTS_GATED = $(UPTEST_MANIFESTS_MEMBERSHIP),$(UPTEST_MANIFESTS_ORGANIZATION),$(UPTEST_MANIFESTS_ORGANIZATION_NS)
@@ -425,13 +429,25 @@ UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
 
 UPTEST_SETUP_SCRIPT ?= test/setup.sh
 
-# The SecretAccess kinds manage access to an organization secret the provider
-# never creates. When a run includes one, test/setup.sh creates the disposable
-# secrets PGH_E2E_ACTIONS_SECRET and PGH_E2E_DEPENDABOT_SECRET in $(E2E_ORG) and
-# test/teardown.sh removes them after the delete step, so a run that addresses
-# no SecretAccess example never writes to the organization's secrets. The value
-# stays recursive (`=`) so a per-resource target's UPTEST_INPUT_MANIFESTS is seen.
-export E2E_ORG_SECRETS = $(if $(findstring secret-access,$(UPTEST_INPUT_MANIFESTS)),true)
+# The SecretAccess kinds and the Organization's secrets field manage access to an
+# organization secret the provider never creates. When a run includes one of them,
+# test/setup.sh creates the disposable secrets those examples name
+# (PGH_E2E_ACTIONS_SECRET, PGH_E2E_ORG_ACTIONS_SECRET and their Dependabot and
+# namespaced twins) in $(E2E_ORG) and test/teardown.sh removes them after the delete
+# step, so a run that addresses none of them never writes to the organization's
+# secrets. The values stay recursive (`=`) so a per-resource target's
+# UPTEST_INPUT_MANIFESTS is seen.
+export E2E_ORG_SECRETS = $(if $(or $(findstring secret-access,$(UPTEST_INPUT_MANIFESTS)),$(findstring examples/organization/,$(UPTEST_INPUT_MANIFESTS))),true)
+# The Organization update test lists a disposable repository next to the repositories
+# the organization has enabled for Actions and then lists the original ones again.
+# test/setup.sh refuses to start such a run unless the organization's Actions policy
+# is the baseline that second list restores.
+export E2E_ORG_ACTIONS = $(if $(findstring examples/organization/,$(UPTEST_INPUT_MANIFESTS)),true)
+# The Organization, Repository branches and RunnerGroup update tests need repositories
+# the provider cannot make: a template with more than one branch and a repository
+# holding a workflow file. test/setup.sh creates both (test/repo-fixtures.sh) and
+# test/teardown.sh removes them after the delete step.
+export E2E_REPO_FIXTURES = $(if $(or $(findstring examples/organization/,$(UPTEST_INPUT_MANIFESTS)),$(findstring examples/repository-branches/,$(UPTEST_INPUT_MANIFESTS)),$(findstring examples/runner-group/,$(UPTEST_INPUT_MANIFESTS))),true)
 UPTEST_ARGS += --teardown-script=$(abspath test/teardown.sh)
 
 # Per-run uptest test-directory isolation (each concurrent E2E run gets its own
@@ -532,6 +548,9 @@ e2e.organization: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION)
 e2e.organization: e2e
 	@env -u UPTEST_ARGS $(MAKE) e2e IMAGE_TEMP_DIR=$$(mktemp -d) UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
 
+e2e.repository-branches: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY_BRANCHES)
+e2e.repository-branches: e2e
+
 e2e.repository: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY)
 e2e.repository: e2e
 
@@ -551,6 +570,7 @@ e2e.team: e2e
 .PHONY: e2e.organization-variable
 .PHONY: e2e.organization-webhook
 .PHONY: e2e.repository
+.PHONY: e2e.repository-branches
 .PHONY: e2e.runner-group
 .PHONY: e2e.team
 

@@ -14,10 +14,20 @@
 #
 # Optional environment:
 #   KUBECTL          path to the kubectl binary (uptest sets it; default: kubectl)
-#   E2E_ORG_SECRETS  "true" when the run includes the SecretAccess examples (the
-#                    Makefile sets it); the run then creates the disposable
-#                    organization secrets those examples manage, and removes
-#                    them when it ends. Needs E2E_ORG, which the Makefile exports.
+#   E2E_ORG_SECRETS  "true" when the run includes the SecretAccess or the
+#                    Organization examples (the Makefile sets it); the run then
+#                    creates the disposable organization secrets those examples
+#                    manage, and removes them when it ends. Needs E2E_ORG, which
+#                    the Makefile exports.
+#   E2E_ORG_ACTIONS  "true" when the run includes the Organization examples (the
+#                    Makefile sets it); the run first checks that the
+#                    organization's Actions policy is the baseline the update test
+#                    restores, and refuses to start otherwise.
+#   E2E_REPO_FIXTURES "true" when the run includes the Organization, Repository
+#                    branches or RunnerGroup examples (the Makefile sets it); the
+#                    run then creates the disposable template and workflow
+#                    repositories those examples need, and removes them when it
+#                    ends.
 set -euo pipefail
 
 KUBECTL="${KUBECTL:-kubectl}"
@@ -151,23 +161,52 @@ spec:
 YAML
 
 # ---------------------------------------------------------------------------
-# Disposable organization secrets for ActionsSecretAccess and
-# DependabotSecretAccess, which manage access to a secret but never create one.
+# Disposable GitHub objects the examples need but the provider never creates:
+#
+#   organization secrets  ActionsSecretAccess, DependabotSecretAccess and the
+#                         Organization's secrets field manage access to a secret
+#                         but never create one.
+#   repositories          a template with more than one branch (the
+#                         repository-branches examples) and a repository holding
+#                         a workflow file (the RunnerGroup and Organization
+#                         examples).
+#
 # test/teardown.sh removes them once the delete step has passed. A run that ends
 # before that step -- a failed assertion, a stopped job -- never reaches the
-# teardown script, so a detached watcher also removes them when this cluster
-# disappears. It holds no file descriptor of this process open.
+# teardown script, so a detached watcher per script also removes them when this
+# cluster disappears. A watcher holds no file descriptor of this process open.
 # ---------------------------------------------------------------------------
-if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
-  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  "${ROOT}/test/org-secrets.sh" create
-  # The runner removes the kubeconfig it gives this script once the script
-  # returns, so the watcher keeps a private flattened copy of the context.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# start_watcher <script> detaches "<script> watch". The runner removes the
+# kubeconfig it gives this script once the script returns, so the watcher keeps a
+# private flattened copy of the context; the copy is the watcher's own (it deletes
+# the file when it exits), so each watcher gets one.
+start_watcher() {
+  local script="$1" watch_kubeconfig
   watch_kubeconfig="$(mktemp)"
   ${KUBECTL} config view --minify --flatten > "${watch_kubeconfig}"
   WATCH_KUBECONFIG="${watch_kubeconfig}" KUBECTL="${KUBECTL}" \
-    setsid nohup "${ROOT}/test/org-secrets.sh" watch \
-    >"${TMPDIR:-/tmp}/org-secrets-watch.$$.log" 2>&1 </dev/null &
+    setsid nohup "${ROOT}/test/${script}" watch \
+    >"${TMPDIR:-/tmp}/${script}-watch.$$.log" 2>&1 </dev/null &
+}
+
+if [ "${E2E_ORG_ACTIONS:-}" = "true" ]; then
+  "${ROOT}/test/org-secrets.sh" check-actions
+fi
+
+if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
+  # The watcher starts first, as below: a create that fails half way has still
+  # made a secret, and nothing else would remove it.
+  start_watcher org-secrets.sh
+  "${ROOT}/test/org-secrets.sh" create
+fi
+
+if [ "${E2E_REPO_FIXTURES:-}" = "true" ]; then
+  # The watcher starts first: a create that fails half way has still made a
+  # repository, and nothing else would remove it.
+  start_watcher repo-fixtures.sh
+  "${ROOT}/test/repo-fixtures.sh" create
 fi
 
 echo "setup.sh: complete -- credentials Secret, ProviderConfig, namespaced ProviderConfig and ClusterProviderConfig applied."
