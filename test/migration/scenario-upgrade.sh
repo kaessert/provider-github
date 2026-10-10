@@ -24,6 +24,8 @@ set -uo pipefail
 MIGRATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scenario.sh
 . "${MIGRATION_DIR}/scenario.sh"
+# shellcheck source=upgrade-compare.sh
+. "${MIGRATION_DIR}/upgrade-compare.sh"
 
 scenario_begin upgrade
 use_candidate_tools
@@ -117,35 +119,35 @@ capture_provider_logs candidate
 log_findings candidate
 
 # --- assertions --------------------------------------------------------------
-# An object the baseline could not apply (it never reached Ready there, so GitHub
-# never had it) is created by the candidate, which is not a change to an existing
-# object. Such an object is left out of the comparison and reported.
-SNAP_AFTER=after-v2
-if [ -s "${EVIDENCE_DIR}/baseline-not-ready.txt" ]; then
-  # shellcheck disable=SC2016
-  UNAPPLIED_VARS="$(grep '^OrganizationVariable/' "${EVIDENCE_DIR}/baseline-not-ready.txt" | cut -d: -f1 | cut -d/ -f2 \
-    | while read -r n; do jq -r --arg n "${n}" '.[] | select(.name == $n) | .externalName' "${EVIDENCE_DIR}/k8s-v1.json"; done)"
-  if [ -n "${UNAPPLIED_VARS}" ]; then
-    jq --arg v "${UNAPPLIED_VARS//$'\n'/ }" '.variables |= with_entries(select(.key as $k | ($v | split(" ") | index($k)) | not))' \
-      "${EVIDENCE_DIR}/snapshots/after-v2.json" >"${EVIDENCE_DIR}/snapshots/after-v2-filtered.json"
-    SNAP_AFTER=after-v2-filtered
-    record INFO "organization variables the baseline never applied are left out of the GitHub comparison (the candidate created them)" "${UNAPPLIED_VARS//$'\n'/ }"
-  fi
-fi
-assert_snapshots_identical "no recreate and no write: GitHub is identical before and after the upgrade (IDs, settings, timestamps)" after-v1 "${SNAP_AFTER}"
-assert_snapshots_identical "no recreate and no setting changed: numeric IDs and settings are identical (timestamps ignored)" after-v1 "${SNAP_AFTER}" --ignore-timestamps
+# An object the baseline could not apply, or never finished applying, is completed by the
+# candidate, which is not a change to an object the baseline had reconciled. Those objects are
+# narrowed in the GitHub comparison and reported (upgrade-compare.sh); everything that was Synced
+# and Ready on the baseline stays under the strict assertions.
+upgrade_prepare_snapshots
+assert_snapshots_identical "no recreate and no write: GitHub is identical before and after the upgrade (IDs, settings, timestamps)" "${SNAP_BEFORE}" "${SNAP_AFTER}"
+assert_snapshots_identical "no recreate and no setting changed: numeric IDs and settings are identical (timestamps ignored)" "${SNAP_BEFORE}" "${SNAP_AFTER}" --ignore-timestamps
 
-# Kubernetes side.
-COMPARE="$(jq -rn --slurpfile b "${EVIDENCE_DIR}/k8s-v1.json" --slurpfile a "${EVIDENCE_DIR}/k8s-v2.json" '
-  ($b[0] | map({key: "\(.kind)/\(.name)", value: .}) | from_entries) as $B
-  | ($a[0] | map({key: "\(.kind)/\(.name)", value: .}) | from_entries) as $A
-  | $B | to_entries[] | .key as $k | .value as $v
-  | if ($A[$k] | not) then "\($k)\tdeleted"
-    elif $A[$k].uid != $v.uid then "\($k)\trecreated"
-    elif $A[$k].externalName != $v.externalName then "\($k)\texternal-name \($v.externalName) -> \($A[$k].externalName)"
-    elif ($v.ready == "True" and $v.synced == "True") and ($A[$k].ready != "True" or $A[$k].synced != "True")
-      then "\($k)\tregressed: Ready=\($A[$k].ready) Synced=\($A[$k].synced) \($A[$k].syncedMessage)"
-    else empty end')"
+# Where each updated_at move comes from: the provider's create and update lines, or somebody else.
+CANDIDATE_LOGS=("${EVIDENCE_DIR}"/provider-candidate-*.log)
+[ -f "${CANDIDATE_LOGS[0]}" ] || CANDIDATE_LOGS=()
+upgrade_write_attribution "${EVIDENCE_DIR}/snapshots/after-v1.json" "${EVIDENCE_DIR}/snapshots/after-v2.json" \
+  "${EVIDENCE_DIR}/k8s-v2.json" "${GROUP_CLUSTER}" "${EVIDENCE_DIR}/report-tables.md" ${CANDIDATE_LOGS[@]+"${CANDIDATE_LOGS[@]}"}
+record INFO "updated_at moves across the upgrade: provider writes / not provider writes / unmatched" \
+  "${UPGRADE_TS_PROVIDER} / ${UPGRADE_TS_OTHER} / ${UPGRADE_TS_UNMATCHED}, see report.md"
+
+# Kubernetes side. An object that was Ready and reports "drift:" at the instant of the read is
+# read again after one poll period; it fails only if it is still not Ready.
+COMPARE="$(upgrade_k8s_compare "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/k8s-v2.json")"
+PENDING="$(printf '%s\n' "${COMPARE}" | grep -P '\tdrift-pending' | cut -f1 || true)"
+COMPARE="$(printf '%s\n' "${COMPARE}" | grep -vP '\tdrift-pending' || true)"
+if [ -n "${PENDING}" ]; then
+  record INFO "managed resources reporting drift when read; read again after one poll period" "$(printf '%s' "${PENDING}" | paste -sd' ')"
+  sleep "$(poll_seconds "${MIGRATION_POLL}")"
+  mr_state "${GROUP_CLUSTER}" >"${EVIDENCE_DIR}/k8s-v2-reread.json"
+  RECHECK="$(awk -F'\t' 'NR == FNR { keys[$0]; next } $1 in keys' <(printf '%s\n' "${PENDING}") \
+    <(upgrade_k8s_compare "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/k8s-v2-reread.json" final))"
+  COMPARE="$(printf '%s\n%s\n' "${COMPARE}" "${RECHECK}" | sed '/^$/d')"
+fi
 if [ -z "${COMPARE}" ]; then
   record PASS "no managed resource was deleted, recreated, renamed or regressed by the upgrade"
 else
