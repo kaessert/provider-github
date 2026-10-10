@@ -717,7 +717,8 @@ fi
 # not Synced and absent from the GitHub snapshot (the baseline never created it) is excluded by the
 # adoption rule, and baseline_require_created turns every exclusion but the allowed one into a FAIL.
 printf '%s' "${OTHER}" >"${BL}/other-v1.json"
-baseline_excluded "${BL}/other-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${BL}/other-excluded.txt"
+echo '{"org":{"id":9},"repos":{},"teams":{},"variables":{},"secrets":{"actions":{},"dependabot":{}},"orgHooks":{},"runnerGroups":{}}' >"${BL}/snap-none.json"
+baseline_excluded "${BL}/other-v1.json" "${BL}/snap-none.json" "${T}/ex" >"${BL}/other-excluded.txt"
 ( RESULTS_FILE="${BL}/require.tsv"; : >"${RESULTS_FILE}"; baseline_require_created "${BL}/other-v1.json" "${BL}/other-excluded.txt" ) >/dev/null 2>&1
 require_rc=$?
 if [ "${require_rc}" = 1 ] \
@@ -739,7 +740,7 @@ else
 fi
 printf '%s' '[{"kind":"OrganizationVariable","name":"pgh-mig-var-policies","synced":"False","ready":"False","syncedMessage":"managementPolicies are not enabled"},
  {"kind":"Repository","name":"pgh-mig-repo-main","synced":"True","ready":"True","syncedMessage":""}]' >"${BL}/var-v1.json"
-baseline_excluded "${BL}/var-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${BL}/var-excluded.txt"
+baseline_excluded "${BL}/var-v1.json" "${BL}/snap-none.json" "${T}/ex" >"${BL}/var-excluded.txt"
 ( RESULTS_FILE="${BL}/require-var.tsv"; : >"${RESULTS_FILE}"; baseline_require_created "${BL}/var-v1.json" "${BL}/var-excluded.txt" ) >/dev/null 2>&1
 var_rc=$?
 if [ "${var_rc}" = 0 ] && [ ! -s "${BL}/require-var.tsv" ] && [ "$(cat "${BL}/var-excluded.txt")" = "OrganizationVariable/pgh-mig-var-policies" ]; then
@@ -768,7 +769,7 @@ fi
 
 # SKIPPED rows: only those of an object v0.22.0 cannot create are allowed; any other ends the run FAIL,
 # and the result line states the count.
-nested_case() { # nested_case <name> <excluded objects, ;-separated> <atProvider json> -- adopt_check_nested over a table of three rows
+skipped_case() { # skipped_case <name> <excluded objects, ;-separated> <atProvider json> -- adopt_check_nested over a table of three rows
   local d="${BL}/$1" ex
   mkdir -p "${d}/snapshots"
   ex="${2//;/$'\n'}"
@@ -785,14 +786,14 @@ nested_case() { # nested_case <name> <excluded objects, ;-separated> <atProvider
     adopt_check_nested observe
   ) >/dev/null 2>&1
 }
-nested_case skipped-repo "OrganizationVariable/pgh-mig-var-policies;Repository/pgh-mig-repo-main" '{"Team/pgh-mig-team-parent":{"description":"d"}}'
+skipped_case skipped-repo "OrganizationVariable/pgh-mig-var-policies;Repository/pgh-mig-repo-main" '{"Team/pgh-mig-team-parent":{"description":"d"}}'
 if grep -q $'^FAIL\tobserve: no nested row is SKIPPED except those of an object v0.22.0 cannot create\t1 of 2 SKIPPED row(s) are not allowed (the object was not adopted): Repository/pgh-mig-repo-main' "${BL}/skipped-repo/results.tsv" \
   && grep -q $'^PASS\tobserve: status.atProvider mirrors the GitHub snapshot.*(1 compared, 0 without a GitHub value, 2 SKIPPED)' "${BL}/skipped-repo/results.tsv"; then
   record PASS "a SKIPPED row of a Repository that was left out of the adoption ends the run FAIL, and the result line states the SKIPPED count"
 else
   record FAIL "a SKIPPED row of a Repository that was left out of the adoption ends the run FAIL, and the result line states the SKIPPED count" "$(cat "${BL}/skipped-repo/results.tsv")"
 fi
-nested_case skipped-var "OrganizationVariable/pgh-mig-var-policies" '{"Team/pgh-mig-team-parent":{"description":"d"},"Repository/pgh-mig-repo-main":{"description":"d"}}'
+skipped_case skipped-var "OrganizationVariable/pgh-mig-var-policies" '{"Team/pgh-mig-team-parent":{"description":"d"},"Repository/pgh-mig-repo-main":{"description":"d"}}'
 if ! grep -q '^FAIL' "${BL}/skipped-var/results.tsv" \
   && grep -q $'^PASS\tobserve: status.atProvider mirrors the GitHub snapshot.*(2 compared, 0 without a GitHub value, 1 SKIPPED)' "${BL}/skipped-var/results.tsv"; then
   record PASS "the SKIPPED row of the allowed exclusion alone does not fail the run, and is counted"
