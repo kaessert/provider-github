@@ -1,13 +1,15 @@
 # A Membership invites a GitHub user to the organization. The external name
-# is the login of the user to invite; replace it with a login that may be
-# invited.
+# is the login of the user to invite: alexandraklochko, a real user who agreed
+# to receive the test invitations. Each run sends that account an invitation
+# email; the account must never accept it. Deleting the Membership cancels the
+# pending invitation.
 apiVersion: organizations.github.m.crossplane.io/v1alpha1
 kind: Membership
 metadata:
   name: pgh-e2e-invitee-ns
   namespace: default
   annotations:
-    crossplane.io/external-name: pgh-e2e-invitee
+    crossplane.io/external-name: alexandraklochko
 spec:
   forProvider:
     org: pgh-test
