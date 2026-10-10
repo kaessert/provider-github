@@ -152,7 +152,17 @@ generate-registration: ## Regenerate the scheme and controller registration file
 # go.generate (controller-gen deepcopy + CRD generation).
 generate.run: generate-registration
 
-.PHONY: generate-registration
+# Post-generation cleanup: goimports normalises import grouping in generated
+# files and repairs the empty "import ()" blocks controller-gen deepcopy can
+# emit. generate.done runs after generate.run, so it sees every generated file.
+generate-cleanup:
+	@$(INFO) running goimports post-generation cleanup
+	@go tool goimports -w . || $(FAIL)
+	@$(OK) goimports post-generation cleanup
+
+generate.done: generate-cleanup
+
+.PHONY: generate-registration generate-cleanup
 
 # ====================================================================================
 # Convention checks
