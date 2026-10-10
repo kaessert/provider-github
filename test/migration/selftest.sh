@@ -913,41 +913,18 @@ else
     "value: $(head -c 150 <<<"${other_value}" | tr '\n' ';') child: $(head -c 150 <<<"${child_desc}" | tr '\n' ';') parent: $(head -c 150 <<<"${other_parent}" | tr '\n' ';') path: ${other_path}"
 fi
 
-# --- the Organization the external writer resets ------------------------------------------------------
-cat >"${RR}/baseline.json" <<'JSON'
-{"org":{"id":9,"description":"pgh-test","actionsEnabledRepos":[{"id":2,"name":"demo-repository-2"},{"id":1,"name":"demo-repository-1"}]}}
-JSON
-org_baseline_load "${RR}/baseline.json"
-SIG_MSG="drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2], spec declares [pgh-mig-repo-main pgh-mig-repo-rules]"
-m_ok=1
-org_reset_match Organization False True "${SIG_MSG}" || m_ok=0
-org_reset_match Organization False True "drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2 other], spec declares [x]" && m_ok=0
-org_reset_match Organization False True "drift: description: GitHub has \"pgh-test\", spec declares \"x\"" && m_ok=0
-org_reset_match Organization False True "" && m_ok=0
-org_reset_match Organization True True "${SIG_MSG}" && m_ok=0
-org_reset_match Organization False False "${SIG_MSG}" && m_ok=0
-org_reset_match Repository False True "${SIG_MSG}" && m_ok=0
-if [ "${m_ok}" -eq 1 ] && [ "${ORG_RESET_PREFIX}" = "drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2]" ]; then
-  rec PASS "the external-reset signature is the drift message of the baseline's enabled repositories on an Organization that is Synced and Ready=False; another list, another message, another state and another kind are not"
-else
-  rec FAIL "the external-reset signature is the drift message of the baseline's enabled repositories on an Organization that is Synced and Ready=False; another list, another message, another state and another kind are not" "prefix '${ORG_RESET_PREFIX}' m_ok ${m_ok}"
-fi
-
-# adopt_check_state over one Organization (or another kind) and a reconciled Team.
-ADOPT_SCOPE=cluster; ADOPT_GROUP="${GROUP_CLUSTER}"; ADOPT_WINDOW_SINCE="2026-10-10T15:00:00Z"
-: "${ADOPT_SCOPE}${ADOPT_GROUP}${ADOPT_WINDOW_SINCE}" # read by adopt_check_state and the org helpers
-BASE_SAMPLE=$'2026-10-10T15:20:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-FIX_SAMPLE=$'2026-10-10T15:21:00Z\tpgh-mig organization description\t["pgh-mig-repo-main","pgh-mig-repo-rules"]'
-# state_case <phase> <kind> <ready> <synced> <ready message> <samples...> -- sets CASE_FAILS, CASE_WARNS, CASE_INFOS
+# --- the Organization is checked like every other kind -------------------------------------------------
+ADOPT_SCOPE=cluster; ADOPT_GROUP="${GROUP_CLUSTER}"
+: "${ADOPT_SCOPE}${ADOPT_GROUP}" # read by adopt_check_state
+DRIFT_MSG='drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2], spec declares [pgh-mig-repo-main pgh-mig-repo-rules]'
+# state_case <phase> <kind> <ready> <ready message> -- sets CASE_FAILS and CASE_WARNS for one Synced object
+# of the kind that may carry one Update line in the window (CASE_UPDATE_AT).
 state_case() {
-  local phase="$1" kind="$2" ready="$3" synced="$4" msg="$5"
-  shift 5
+  local phase="$1" kind="$2" ready="$3" msg="$4"
   : >"${RESULTS_FILE}"
-  : >"${RR}/org-samples.log"
-  [ "$#" -eq 0 ] || printf '%s\n' "$@" >"${RR}/org-samples.log"
-  jq -n --arg k "${kind}" --arg r "${ready}" --arg s "${synced}" --arg m "${msg}" '
-    [{kind: $k, name: "pgh-mig-obj", namespace: "", providerConfigKind: "ProviderConfig", ready: $r, synced: $s, readyMessage: $m, readyReason: "", syncedMessage: "",
-      atProviderId: "pgh-mig-obj", externalName: "pgh-mig-obj"}]' >"${RR}/k8s-${phase}.json"
+  jq -n --arg k "${kind}" --arg r "${ready}" --arg m "${msg}" '
+    [{kind: $k, name: "pgh-mig-obj", namespace: "", providerConfigKind: "ProviderConfig", ready: $r, synced: "True", readyMessage: $m, readyReason: "",
+      syncedMessage: "", atProviderId: "pgh-mig-obj", externalName: "pgh-mig-obj"}]' >"${RR}/k8s-${phase}.json"
   mkdir -p "${RR}/snapshots"
   echo '{}' >"${RR}/snapshots/adopted.json"; echo '{}' >"${RR}/snapshots/full.json"
   {
@@ -958,116 +935,61 @@ state_case() {
   adopt_check_state "${phase}" 2>/dev/null
   CASE_FAILS="$(grep -c '^FAIL' "${RESULTS_FILE}" || true)"
   CASE_WARNS="$(grep -c '^WARN' "${RESULTS_FILE}" || true)"
-  CASE_INFOS="$(grep -c '^INFO' "${RESULTS_FILE}" || true)"
 }
 CASE_UPDATE_AT=""
-state_case observe Organization False True "${SIG_MSG}" "${FIX_SAMPLE}" "${BASE_SAMPLE}"
-obs_reset="${CASE_FAILS}/${CASE_WARNS}"; obs_warn_text="$(grep '^WARN' "${RESULTS_FILE}")"
-state_case observe Organization False True "${SIG_MSG}" "${FIX_SAMPLE}"
-obs_nosample="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Organization False True "${SIG_MSG}"
-obs_nolog="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Organization False True "drift: description: GitHub has \"pgh-test\", spec declares \"x\"" "${BASE_SAMPLE}"
-obs_other_msg="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Repository False True "${SIG_MSG}" "${BASE_SAMPLE}"
-obs_repo="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Organization False False "${SIG_MSG}" "${BASE_SAMPLE}"
-obs_unsynced="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Organization True True "" "${FIX_SAMPLE}"
-obs_ready="${CASE_FAILS}/${CASE_WARNS}"
-state_case observe Organization False True "${SIG_MSG}" $'2026-10-09T15:20:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-obs_old_sample="${CASE_FAILS}/${CASE_WARNS}"
-if [ "${obs_reset}" = 0/1 ] && [[ "${obs_warn_text}" == *"reset to its baseline by something outside the cluster"* ]] && [[ "${obs_warn_text}" == *"2026-10-10T15:20:00Z | pgh-test"* ]] \
-  && [ "${obs_ready}" = 0/0 ]; then
-  rec PASS "an Observe Organization with the baseline signature is a WARN naming the sample that shows the baseline values, not a failure"
-else
-  rec FAIL "an Observe Organization with the baseline signature is a WARN naming the sample that shows the baseline values, not a failure" "fails/warns ${obs_reset}, ready ${obs_ready}: ${obs_warn_text:0:300}"
-fi
-if [ "${obs_nosample}" = 1/0 ] && [ "${obs_nolog}" = 1/0 ] && [ "${obs_old_sample}" = 1/0 ] && [ "${obs_other_msg}" = 1/0 ] && [ "${obs_repo}" = 1/0 ] && [ "${obs_unsynced}" = 1/0 ]; then
-  rec PASS "the signature without a sample of the window showing the baseline values, another drift message, a Repository with the same signature and an unsynced Organization are all failures"
-else
-  rec FAIL "the signature without a sample of the window showing the baseline values, another drift message, a Repository with the same signature and an unsynced Organization are all failures" \
-    "no sample ${obs_nosample}, no samples at all ${obs_nolog}, sample before the window ${obs_old_sample}, other message ${obs_other_msg}, repository ${obs_repo}, unsynced ${obs_unsynced}"
-fi
-
-# Under full management: the provider's Organization update is the correction of the reset only when a
-# sample within the poll before it shows the baseline values.
+state_case observe Organization False "${DRIFT_MSG}"
+org_notready="${CASE_FAILS}/${CASE_WARNS}"; org_fail_text="$(grep '^FAIL' "${RESULTS_FILE}")"
+state_case observe Team False "${DRIFT_MSG}"
+team_notready="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization True ""
+org_ready="${CASE_FAILS}/${CASE_WARNS}"
 CASE_UPDATE_AT="2026-10-10T15:26:10Z"
-state_case full Organization True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-full_attributed="${CASE_FAILS}/${CASE_INFOS}"
-state_case full Organization True True ""
-full_nosample="${CASE_FAILS}"
-state_case full Organization True True "" $'2026-10-10T15:24:00Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-full_early="${CASE_FAILS}"
-state_case full Organization True True "" "${FIX_SAMPLE}" $'2026-10-10T15:25:40Z\tpgh-mig organization description\t["pgh-mig-repo-main","pgh-mig-repo-rules"]'
-full_fixture_values="${CASE_FAILS}"
-state_case full Team True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-full_team="${CASE_FAILS}"
-state_case observe Organization True True "" $'2026-10-10T15:25:40Z\tpgh-test\t["demo-repository-1","demo-repository-2"]'
-observe_update="${CASE_FAILS}"
+state_case full Organization True ""
+org_update_full="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization True ""
+org_update_observe="${CASE_FAILS}/${CASE_WARNS}"
 CASE_UPDATE_AT=""
-if [ "${full_attributed}" = 0/1 ] && [ "${full_nosample}" = 1 ] && [ "${full_early}" = 1 ] && [ "${full_fixture_values}" = 1 ]; then
-  rec PASS "under full management an Organization update is attributed to the external reset (INFO) only when a sample within the previous poll shows the baseline values; without one it is a FAIL"
+if [ "${org_notready}" = 1/0 ] && [ "${team_notready}" = 1/0 ] && [ "${org_ready}" = 0/0 ] \
+  && [ "${org_update_full}" = 1/0 ] && [ "${org_update_observe}" = 1/0 ] && [[ "${org_fail_text}" == *"drift: actions.enabledRepos"* ]]; then
+  rec PASS "an Organization that is Ready=False, or issues an Update in a zero-write window, fails like any other kind (and the failure carries the Ready message)"
 else
-  rec FAIL "under full management an Organization update is attributed to the external reset (INFO) only when a sample within the previous poll shows the baseline values; without one it is a FAIL" \
-    "attributed ${full_attributed}, no sample ${full_nosample}, sample older than a poll ${full_early}, samples at the declared values ${full_fixture_values}"
-fi
-if [ "${full_team}" = 1 ] && [ "${observe_update}" = 1 ]; then
-  rec PASS "every other kind keeps the strict write check, and an Organization update under Observe is a FAIL whatever the samples show"
-else
-  rec FAIL "every other kind keeps the strict write check, and an Organization update under Observe is a FAIL whatever the samples show" "team ${full_team}, observe ${observe_update}"
+  rec FAIL "an Organization that is Ready=False, or issues an Update in a zero-write window, fails like any other kind (and the failure carries the Ready message)" \
+    "Organization not Ready ${org_notready}, Team not Ready ${team_notready}, Organization Ready ${org_ready}, update under full ${org_update_full}, update under Observe ${org_update_observe}: ${org_fail_text:0:300}"
 fi
 
-# The zero-write comparison leaves the organization's own values out only with a sample of the baseline
-# and no Organization write the reset does not explain.
-jq -c '.org.description = "pgh-test" | .org.actionsEnabledRepos = [{id: 1, name: "demo-repository-1"}] | .org._ts.updated_at = "2026-10-10T14:57:17Z"' "${T}/a.json" >"${RR}/snapshots/adopted.json"
-cp "${T}/a.json" "${RR}/snapshots/orphaned.json"
-jq -c '.repos["pgh-mig-repo-main"].settings.description = "moved"' "${RR}/snapshots/adopted.json" >"${RR}/snapshots/adopted-repo.json"
-zero_case() { # zero_case <phase> <snapshot b> <update at|-> <samples...> -- PASS/FAIL of the comparison
-  local phase="$1" b="$2" upd="$3"
-  shift 3
-  : >"${RESULTS_FILE}"
-  : >"${RR}/org-samples.log"
-  [ "$#" -eq 0 ] || printf '%s\n' "$@" >"${RR}/org-samples.log"
-  : >"${RR}/window-${phase}.log"
-  [ "${upd}" = - ] || printf '%s\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/organization.organizations.github.crossplane.io", "request": {"name":"pgh-mig-org"}}\n' "${upd}" >"${RR}/window-${phase}.log"
-  adopt_assert_zero_write "zero-write case" orphaned "${b}" "${phase}" 2>/dev/null
-  awk -F'\t' '$2 == "zero-write case" { print $1 }' "${RESULTS_FILE}"
-}
-z_exempt="$(zero_case observe adopted - "${BASE_SAMPLE}")"
-z_nosample="$(zero_case observe adopted - "${FIX_SAMPLE}")"
-z_update="$(zero_case observe adopted 2026-10-10T15:21:00Z "${BASE_SAMPLE}")"
-z_repo="$(zero_case observe adopted-repo - "${BASE_SAMPLE}")"
-z_full_attr="$(zero_case full adopted 2026-10-10T15:20:30Z "${BASE_SAMPLE}")"
-z_full_unattr="$(zero_case full adopted 2026-10-10T15:26:10Z "${BASE_SAMPLE}")"
-if [ "${z_exempt}" = PASS ] && [ "${z_nosample}" = FAIL ] && [ "${z_update}" = FAIL ] && [ "${z_repo}" = FAIL ] && [ "${z_full_attr}" = PASS ] && [ "${z_full_unattr}" = FAIL ]; then
-  rec PASS "the org description, Actions settings and updated_at leave the zero-write comparison only with a baseline sample and no unexplained Organization write; a change anywhere else still fails it"
-else
-  rec FAIL "the org description, Actions settings and updated_at leave the zero-write comparison only with a baseline sample and no unexplained Organization write; a change anywhere else still fails it" \
-    "exempt ${z_exempt}, no baseline sample ${z_nosample}, Observe update ${z_update}, repository moved ${z_repo}, full attributed ${z_full_attr}, full unattributed ${z_full_unattr}"
-fi
-
-# An Organization the external writer reset is settled for the wait loops (the cluster cannot heal it).
+# An Organization that is Ready=False is not settled for the wait loops.
 mr_state() { cat "${RR}/mr-state.json"; }
-jq -n --arg m "${SIG_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:$m},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
-settled_org=0; adopt_settled "${GROUP_CLUSTER}" 2 && settled_org=1
-jq -n '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:"drift: description: GitHub has x"},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
-settled_other=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_other=0
-jq -n --arg m "${SIG_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"True",synced:"True",readyMessage:""},{kind:"Repository",name:"pgh-mig-repo-main",ready:"False",synced:"True",readyMessage:$m}]' >"${RR}/mr-state.json"
-settled_repo=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_repo=0
-if [ "${settled_org}" = 1 ] && [ "${settled_other}" = 1 ] && [ "${settled_repo}" = 1 ]; then
-  rec PASS "waiting for the adopted objects accepts an Organization reset to its baseline as settled, and nothing else that is not Ready"
+jq -n --arg m "${DRIFT_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:$m},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_org=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_org=0
+jq -n '[{kind:"Organization",name:"pgh-mig-org",ready:"True",synced:"True",readyMessage:""},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_ok=0; adopt_settled "${GROUP_CLUSTER}" 2 && settled_ok=1
+if [ "${settled_org}" = 1 ] && [ "${settled_ok}" = 1 ]; then
+  rec PASS "waiting for the adopted objects does not accept a Ready=False Organization as settled"
 else
-  rec FAIL "waiting for the adopted objects accepts an Organization reset to its baseline as settled, and nothing else that is not Ready" "reset org ${settled_org}, other drift ${settled_other}, repository ${settled_repo}"
+  rec FAIL "waiting for the adopted objects does not accept a Ready=False Organization as settled" "not-Ready Organization rejected ${settled_org}, all Ready accepted ${settled_ok}"
 fi
 unset -f mr_state
 
-# The sampler's two requests: a sample line is "<timestamp>\t<description>\t<repositories>".
-org_samp="$(MIGRATION_API_URL="http://127.0.0.1:${PORT}" MIGRATION_GITHUB_TOKEN=selftest MIGRATION_ORG=pgh-test org_sample_once 2>/dev/null)"
-if [ "$(awk -F'\t' '{ print NF }' <<<"${org_samp}")" -eq 3 ] && jq -e . >/dev/null 2>&1 <<<"$(cut -f3 <<<"${org_samp}")" && [[ "${org_samp}" == 20??-??-??T??:??:??Z$'\t'* ]]; then
-  rec PASS "a sample of the organization is a timestamp, the description and the Actions-enabled repositories, read with two GETs"
+# The zero-write comparison has no Organization exception: a moved description fails it.
+cp "${T}/a.json" "${RR}/snapshots/orphaned.json"
+jq -c '.org.description = "pgh-test"' "${T}/a.json" >"${RR}/snapshots/adopted.json"
+: >"${RESULTS_FILE}"
+assert_snapshots_identical "zero-write case" orphaned adopted 2>/dev/null
+org_desc_verdict="$(awk -F'\t' '$2 == "zero-write case" { print $1 }' "${RESULTS_FILE}")"
+if [ "${org_desc_verdict}" = FAIL ]; then
+  rec PASS "a change to the organization's own values fails the zero-write snapshot comparison like any other"
 else
-  rec FAIL "a sample of the organization is a timestamp, the description and the Actions-enabled repositories, read with two GETs" "got: ${org_samp:0:200}"
+  rec FAIL "a change to the organization's own values fails the zero-write snapshot comparison like any other" "verdict: ${org_desc_verdict:-none}"
+fi
+
+# The Ready message and reason reach the not-Ready table of the report.
+: >"${RR}/table-notready.tsv"
+jq -n '[{kind:"Repository",name:"pgh-mig-repo-main",namespace:"",providerConfigKind:"ProviderConfig",ready:"False",readyReason:"Unavailable",readyMessage:"hook secret differs",synced:"True",syncedMessage:""}]' >"${RR}/k8s-notready.json"
+adopt_note_not_ready observe "${RR}/k8s-notready.json"
+if grep -q $'^observe\tcluster\tRepository\tpgh-mig-repo-main\tFalse\tUnavailable\tTrue\thook secret differs\t-$' "${RR}/table-notready.tsv"; then
+  rec PASS "every not-Ready object gets a row with its Ready reason and Ready message"
+else
+  rec FAIL "every not-Ready object gets a row with its Ready reason and Ready message" "$(cat "${RR}/table-notready.tsv")"
 fi
 EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
 
