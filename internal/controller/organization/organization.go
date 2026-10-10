@@ -137,6 +137,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.New(errNotOrganization)
 	}
 
+	// A GitHub organization cannot be deleted through this provider, so
+	// deleting the resource only removes the Kubernetes object. Reporting the
+	// organization as absent once a deletion is requested lets the finalizer
+	// clear; no GitHub call is made.
+	if meta.WasDeleted(cr) {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
 	name := meta.GetExternalName(cr)
 
 	org, _, err := c.github.Organizations.Get(ctx, name)
@@ -279,6 +287,9 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
+// Delete issues no GitHub call: the organization is left untouched. Observe
+// reports the resource as absent once a deletion is requested, which is what
+// lets the finalizer clear.
 func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.Organization)
 	if !ok {
