@@ -583,26 +583,56 @@ else
 fi
 # (kc, remove_provider, wait_until and provider_pods_gone stay replaced: nothing below calls them.)
 
-# The exclusion rule: only an object the baseline never created (not Synced) is left out of the adoption.
+# The exclusion rule: an object that is not Synced on the baseline is left out of the adoption only when
+# GitHub does not hold it either; one that GitHub holds is adopted, and reported with its baseline message.
 cat >"${T}/k8s-v1.json" <<'JSON'
 [{"kind":"Team","name":"pgh-mig-team-parent","ready":"True","synced":"True"},
  {"kind":"Repository","name":"pgh-mig-repo-rules","ready":"False","synced":"True"},
+ {"kind":"Repository","name":"pgh-mig-repo-main","ready":"False","synced":"False","externalName":"pgh-mig-repo-main","syncedMessage":"observe failed: branch is not protected","readyMessage":""},
+ {"kind":"Repository","name":"pgh-mig-repo-archive","ready":"False","synced":"False","syncedMessage":"create failed: boom","readyMessage":""},
+ {"kind":"OrganizationWebhook","name":"pgh-mig-hook-plain","ready":"False","synced":"False","externalName":"","syncedMessage":"observe failed: hook","readyMessage":""},
  {"kind":"OrganizationVariable","name":"pgh-mig-var-policies","ready":"False","synced":"False"},
- {"kind":"OrganizationVariable","name":"pgh-mig-var-unknown","ready":"Unknown","synced":"Unknown"}]
+ {"kind":"OrganizationVariable","name":"pgh-mig-var-unknown","ready":"Unknown","synced":"Unknown","readyMessage":"waiting for the first observation"}]
 JSON
-baseline_excluded "${T}/k8s-v1.json" >"${T}/excluded.txt"
+cat >"${T}/snap-v1.json" <<'JSON'
+{"org":{"id":9},"membership":null,
+ "repos":{"pgh-mig-repo-rules":{"id":2,"branchProtection":{}},"pgh-mig-repo-main":{"id":1,"branchProtection":{},"hooks":[{"id":5}]}},
+ "teams":{"pgh-mig-team-parent":{"id":3}},"variables":{"PGH_MIG_VAR_ALL":{"name":"PGH_MIG_VAR_ALL"}},
+ "secrets":{"actions":{},"dependabot":{}},
+ "orgHooks":{"https://example.com/pgh-mig/org-hook-plain":{"id":694960443}},"runnerGroups":{}}
+JSON
+baseline_excluded "${T}/k8s-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${T}/excluded.txt"
+baseline_unsynced_adopted "${T}/k8s-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${T}/unsynced-adopted.txt"
+baseline_names "${T}/k8s-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${T}/k8s-v1-names.json"
 mkdir -p "${T}/excl"
-for f in team-pgh-mig-team-parent repository-pgh-mig-repo-rules organizationvariable-pgh-mig-var-policies organizationvariable-pgh-mig-var-unknown; do : >"${T}/excl/10-${f}.yaml"; done
+for f in team-pgh-mig-team-parent repository-pgh-mig-repo-rules repository-pgh-mig-repo-main repository-pgh-mig-repo-archive organizationwebhook-pgh-mig-hook-plain organizationvariable-pgh-mig-var-policies organizationvariable-pgh-mig-var-unknown; do : >"${T}/excl/10-${f}.yaml"; done
 drop_excluded "${T}/excl" "${T}/excluded.txt"
-if [ "$(paste -sd, "${T}/excluded.txt")" = "OrganizationVariable/pgh-mig-var-policies,OrganizationVariable/pgh-mig-var-unknown" ] \
-  && [ "$(ls "${T}/excl" | paste -sd,)" = "10-repository-pgh-mig-repo-rules.yaml,10-team-pgh-mig-team-parent.yaml" ] \
+if [ "$(paste -sd, "${T}/excluded.txt")" = "Repository/pgh-mig-repo-archive,OrganizationVariable/pgh-mig-var-policies,OrganizationVariable/pgh-mig-var-unknown" ] \
+  && [ "$(ls "${T}/excl" | paste -sd,)" = "10-organizationwebhook-pgh-mig-hook-plain.yaml,10-repository-pgh-mig-repo-main.yaml,10-repository-pgh-mig-repo-rules.yaml,10-team-pgh-mig-team-parent.yaml" ] \
   && [ "$(baseline_not_ready "${T}/k8s-v1.json")" = "Repository/pgh-mig-repo-rules: Ready=False Synced=True" ] \
   && [ "$(baseline_state "${T}/k8s-v1.json" Repository pgh-mig-repo-rules)" = "Ready=False Synced=True" ] \
   && [ "$(baseline_state "${T}/k8s-v1.json" Team pgh-mig-absent)" = "-" ]; then
-  record PASS "only objects that are not Synced on the baseline are excluded; a Synced object that is not Ready is adopted and reported with its baseline state"
+  record PASS "an object that is not Synced on the baseline is excluded only when the GitHub snapshot does not hold it; a Synced object that is not Ready is adopted and reported with its baseline state"
 else
-  record FAIL "only objects that are not Synced on the baseline are excluded; a Synced object that is not Ready is adopted and reported with its baseline state" \
+  record FAIL "an object that is not Synced on the baseline is excluded only when the GitHub snapshot does not hold it; a Synced object that is not Ready is adopted and reported with its baseline state" \
     "excluded: $(paste -sd, "${T}/excluded.txt"); kept: $(ls "${T}/excl" | paste -sd,)"
+fi
+if [ "$(paste -sd'|' "${T}/unsynced-adopted.txt")" = "Repository/pgh-mig-repo-main: Ready=False Synced=False observe failed: branch is not protected|OrganizationWebhook/pgh-mig-hook-plain: Ready=False Synced=False observe failed: hook" ] \
+  && [ "$(baseline_state "${T}/k8s-v1.json" Repository pgh-mig-repo-main)" = "Ready=False Synced=False, on GitHub: observe failed: branch is not protected" ] \
+  && [ "$(baseline_state "${T}/k8s-v1.json" OrganizationVariable pgh-mig-var-unknown 2>&1)" = "Ready=Unknown Synced=Unknown, on GitHub: waiting for the first observation" ] \
+  && [ "$(jq -r '.[] | select(.name == "pgh-mig-hook-plain") | .externalName' "${T}/k8s-v1-names.json")" = 694960443 ] \
+  && [ "$(jq -r '.[] | select(.name == "pgh-mig-repo-archive") | .externalName // ""' "${T}/k8s-v1-names.json")" = "" ]; then
+  record PASS "an object that is not Synced but that GitHub holds is listed with the message the baseline reported; an adopted webhook the baseline never recorded takes its hook ID from GitHub"
+else
+  record FAIL "an object that is not Synced but that GitHub holds is listed with the message the baseline reported; an adopted webhook the baseline never recorded takes its hook ID from GitHub" \
+    "listed: $(paste -sd'|' "${T}/unsynced-adopted.txt"); state: $(baseline_state "${T}/k8s-v1.json" Repository pgh-mig-repo-main)"
+fi
+# The derivation keeps the external name the rule found for the webhook.
+derive_adoption observe "${T}/ex" "${T}/k8s-v1-names.json" "${T}/derived-names" cluster
+if [ "$(yq -r '.metadata.annotations["crossplane.io/external-name"]' "$(adopt_file "${T}/derived-names" OrganizationWebhook pgh-mig-hook-plain)")" = 694960443 ]; then
+  record PASS "the adoption manifest of a webhook the baseline did not finish carries the hook ID GitHub holds"
+else
+  record FAIL "the adoption manifest of a webhook the baseline did not finish carries the hook ID GitHub holds" "$(adopt_file "${T}/derived-names" OrganizationWebhook pgh-mig-hook-plain)"
 fi
 
 # --- the upgrade scenario: objects the baseline never reconciled ---------------------------------
@@ -1003,6 +1033,126 @@ if grep -q $'^observe\tcluster\tRepository\tpgh-mig-repo-main\tFalse\tUnavailabl
   rec PASS "every not-Ready object gets a row with its Ready reason and Ready message"
 else
   rec FAIL "every not-Ready object gets a row with its Ready reason and Ready message" "$(cat "${RR}/table-notready.tsv")"
+fi
+
+# --- an object the baseline created on GitHub and never finished -------------------------------------
+# Repository/pgh-mig-repo-main was Synced=False on the baseline ("branch is not protected") and GitHub holds it,
+# with no classic branch protection. Under Observe it writes nothing and its branch protection is "GitHub holds
+# none"; under full management it may issue ONE update, which creates the branch protection.
+mkdir -p "${RR}/rendered/v1" "${RR}/rendered/full" "${RR}/snapshots"
+cp "${T}"/ex/*.yaml "${RR}/rendered/v1/"
+derive_adoption full "${RR}/rendered/v1" - "${RR}/rendered/full" cluster
+MAIN="pgh-mig-repo-main"
+jq -c --arg m "${MAIN}" '.repos[$m].branchProtection = {}' "${T}/a.json" >"${RR}/snapshots/v1.json"
+cp "${RR}/snapshots/v1.json" "${RR}/snapshots/adopted.json"
+mk_full() { # mk_full <out> <jq edit of the adopted snapshot>
+  jq -c --arg m "${MAIN}" "$2" "${RR}/snapshots/adopted.json" >"$1"
+}
+COMPLETED='.repos[$m].branchProtection = {main: {required_status_checks: {strict: true, checks: []}}} | .repos[$m]._ts.updated_at = "2026-10-10T17:30:00Z"'
+mk_full "${RR}/snapshots/full-completed.json" "${COMPLETED}"
+mk_full "${RR}/snapshots/full-also-desc.json" "${COMPLETED} | .repos[\$m].settings.description = \"moved\""
+mk_full "${RR}/snapshots/full-newid.json" "${COMPLETED} | .repos[\$m].id = 99999"
+mk_full "${RR}/snapshots/full-nothing.json" '.'
+mk_full "${RR}/snapshots/full-hooks.json" "${COMPLETED} | .repos[\$m].hooks = []"
+# unsynced_case <listed yes|no> <creates> <updates> <snapshot b> -- PASS/FAIL of the zero-write comparison under full management
+unsynced_case() {
+  local i
+  : >"${RESULTS_FILE}"
+  if [ "$1" = yes ]; then echo "Repository/${MAIN}: Ready=False Synced=False observe failed: branch is not protected" >"${RR}/v1-unsynced-adopted.txt"; else : >"${RR}/v1-unsynced-adopted.txt"; fi
+  : >"${RR}/window-full.log"
+  for ((i = 0; i < $2; i++)); do printf '2026-10-10T17:20:0%dZ\tDEBUG\tprovider-github\tSuccessfully requested creation of external resource\t{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"%s"}}\n' "${i}" "${MAIN}" >>"${RR}/window-full.log"; done
+  for ((i = 0; i < $3; i++)); do printf '2026-10-10T17:21:0%dZ\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"%s"}}\n' "${i}" "${MAIN}" >>"${RR}/window-full.log"; done
+  adopt_assert_zero_write "zero-write case" adopted "$4" full 2>/dev/null
+  awk -F'\t' '$2 == "zero-write case" { print $1 }' "${RESULTS_FILE}"
+}
+u_ok="$(unsynced_case yes 0 1 full-completed)"
+u_info="$(grep -c 'what the one completing update writes is left out' "${RESULTS_FILE}" || true)"
+u_two="$(unsynced_case yes 0 2 full-completed)"
+u_create="$(unsynced_case yes 1 1 full-completed)"
+u_none="$(unsynced_case yes 0 0 full-nothing)"
+u_desc="$(unsynced_case yes 0 1 full-also-desc)"
+u_id="$(unsynced_case yes 0 1 full-newid)"
+u_hooks="$(unsynced_case yes 0 1 full-hooks)"
+u_unlisted="$(unsynced_case no 0 1 full-completed)"
+u_unlisted_quiet="$(unsynced_case no 0 0 full-nothing)"
+if [ "${u_ok}" = PASS ] && [ "${u_info}" = 1 ] && [ "${u_none}" = PASS ] && [ "${u_two}" = FAIL ] && [ "${u_create}" = FAIL ] && [ "${u_desc}" = FAIL ] && [ "${u_id}" = FAIL ] \
+  && [ "${u_hooks}" = FAIL ] && [ "${u_unlisted}" = FAIL ] && [ "${u_unlisted_quiet}" = PASS ]; then
+  rec PASS "the one completing update of an object the baseline never finished may create the sub-objects the baseline snapshot lacked (INFO, named); a second update, a create, another changed value, a new ID, a sub-object the baseline held, or the same update of any other object, is a FAIL"
+else
+  rec FAIL "the one completing update of an object the baseline never finished may create the sub-objects the baseline snapshot lacked (INFO, named); a second update, a create, another changed value, a new ID, a sub-object the baseline held, or the same update of any other object, is a FAIL" \
+    "one update ${u_ok} (info ${u_info}), no update ${u_none}, two ${u_two}, create ${u_create}, other value ${u_desc}, new ID ${u_id}, a held sub-object removed ${u_hooks}, object not listed ${u_unlisted}, unlisted and quiet ${u_unlisted_quiet}"
+fi
+
+# completing_update_ok and the write check of adopt_check_state.
+cu_ok=1
+completing_update_ok 0 1 || cu_ok=0
+completing_update_ok 0 0 && cu_ok=0
+completing_update_ok 0 2 && cu_ok=0
+completing_update_ok 1 1 && cu_ok=0
+# completing_case <listed> <phase> <creates> <updates> -- FAIL/INFO counts of adopt_check_state for the repository
+completing_case() {
+  local i
+  : >"${RESULTS_FILE}"
+  if [ "$1" = yes ]; then echo "Repository/${MAIN}: Ready=False Synced=False observe failed: branch is not protected" >"${RR}/v1-unsynced-adopted.txt"; else : >"${RR}/v1-unsynced-adopted.txt"; fi
+  jq -n --arg n "${MAIN}" '[{kind: "Repository", name: $n, namespace: "", providerConfigKind: "ProviderConfig", ready: "True", synced: "True", readyMessage: "", readyReason: "", syncedMessage: "", atProviderId: $n, externalName: $n}]' >"${RR}/k8s-$2.json"
+  echo '{}' >"${RR}/snapshots/full.json"
+  printf '2026-10-10T17:20:00Z\tDEBUG\tprovider-github\tReconciling\t{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"%s"}}\n' "${MAIN}" >"${RR}/window-$2.log"
+  for ((i = 0; i < $3; i++)); do printf '2026-10-10T17:20:0%dZ\tDEBUG\tprovider-github\tSuccessfully requested creation of external resource\t{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"%s"}}\n' "${i}" "${MAIN}" >>"${RR}/window-$2.log"; done
+  for ((i = 0; i < $4; i++)); do printf '2026-10-10T17:21:0%dZ\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"%s"}}\n' "${i}" "${MAIN}" >>"${RR}/window-$2.log"; done
+  for t in mr nested change refs both notready; do : >"${RR}/table-${t}.tsv"; done
+  adopt_check_state "$2" 2>/dev/null
+  CASE_FAILS="$(grep -c '^FAIL' "${RESULTS_FILE}" || true)"
+  CASE_INFOS="$(grep -c '^INFO' "${RESULTS_FILE}" || true)"
+}
+completing_case yes full 0 1; c_one="${CASE_FAILS}/${CASE_INFOS}"; c_text="$(grep '^INFO' "${RESULTS_FILE}")"
+completing_case yes full 0 2; c_two="${CASE_FAILS}"
+completing_case yes full 1 1; c_create="${CASE_FAILS}"
+completing_case yes observe 0 1; c_observe="${CASE_FAILS}"
+completing_case no full 0 1; c_unlisted="${CASE_FAILS}"
+completing_case yes full 0 0; c_quiet="${CASE_FAILS}/${CASE_INFOS}"
+if [ "${cu_ok}" = 1 ] && [ "${c_one}" = 0/1 ] && [[ "${c_text}" == *"${MAIN}"*"never finished"*"branch is not protected"* ]] && [ "${c_two}" = 1 ] \
+  && [ "${c_create}" = 1 ] && [ "${c_observe}" = 1 ] && [ "${c_unlisted}" = 1 ] && [ "${c_quiet}" = 0/0 ]; then
+  rec PASS "the per-object write check allows one update of an object the baseline never finished under full management and names it with the baseline's message; two updates, a create, any write under Observe and the same update of another object fail"
+else
+  rec FAIL "the per-object write check allows one update of an object the baseline never finished under full management and names it with the baseline's message; two updates, a create, any write under Observe and the same update of another object fail" \
+    "helper ${cu_ok}, one update ${c_one} ${c_text:0:200}, two ${c_two}, create ${c_create}, observe ${c_observe}, not listed ${c_unlisted}, quiet ${c_quiet}"
+fi
+
+# The nested rows: GitHub holds no branch protection of the repository on the baseline.
+cat >"${RR}/nested-atprovider.json" <<JSON
+{"Repository/${MAIN}": {"description": "d"}}
+JSON
+jq -c --arg k "Repository/${MAIN}" '.[$k].branchProtectionRules = [{branch: "main", requiredStatusChecks: {strict: true}}]' "${RR}/nested-atprovider.json" >"${RR}/nested-atprovider-held.json"
+nested_case() { # nested_case <phase> <listed> <atProvider file> <snapshot> -- the Result of the branch protection rows, one per line
+  local phase="$1"
+  : >"${RESULTS_FILE}"
+  if [ "$2" = yes ]; then echo "Repository/${MAIN}: Ready=False Synced=False observe failed: branch is not protected" >"${RR}/v1-unsynced-adopted.txt"; else : >"${RR}/v1-unsynced-adopted.txt"; fi
+  cp "$3" "${RR}/atprovider-${phase}.json"
+  cp "$4" "${RR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
+  jq -n --arg n "${MAIN}" '[{kind: "Repository", name: $n, namespace: "", providerConfigKind: "ProviderConfig", ready: "True", synced: "True"}]' >"${RR}/k8s-${phase}.json"
+  : >"${RR}/table-nested.tsv"
+  adopt_check_nested "${phase}" 2>/dev/null
+  awk -F'\t' '$5 == ".branchProtectionRules[].requiredStatusChecks" { print $6 }' "${RR}/table-nested.tsv"
+}
+n_observe="$(nested_case observe yes "${RR}/nested-atprovider.json" "${RR}/snapshots/v1.json")"
+n_observe_detail="$(awk -F'\t' '$5 == ".branchProtectionRules[].requiredStatusChecks" { print $7 }' "${RR}/table-nested.tsv")"
+n_observe_plain="$(nested_case observe no "${RR}/nested-atprovider.json" "${RR}/snapshots/v1.json")"
+n_full_created="$(nested_case full yes "${RR}/nested-atprovider-held.json" "${RR}/snapshots/full-completed.json")"
+n_full_missing="$(nested_case full yes "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
+n_full_unlisted="$(nested_case full no "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
+# the same row when the full manifest does not declare the sub-object: nothing to create, so "GitHub holds none"
+mf="$(adopt_file "${RR}/rendered/full" Repository "${MAIN}")"
+cp "${mf}" "${mf}.bak"
+yq -i 'del(.spec.forProvider.branchProtectionRules)' "${mf}"
+n_full_undeclared="$(nested_case full no "${RR}/nested-atprovider.json" "${RR}/snapshots/full-nothing.json")"
+mv "${mf}.bak" "${mf}"
+n_reports_extra="$(nested_case observe yes "${RR}/nested-atprovider-held.json" "${RR}/snapshots/v1.json")"
+if [ "${n_observe}" = EXEMPT ] && [ "${n_observe_detail}" = "GitHub holds none" ] && [ "${n_observe_plain}" = EXEMPT ] \
+  && [ "${n_full_created}" = PASS ] && [ "${n_full_missing}" = FAIL ] && [ "${n_full_unlisted}" = FAIL ] && [ "${n_full_undeclared}" = EXEMPT ] && [ "${n_reports_extra}" = FAIL ]; then
+  rec PASS "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management any object must hold the sub-objects its manifest declares (a declared one GitHub lacks fails, an undeclared one is 'GitHub holds none'); status.atProvider reporting what GitHub lacks still fails"
+else
+  rec FAIL "a sub-object GitHub holds none of is 'GitHub holds none' under Observe, not a mismatch; under full management any object must hold the sub-objects its manifest declares (a declared one GitHub lacks fails, an undeclared one is 'GitHub holds none'); status.atProvider reporting what GitHub lacks still fails" \
+    "observe ${n_observe} (${n_observe_detail}), unlisted ${n_observe_plain}, full created ${n_full_created}, full missing ${n_full_missing}, full unlisted ${n_full_unlisted}, full undeclared ${n_full_undeclared}, extra in atProvider ${n_reports_extra}"
 fi
 EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
 
