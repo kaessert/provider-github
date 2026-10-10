@@ -9,6 +9,8 @@
 . "${MIGRATION_DIR}/adopt-derive.sh"
 # shellcheck source=adopt-unsynced.sh
 . "${MIGRATION_DIR}/adopt-unsynced.sh"
+# shellcheck source=baseline.sh
+. "${MIGRATION_DIR}/baseline.sh"
 
 # ===========================================================================
 # The full adoption flow (scenarios (b) and (c))
@@ -165,6 +167,33 @@ adopt_settled() {
 # (baseline_excluded and baseline_unsynced_adopted, which decide what is adopted, are in
 # adopt-unsynced.sh.)
 
+# baseline_not_created <k8s-v1.json> <excluded.txt> -- "Kind/name: Synced=.. <message>" of every object
+# the adoption leaves out (not Synced and absent from GitHub, adopt-unsynced.sh) that is not an
+# allowed exclusion (baseline.sh): the baseline was expected to create it.
+baseline_not_created() {
+  local o line
+  while IFS= read -r o; do
+    [ -n "${o}" ] || continue
+    baseline_is_allowed_exclusion "${o}" && continue
+    line="$(jq -r --arg o "${o}" '[.[] | select("\(.kind)/\(.name)" == $o)][0] | "\(.kind)/\(.name): Synced=\(.synced) \(.syncedMessage // "")"' "$1")"
+    printf '%s\n' "${line:0:300}"
+  done <"$2"
+}
+
+# baseline_require_created <k8s-v1.json> <excluded.txt> -- records a FAIL per object the baseline
+# did not create (not Synced, not on GitHub, not an allowed exclusion) and returns 1: dropping such
+# an object would drop the nested rows it carries and leave the run green without testing them. An
+# object that is not Synced but that GitHub holds is adopted, not failed (baseline_unsynced_adopted).
+baseline_require_created() {
+  local line rc=0
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    record FAIL "the baseline created ${line%%: *}" "${line#*: }"
+    rc=1
+  done < <(baseline_not_created "$1" "$2")
+  return "${rc}"
+}
+
 # baseline_not_ready <k8s-v1.json> -- "Kind/name: Ready=.. Synced=.." of the adopted objects
 # the baseline did not report Ready.
 baseline_not_ready() {
@@ -217,7 +246,10 @@ run_adopt_full() {
 
   # The v1 fixtures need what the upgrade scenario sets up: the template repository,
   # the Actions policy `selected` and the organization secrets the SecretAccess kinds manage.
-  "${MIGRATION_DIR}/oob.sh" prepare upgrade || die "out-of-band setup failed"
+  if ! "${MIGRATION_DIR}/oob.sh" prepare upgrade; then
+    record FAIL "the out-of-band setup completed (organization snapshot, template repository with a main branch, secrets)" "oob.sh prepare upgrade failed, see the log above"
+    exit 1
+  fi
   load_runtime_env
   render_fixtures "${FIXTURES_DIR}/v1" "${EVIDENCE_DIR}/rendered/v1"
 
@@ -289,6 +321,11 @@ adopt_baseline_phase() {
   "${MIGRATION_DIR}/oob.sh" ensure-environment pgh-mig-repo-rules pgh-mig-env 900 >>"${EVIDENCE_DIR}/oob-env.log" 2>&1 &
   BACKGROUND_PIDS+=("$!")
 
+  # GitHub generates the template-based repositories asynchronously and v0.22.0 meets them in the
+  # middle: make the Repository fixtures that declare branch protection deterministic (baseline.sh).
+  baseline_settle_protected_repos "${EVIDENCE_DIR}/rendered/v1" "${GROUP_CLUSTER}" \
+    || warn "a Repository with declared branch protection is not Synced on the baseline after the wait; the result below decides"
+
   if wait_settled "${GROUP_CLUSTER}" "${MIGRATION_READY_TIMEOUT}"; then
     record PASS "the baseline created every v1 fixture: all Synced and Ready"
   else
@@ -309,6 +346,10 @@ adopt_baseline_phase() {
   baseline_excluded "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/v1-excluded.txt"
   baseline_unsynced_adopted "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/v1-unsynced-adopted.txt"
   baseline_names "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/snapshots/v1.json" "${EVIDENCE_DIR}/rendered/v1" >"${EVIDENCE_DIR}/k8s-v1-names.json"
+  if ! baseline_require_created "${EVIDENCE_DIR}/k8s-v1.json" "${EVIDENCE_DIR}/v1-excluded.txt"; then
+    capture_provider_logs baseline
+    exit 1
+  fi
   baseline_not_ready "${EVIDENCE_DIR}/k8s-v1.json" >"${EVIDENCE_DIR}/v1-synced-not-ready.txt"
   if [ -s "${EVIDENCE_DIR}/v1-synced-not-ready.txt" ]; then
     record WARN "v1 objects the baseline created but reports not Ready; they exist on GitHub and are adopted like the others" \
@@ -616,7 +657,7 @@ adopt_check_probe() {
 # status.atProvider reports against what the GitHub snapshot holds.
 adopt_check_nested() {
   local phase="$1" atprov snap kind mr rid cond a s av sv verdict detail state path
-  local pass=0 fail=0 nm=0 ex=0 skip=0 not_mirrored=""
+  local pass=0 fail=0 nm=0 ex=0 skip=0 skip_bad=0 not_mirrored="" skipped_bad=""
   atprov="${EVIDENCE_DIR}/atprovider-${phase}.json"
   state="${EVIDENCE_DIR}/k8s-${phase}.json"
   snap="${EVIDENCE_DIR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
@@ -658,14 +699,25 @@ adopt_check_nested() {
         record FAIL "${phase}: status.atProvider mirrors GitHub: ${kind}/${mr} ${rid#.spec.forProvider}" "${detail}" ;;
       NOT-MIRRORED) nm=$((nm + 1)); not_mirrored+="${kind}/${mr} ${rid#.spec.forProvider}; " ;;
       EXEMPT) ex=$((ex + 1)) ;;
-      SKIPPED) skip=$((skip + 1)) ;;
+      SKIPPED)
+        skip=$((skip + 1))
+        # A row is SKIPPED legitimately only for an object v0.22.0 cannot create.
+        if ! baseline_is_allowed_exclusion "${kind}/${mr}" || ! grep -qxF "${kind}/${mr}" "${EVIDENCE_DIR}/v1-excluded.txt" 2>/dev/null; then
+          skip_bad=$((skip_bad + 1))
+          skipped_bad+="${kind}/${mr} ${rid#.spec.forProvider}; "
+        fi
+        ;;
     esac
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${mr}" "${rid#.spec.forProvider}" "${verdict}" "${detail}" >>"${EVIDENCE_DIR}/table-nested.tsv"
   done < <(expectation_rows "${ADOPT_NESTED_TABLE}")
   if [ "${fail}" -eq 0 ] && [ "${pass}" -gt 0 ]; then
-    record PASS "${phase}: status.atProvider mirrors the GitHub snapshot for every nested sub-object and adopted setting (${pass} compared, ${ex} without a GitHub value, ${skip} skipped)"
+    record PASS "${phase}: status.atProvider mirrors the GitHub snapshot for every nested sub-object and adopted setting (${pass} compared, ${ex} without a GitHub value, ${skip} SKIPPED)"
   elif [ "${fail}" -eq 0 ]; then
     record FAIL "${phase}: status.atProvider mirrors the GitHub snapshot for every nested sub-object and adopted setting" "nothing was compared"
+  fi
+  if [ "${skip_bad}" -gt 0 ]; then
+    record FAIL "${phase}: no nested row is SKIPPED except those of an object v0.22.0 cannot create" \
+      "${skip_bad} of ${skip} SKIPPED row(s) are not allowed (the object was not adopted): ${skipped_bad:0:400}"
   fi
   [ "${nm}" -eq 0 ] || record INFO "${phase}: lists the observation fills only while the spec declares visibility selected (omitted on an Observe-only object)" "${not_mirrored}"
 }
@@ -826,7 +878,17 @@ adopt_change_phase() {
     fi
   done < <(expectation_rows "${ADOPT_CHANGE_TABLE}")
   [ -z "${waived}" ] || record INFO "kinds with no deliberate change" "${waived}"
-  [ -z "${skipped}" ] || record INFO "deliberate changes skipped: the object was not adopted" "${skipped}"
+  if [ -n "${skipped}" ]; then
+    local sk bad_skipped=""
+    while IFS= read -r sk; do
+      [ -z "${sk}" ] || baseline_is_allowed_exclusion "${sk}" || bad_skipped+="${sk}; "
+    done <<<"${skipped//; /$'\n'}"
+    if [ -n "${bad_skipped}" ]; then
+      record FAIL "no deliberate change is skipped except for an object v0.22.0 cannot create" "the object was not adopted: ${bad_skipped}"
+    else
+      record INFO "deliberate changes skipped: the object was not adopted" "${skipped}"
+    fi
+  fi
   [ "${applied}" -gt 0 ] || { record FAIL "at least one deliberate change was made" "none applied"; return 0; }
 
   if wait_until 900 10 adopt_changes_reflected; then

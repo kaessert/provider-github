@@ -9,6 +9,8 @@
 . "${MIGRATION_DIR}/lib.sh"
 # shellcheck source=cluster.sh
 . "${MIGRATION_DIR}/cluster.sh"
+# shellcheck source=baseline.sh
+. "${MIGRATION_DIR}/baseline.sh"
 
 CLEANED=0
 BACKGROUND_PIDS=()

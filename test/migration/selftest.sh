@@ -635,6 +635,171 @@ else
   record FAIL "the adoption manifest of a webhook the baseline did not finish carries the hook ID GitHub holds" "$(adopt_file "${T}/derived-names" OrganizationWebhook pgh-mig-hook-plain)"
 fi
 
+# --- the baseline of the Repository that carries branch protection ------------------------------------
+# GitHub generates a template-based repository asynchronously and v0.22.0 reconciles it within seconds:
+# the baseline must not depend on which side of the generation its first Observe lands on.
+BL="${T}/bl"
+rm -rf "${BL}"
+mkdir -p "${BL}"
+want_rules="$(printf 'pgh-mig-repo-main\tmain')"
+got_rules="$(baseline_protected_repos "${T}/ex")"
+rule_doc="$(baseline_repo_rule "${T}/ex" pgh-mig-repo-main main)"
+body="$(jq -c '.rule' <<<"${rule_doc}" | baseline_protection_body)"
+actors="$(jq -c '.permissions' <<<"${rule_doc}" | baseline_rule_actors | paste -sd';')"
+if [ "${got_rules}" = "${want_rules}" ] \
+  && jq -e '.required_status_checks == {strict: true, checks: [{context: "pgh-mig/ci"}]}
+    and .enforce_admins == false and .required_conversation_resolution == true and .allow_force_pushes == false
+    and .required_pull_request_reviews.required_approving_review_count == 1
+    and .required_pull_request_reviews.dismiss_stale_reviews == true
+    and .required_pull_request_reviews.require_last_push_approval == false
+    and .required_pull_request_reviews.bypass_pull_request_allowances == {users: ["octocat"], teams: ["pgh-mig-team-child"], apps: []}
+    and .required_pull_request_reviews.dismissal_restrictions == {users: ["octocat"], teams: ["pgh-mig-team-child"], apps: []}
+    and .restrictions == {users: ["octocat"], teams: ["pgh-mig-team-child"], apps: []} and .block_creations == false' <<<"${body}" >/dev/null \
+  && [ "$(baseline_wants_signatures <<<"$(jq -c '.rule' <<<"${rule_doc}")")" = true ] \
+  && [ "${actors}" = "$(printf 'team\tpgh-mig-team-child\tpush;user\toctocat\tpush')" ]; then
+  record PASS "the branch protection a Repository fixture declares becomes the protection request (checks, reviews, restrictions, signed commits) and the access its rule names"
+else
+  record FAIL "the branch protection a Repository fixture declares becomes the protection request (checks, reviews, restrictions, signed commits) and the access its rule names" \
+    "rules '${got_rules}' body ${body:0:300} actors ${actors}"
+fi
+
+# baseline_case <name> <state json> [wait-branch exit status] -- one settle of the Repository fixtures
+# against a stand-in cluster that shows <state json>; the stand-in becomes Synced once the protection is seeded.
+# Sets CASE_RC (the function's status; 99 when it exited), CASE_OOB (the calls to oob.sh) and CASE_RESULTS.
+baseline_case() {
+  local state="$2" wb="${3:-0}" d="${BL}/$1"
+  mkdir -p "${d}"
+  printf '%s' "${state}" >"${d}/state.json"
+  : >"${d}/oob.log"
+  ( # a subshell: the stand-ins and the exit of the function stay inside it
+    EVIDENCE_DIR="${d}"; RESULTS_FILE="${d}/results.tsv"; : >"${RESULTS_FILE}"
+    mr_state() { cat "${d}/state.json"; }
+    baseline_oob() {
+      echo "$*" >>"${d}/oob.log"
+      case "$1" in
+        wait-branch) return "${wb}" ;;
+        seed-protection) jq -c 'map(if .name == "pgh-mig-repo-main" then .synced = "True" | .syncedMessage = "" else . end)' "${d}/state.json" >"${d}/state.new" && mv "${d}/state.new" "${d}/state.json" ;;
+      esac
+    }
+    wait_until() { shift 2; for _ in 1 2 3; do "$@" && return 0; done; return 1; }
+    baseline_settle_protected_repos "${T}/ex" "${GROUP_CLUSTER}" 30
+  ) >"${d}/out.txt" 2>&1
+  CASE_RC=$?
+  CASE_OOB="$(paste -sd';' "${d}/oob.log" | sed "s|${T}|T|g")"
+  CASE_RESULTS="$(cut -f1,2 "${d}/results.tsv" 2>/dev/null | paste -sd'|')"
+}
+STUCK='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"False","ready":"False","syncedMessage":"cannot observe external resource: error: branch is not protected"}]'
+OTHER='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"False","ready":"False","syncedMessage":"cannot create external resource: HTTP 403"}]'
+DONE='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"True","ready":"True","syncedMessage":""}]'
+
+baseline_case stuck "${STUCK}"
+if [ "${CASE_RC}" = 0 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30;seed-protection T/ex pgh-mig-repo-main" ] \
+  && [[ "${CASE_RESULTS}" == "INFO	branch protection of pgh-mig-repo-main seeded out-of-band" ]]; then
+  record PASS "a Repository v0.22.0 cannot observe ('branch is not protected') is seeded with its declared protection once, after its default branch exists, then settles; the report says so"
+else
+  record FAIL "a Repository v0.22.0 cannot observe ('branch is not protected') is seeded with its declared protection once, after its default branch exists, then settles; the report says so" \
+    "rc ${CASE_RC}; oob: ${CASE_OOB}; results: ${CASE_RESULTS}"
+fi
+baseline_case unprotected-already "${DONE}"
+if [ "${CASE_RC}" = 0 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ] && [[ "${CASE_RESULTS}" == "INFO	the baseline applied the declared branch protection itself" ]]; then
+  record PASS "a Repository the baseline made Synced itself is not seeded"
+else
+  record FAIL "a Repository the baseline made Synced itself is not seeded" "rc ${CASE_RC}; oob: ${CASE_OOB}; results: ${CASE_RESULTS}"
+fi
+baseline_case other "${OTHER}"
+if [ "${CASE_RC}" = 1 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ]; then
+  record PASS "a Repository that is not Synced for any other reason is not seeded and the wait reports it unsettled"
+else
+  record FAIL "a Repository that is not Synced for any other reason is not seeded and the wait reports it unsettled" "rc ${CASE_RC}; oob: ${CASE_OOB}"
+fi
+# ... and the run then fails on it, naming the object, instead of dropping it with its nested rows.
+# ... and the run then fails on it, naming the object, instead of dropping it with its nested rows:
+# not Synced and absent from the GitHub snapshot (the baseline never created it) is excluded by the
+# adoption rule, and baseline_require_created turns every exclusion but the allowed one into a FAIL.
+printf '%s' "${OTHER}" >"${BL}/other-v1.json"
+baseline_excluded "${BL}/other-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${BL}/other-excluded.txt"
+( RESULTS_FILE="${BL}/require.tsv"; : >"${RESULTS_FILE}"; baseline_require_created "${BL}/other-v1.json" "${BL}/other-excluded.txt" ) >/dev/null 2>&1
+require_rc=$?
+if [ "${require_rc}" = 1 ] \
+  && grep -q $'^FAIL\tthe baseline created Repository/pgh-mig-repo-main\tSynced=False cannot create external resource: HTTP 403' "${BL}/require.tsv"; then
+  record PASS "a Repository that is not Synced on the baseline and that GitHub does not hold is a FAIL ('the baseline created Repository/pgh-mig-repo-main'), never a silent exclusion"
+else
+  record FAIL "a Repository that is not Synced on the baseline and that GitHub does not hold is a FAIL ('the baseline created Repository/pgh-mig-repo-main'), never a silent exclusion" "rc ${require_rc}: $(cat "${BL}/require.tsv")"
+fi
+# A Repository that is still not Synced but that GitHub holds is adopted (the unsynced-adopted rule), not a FAIL.
+printf '%s' "${STUCK}" >"${BL}/stuck-v1.json"
+baseline_excluded "${BL}/stuck-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${BL}/stuck-excluded.txt"
+( RESULTS_FILE="${BL}/require-stuck.tsv"; : >"${RESULTS_FILE}"; baseline_require_created "${BL}/stuck-v1.json" "${BL}/stuck-excluded.txt" ) >/dev/null 2>&1
+stuck_rc=$?
+if [ "${stuck_rc}" = 0 ] && [ ! -s "${BL}/stuck-excluded.txt" ] && [ ! -s "${BL}/require-stuck.tsv" ] \
+  && [[ "$(baseline_unsynced_adopted "${BL}/stuck-v1.json" "${T}/snap-v1.json" "${T}/ex")" == "Repository/pgh-mig-repo-main: "* ]]; then
+  record PASS "a Repository that is not Synced on the baseline but that GitHub holds is adopted and listed, not a FAIL"
+else
+  record FAIL "a Repository that is not Synced on the baseline but that GitHub holds is adopted and listed, not a FAIL" "rc ${stuck_rc}: $(cat "${BL}/require-stuck.tsv")"
+fi
+printf '%s' '[{"kind":"OrganizationVariable","name":"pgh-mig-var-policies","synced":"False","ready":"False","syncedMessage":"managementPolicies are not enabled"},
+ {"kind":"Repository","name":"pgh-mig-repo-main","synced":"True","ready":"True","syncedMessage":""}]' >"${BL}/var-v1.json"
+baseline_excluded "${BL}/var-v1.json" "${T}/snap-v1.json" "${T}/ex" >"${BL}/var-excluded.txt"
+( RESULTS_FILE="${BL}/require-var.tsv"; : >"${RESULTS_FILE}"; baseline_require_created "${BL}/var-v1.json" "${BL}/var-excluded.txt" ) >/dev/null 2>&1
+var_rc=$?
+if [ "${var_rc}" = 0 ] && [ ! -s "${BL}/require-var.tsv" ] && [ "$(cat "${BL}/var-excluded.txt")" = "OrganizationVariable/pgh-mig-var-policies" ]; then
+  record PASS "OrganizationVariable/pgh-mig-var-policies (managementPolicies not enabled on v0.22.0) is still excluded and is not a failure"
+else
+  record FAIL "OrganizationVariable/pgh-mig-var-policies (managementPolicies not enabled on v0.22.0) is still excluded and is not a failure" "rc ${var_rc}: $(cat "${BL}/require-var.tsv")"
+fi
+# The template content: no commit is a precondition failure naming itself; a missing repository is not mistaken for it.
+baseline_case no-commits "${STUCK}" 1
+if [ "${CASE_RC}" = 99 ] || [ "${CASE_RC}" = 1 ]; then
+  if grep -q $'^FAIL\tGitHub generated pgh-mig-repo-main from the template: main has a commit\tGitHub did not generate pgh-mig-repo-main from the template: no commits (precondition, not a provider defect)$' "${BL}/no-commits/results.tsv" \
+    && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ]; then
+    record PASS "a repository GitHub did not generate from the template (no commit) fails as a precondition, before any seeding"
+  else
+    record FAIL "a repository GitHub did not generate from the template (no commit) fails as a precondition, before any seeding" "oob: ${CASE_OOB}; $(cat "${BL}/no-commits/results.tsv")"
+  fi
+else
+  record FAIL "a repository GitHub did not generate from the template (no commit) fails as a precondition, before any seeding" "the function returned ${CASE_RC}"
+fi
+baseline_case no-repo "${STUCK}" 3
+if grep -q $'^FAIL\tthe baseline created pgh-mig-repo-main\t' "${BL}/no-repo/results.tsv" && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ]; then
+  record PASS "a repository the baseline never created fails as 'the baseline created', not as a template precondition"
+else
+  record FAIL "a repository the baseline never created fails as 'the baseline created', not as a template precondition" "$(cat "${BL}/no-repo/results.tsv")"
+fi
+
+# SKIPPED rows: only those of an object v0.22.0 cannot create are allowed; any other ends the run FAIL,
+# and the result line states the count.
+nested_case() { # nested_case <name> <excluded objects, ;-separated> <atProvider json> -- adopt_check_nested over a table of three rows
+  local d="${BL}/$1" ex
+  mkdir -p "${d}/snapshots"
+  ex="${2//;/$'\n'}"
+  printf '%s\n' "${ex}" >"${d}/v1-excluded.txt"
+  printf 'Repository\tpgh-mig-repo-main\tsetting:description\t-\t.description\t.description\nOrganizationVariable\tpgh-mig-var-policies\tsetting:value\t-\t.value\t.value\nTeam\tpgh-mig-team-parent\tsetting:description\t-\t.description\t.description\n' >"${d}/nested.tsv"
+  printf '%s' "$3" >"${d}/atprovider-observe.json"
+  echo '{"description":"d"}' >"${d}/snapshots/adopted.json"
+  echo '[]' >"${d}/k8s-observe.json"
+  : >"${d}/table-nested.tsv"
+  (
+    EVIDENCE_DIR="${d}"; RESULTS_FILE="${d}/results.tsv"; : >"${RESULTS_FILE}"
+    # shellcheck disable=SC2034  # read by adopt_check_nested
+    ADOPT_NESTED_TABLE="${d}/nested.tsv"
+    adopt_check_nested observe
+  ) >/dev/null 2>&1
+}
+nested_case skipped-repo "OrganizationVariable/pgh-mig-var-policies;Repository/pgh-mig-repo-main" '{"Team/pgh-mig-team-parent":{"description":"d"}}'
+if grep -q $'^FAIL\tobserve: no nested row is SKIPPED except those of an object v0.22.0 cannot create\t1 of 2 SKIPPED row(s) are not allowed (the object was not adopted): Repository/pgh-mig-repo-main' "${BL}/skipped-repo/results.tsv" \
+  && grep -q $'^PASS\tobserve: status.atProvider mirrors the GitHub snapshot.*(1 compared, 0 without a GitHub value, 2 SKIPPED)' "${BL}/skipped-repo/results.tsv"; then
+  record PASS "a SKIPPED row of a Repository that was left out of the adoption ends the run FAIL, and the result line states the SKIPPED count"
+else
+  record FAIL "a SKIPPED row of a Repository that was left out of the adoption ends the run FAIL, and the result line states the SKIPPED count" "$(cat "${BL}/skipped-repo/results.tsv")"
+fi
+nested_case skipped-var "OrganizationVariable/pgh-mig-var-policies" '{"Team/pgh-mig-team-parent":{"description":"d"},"Repository/pgh-mig-repo-main":{"description":"d"}}'
+if ! grep -q '^FAIL' "${BL}/skipped-var/results.tsv" \
+  && grep -q $'^PASS\tobserve: status.atProvider mirrors the GitHub snapshot.*(2 compared, 0 without a GitHub value, 1 SKIPPED)' "${BL}/skipped-var/results.tsv"; then
+  record PASS "the SKIPPED row of the allowed exclusion alone does not fail the run, and is counted"
+else
+  record FAIL "the SKIPPED row of the allowed exclusion alone does not fail the run, and is counted" "$(cat "${BL}/skipped-var/results.tsv")"
+fi
+
 # --- the upgrade scenario: objects the baseline never reconciled ---------------------------------
 # shellcheck source=upgrade-compare.sh
 . "${HERE}/upgrade-compare.sh"
