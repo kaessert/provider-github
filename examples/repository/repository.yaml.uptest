@@ -97,12 +97,12 @@ crossplane.io/update-test: |
       evidence: "the test organization has no collaborator login set aside for the suite, and adding a person to a repository notifies them"
   - field: branchProtectionRules
     skip:
-      reason: fixture-missing
-      evidence: "the repository is created empty, and a protection rule can only be applied to an existing branch; the controller skips rules for missing branches, so nothing is written"
+      reason: covered-elsewhere
+      by: ../repository-branches/repository-branches.yaml#branchProtectionRules
   - field: defaultBranch
     skip:
-      reason: fixture-missing
-      evidence: "GitHub rejects a default-branch change on an empty repository (Cannot update default branch for an empty repository); needs a repository with a second branch"
+      reason: covered-elsewhere
+      by: ../repository-branches/repository-branches.yaml#defaultBranch
   - field: createFromTemplate
     skip:
       reason: fixture-missing
