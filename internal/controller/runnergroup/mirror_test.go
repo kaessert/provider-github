@@ -59,7 +59,7 @@ func TestObserveMirrorsGroup(t *testing.T) {
 }
 
 // The repositories with access are mirrored from the list Observe already reads
-// while the visibility is selected, and dropped otherwise.
+// while GitHub's visibility is selected, and dropped otherwise.
 func TestObserveMirrorsSelectedRepositories(t *testing.T) {
 	access := func(context.Context, string, int64, *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
 		return &github.ListRepositories{Repositories: []*github.Repository{
@@ -81,8 +81,11 @@ func TestObserveMirrorsSelectedRepositories(t *testing.T) {
 		t.Errorf("selectedRepositories: -want, +got:\n%s", diff)
 	}
 
-	// Once the spec no longer asks for the list, a stale one is not kept.
-	cr.Spec.ForProvider.Visibility = ""
+	// Once GitHub no longer holds a list, a stale one is not kept.
+	e = newExternal(&fake.MockActionsClient{
+		MockListOrganizationRunnerGroups: listGroups(ghGroup()),
+	}, nil)
+	cr.Spec.ForProvider.Visibility = "all"
 	if _, err := e.Observe(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

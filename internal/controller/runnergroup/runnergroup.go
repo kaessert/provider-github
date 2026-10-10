@@ -68,29 +68,35 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
+	// Every section is read and mirrored before a difference is reported, so
+	// status.atProvider shows the repositories GitHub gives access to even when
+	// a field before them differs.
 	// An omitted visibility (an Observe-only import) is not compared.
-	if (p.Visibility != "" && g.GetVisibility() != p.Visibility) ||
+	drift := (p.Visibility != "" && g.GetVisibility() != p.Visibility) ||
 		g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories ||
 		g.GetRestrictedToWorkflows() != (len(want) > 0) ||
-		!util.EqualUnordered(g.SelectedWorkflows, want) {
-		cr.SetConditions(xpv2.Unavailable())
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
-	}
+		!util.EqualUnordered(g.SelectedWorkflows, want)
 
-	if p.Visibility == visibilitySelected {
+	// The list exists on GitHub's side while GitHub's visibility is selected,
+	// whatever the spec says.
+	if g.GetVisibility() == visibilitySelected {
 		ghRepos, err := listAccessRepos(ctx, c.github, org, g.GetID())
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 		cr.Status.AtProvider.SelectedRepositories = mirrorRepos(ghRepos)
-		upToDate, err := repoAccessUpToDate(ctx, c.github, org, repoNamesFromCR(p.SelectedRepositories), ghRepos)
-		if err != nil {
-			return managed.ExternalObservation{}, err
+		if !drift && p.Visibility == visibilitySelected {
+			upToDate, err := repoAccessUpToDate(ctx, c.github, org, repoNamesFromCR(p.SelectedRepositories), ghRepos)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			drift = !upToDate
 		}
-		if !upToDate {
-			cr.SetConditions(xpv2.Unavailable())
-			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
-		}
+	}
+
+	if drift {
+		cr.SetConditions(xpv2.Unavailable())
+		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
 	cr.SetConditions(xpv2.Available())

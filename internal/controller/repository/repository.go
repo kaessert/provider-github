@@ -128,12 +128,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// GitHub; only team access, topics and collaborator removals stay writable. They
 	// reconcile on a separate path so frozen drift can't loop, and the freeze is
 	// surfaced on the CR rather than ignored silently.
-	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	if archivedCr != pointer.Deref(repo.Archived, false) {
-		return drifted(cr), nil
-	}
-	if archivedCr {
-		return c.observeArchived(ctx, cr, repo, name)
+	//
+	// Observe reads and mirrors every section before it reports a difference, so
+	// status.atProvider shows what GitHub holds for the sections after the first
+	// one that differs; drift records only that a section differed. The read path
+	// follows GitHub's archived state, not the spec's.
+	drift := pointer.Deref(cr.Spec.ForProvider.Archived, false) != pointer.Deref(repo.Archived, false)
+	if pointer.Deref(repo.Archived, false) {
+		return c.observeArchived(ctx, cr, repo, name, drift)
 	}
 	setArchivedCondition(cr, false, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
@@ -145,9 +147,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
 	cr.Status.AtProvider.Permissions.Users = mirrorUsers(collaborators.observed)
-	if collaborators.hasDrift() {
-		return drifted(cr), nil
-	}
+	drift = drift || collaborators.hasDrift()
 
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTToPermission, err := getRepoTeamsWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -156,9 +156,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTToPermission)
 
-	if !driftcmp.Equal(ghTToPermission, crTToPermission) {
-		return drifted(cr), nil
-	}
+	drift = drift || !driftcmp.Equal(ghTToPermission, crTToPermission)
 
 	if cr.Spec.ForProvider.Webhooks != nil {
 		ghRepoWebhooks, err := getRepoWebhooks(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -179,9 +177,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 
-		if !driftcmp.Equal(ghWToConfig, crWToConfig) {
-			return drifted(cr), nil
-		}
+		drift = drift || !driftcmp.Equal(ghWToConfig, crWToConfig)
 	} else {
 		cr.Status.AtProvider.Webhooks = nil
 	}
@@ -230,9 +226,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		dropped := slices.Concat(enforced, remembered)
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
-		if !driftcmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
-			return drifted(cr), nil
-		}
+		drift = drift || !driftcmp.Equal(crBPRWithoutDropped, ghBPRToConfig)
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
 		cr.Status.AtProvider.BranchProtectionRules = nil
@@ -252,9 +246,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 
-		if !driftcmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-			return drifted(cr), nil
-		}
+		drift = drift || !driftcmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig)
 	} else {
 		cr.Status.AtProvider.RepositoryRules = nil
 	}
@@ -270,7 +262,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			continue
 		}
 		if setting.requested != setting.echoed {
-			return drifted(cr), nil
+			drift = true
+			break
 		}
 	}
 
@@ -279,9 +272,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		crTopics := util.SortAndReturn(cr.Spec.ForProvider.Topics)
 		ghTopics := util.SortAndReturn(repo.Topics)
 
-		if !driftcmp.Equal(crTopics, ghTopics) {
-			return drifted(cr), nil
-		}
+		drift = drift || !driftcmp.Equal(crTopics, ghTopics)
+	}
+
+	if drift {
+		return drifted(cr), nil
 	}
 
 	cr.SetConditions(xpv2.Available())
@@ -351,8 +346,9 @@ func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension strin
 // observeArchived reports drift for an archived repo. Only team access, topics and
 // collaborator removals are reconcilable while archived; settings, branch protection,
 // rulesets, webhooks and collaborator additions are frozen and surfaced via a
-// condition. The frozen dimensions aren't even read here.
-func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string) (managed.ExternalObservation, error) {
+// condition. The frozen dimensions aren't even read here. drift is true when an
+// earlier check, the spec's archived flag against GitHub's, already differed.
+func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string, drift bool) (managed.ExternalObservation, error) {
 	org := cr.Spec.ForProvider.Org
 
 	crUsers := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
@@ -396,7 +392,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 		topicsDrift = !driftcmp.Equal(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
 	}
 
-	if len(removable) > 0 || teamsDrift || topicsDrift {
+	if drift || len(removable) > 0 || teamsDrift || topicsDrift {
 		return drifted(cr), nil
 	}
 

@@ -589,10 +589,13 @@ func TestObserve(t *testing.T) {
 							return githubTeams(), fake.GenerateEmptyResponse(), nil
 						},
 						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
-							return []*github.Hook{}, fake.GenerateEmptyResponse(), nil
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
 						},
 						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
-							return []*github.Branch{}, fake.GenerateEmptyResponse(), nil
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
 						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
