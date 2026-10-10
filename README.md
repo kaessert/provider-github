@@ -180,6 +180,14 @@ The existing cluster-scoped resources are unchanged. For the namespaced variants
 Examples for both scopes are in `examples/`; the namespaced ones end in
 `-namespaced.yaml`.
 
+One GitHub object is managed by exactly one managed resource, in exactly one
+scope. A cluster-scoped and a namespaced resource that name the same object both
+reconcile it and overwrite each other, as two cluster-scoped resources naming one
+object always have; Crossplane has never guarded that configuration. Migrate one
+scope at a time: delete the old-scope object with `deletionPolicy: Orphan` (or
+drop it to `managementPolicies: ["Observe"]`) before the new-scope object takes
+management.
+
 ### Safe start and Secret reads
 
 The provider declares the `safe-start` capability in its package metadata. On
