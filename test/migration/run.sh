@@ -17,18 +17,50 @@
 # start without the GitHub App credentials (named when missing) and without the
 # cluster name and kubeconfig of a cluster somebody else's launcher created.
 # Make's validate.migration target runs all three in turn.
+#
+# The four offline steps write their evidence to a private directory when
+# MIGRATION_WORKDIR is unset, so two runs at once (two worktrees, two shells) never
+# share results files. The directory is removed when the step passes and kept, with
+# its path printed, when it fails. An explicit MIGRATION_WORKDIR is used as given. The
+# three scenarios keep the documented default, which later runs reuse (the token
+# cache, the baseline checkout, the cleanup baseline).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRIVATE_WORKDIR=""
+case "${1:-}" in
+  fixtures | coverage | separation | selftest)
+    if [ -z "${MIGRATION_WORKDIR:-}" ]; then
+      PRIVATE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/provider-github-migration-${1}.XXXXXX")" || {
+        echo "run.sh: could not create a private work directory under ${TMPDIR:-/tmp}" >&2
+        exit 1
+      }
+      export MIGRATION_WORKDIR="${PRIVATE_WORKDIR}"
+    fi
+    ;;
+esac
 # shellcheck source=lib.sh
 . "${HERE}/lib.sh"
 
 step="${1:-}"
+run_offline() { # run_offline <script>: run it, then drop a private work directory on success
+  "${HERE}/$1"
+  local rc=$?
+  if [ -n "${PRIVATE_WORKDIR}" ]; then
+    if [ "${rc}" -eq 0 ]; then
+      rm -rf "${PRIVATE_WORKDIR}"
+    else
+      echo "run.sh: ${step} failed; evidence kept in ${PRIVATE_WORKDIR}" >&2
+    fi
+  fi
+  exit "${rc}"
+}
+
 case "${step}" in
-  fixtures) exec "${HERE}/validate-fixtures.sh" ;;
-  coverage) exec "${HERE}/check-coverage.sh" ;;
-  separation) exec "${HERE}/check-separation.sh" ;;
-  selftest) exec "${HERE}/selftest.sh" ;;
+  fixtures) run_offline validate-fixtures.sh ;;
+  coverage) run_offline check-coverage.sh ;;
+  separation) run_offline check-separation.sh ;;
+  selftest) run_offline selftest.sh ;;
   upgrade | adopt-cluster | adopt-namespaced)
     # Fail fast, before any build starts, on the inputs every scenario needs.
     require_credentials

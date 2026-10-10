@@ -57,7 +57,7 @@ The scenarios fail at once, naming the input, when something is missing:
 Optional: `MIGRATION_MEMBER` (an existing organization member the fixtures use;
 default: the first user member found), `MIGRATION_FORK_SOURCE` (public `owner/repo`
 to fork, default `actions/hello-world-docker-action`, chosen because it carries `.github/workflows/ci.yml`, which the runner-group workflow fixture names), `MIGRATION_WORKDIR` (evidence and scratch,
-default `$TMPDIR/provider-github-migration`), `MIGRATION_POLL` (provider `--poll`,
+default `$TMPDIR/provider-github-migration` for the scenarios; the offline steps `fixtures`, `coverage`, `separation` and `selftest`, which `make validate.migration.fixtures` runs, use a private `mktemp -d` directory when it is unset, so concurrent runs from several worktrees do not share results files; it is removed when the step passes and kept, with its path printed, when it fails; an explicit value is used as given), `MIGRATION_POLL` (provider `--poll`,
 default `60s`: at 15s a run exhausted the GitHub App installation's 5000 requests an hour), `MIGRATION_READY_TIMEOUT`, `MIGRATION_BASELINE_REF`,
 `MIGRATION_MIN_RATE_BUDGET` (GitHub requests that must be left in the hour for `adopt-cluster` and `adopt-namespaced` to start,
 default `3500`, `0` disables the check), `MIGRATION_BASELINE_REPO`, `MIGRATION_BASELINE_DIR` (reuse a checkout of the
