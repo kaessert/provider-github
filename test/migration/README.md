@@ -91,6 +91,7 @@ managed-resource state, the provider logs and the rendered fixtures.
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
 | `upgrade-compare.sh` | the upgrade scenario's comparisons: which objects the GitHub comparison narrows, the Kubernetes regression check with its re-read, and the attribution of `updated_at` moves |
 | `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds the full adoption flow, `run_adopt_full <cluster\|namespaced>`) |
+| `adopt-org.sh` | the Organization the external writer resets: the sampler, the reset signature, and the zero-write and write-attribution rules that depend on it |
 | `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures (both scopes), the reference twins, the cluster-scoped twins and the both-scopes Teams; the evaluation helpers of the expectation tables and the both-scopes verdicts |
 | `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenarios (b) and (c)) |
 | `expect-adopt-change.tsv` | the one deliberate change per kind of scenarios (b) and (c), and what it may change on GitHub |
@@ -338,6 +339,13 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    * the fields the move to crossplane-runtime v2 removes (`publishConnectionDetailsTo`,
      `providerRef`) are dropped.
 
+   Before the manifests are applied, the connection secrets the baseline wrote (the
+   `*-conn` Secrets its objects named in `writeConnectionSecretToRef`, kept before the
+   objects were deleted) are applied again for every manifest that names one, in the
+   namespace it names. The scenario thereby models a user who keeps the applied-secret
+   records (see the migration note below); scenario (c) does the same into the namespace
+   of each object.
+
    A drift probe is added: a second Observe-only `Team` over the parent team, whose
    declared description differs from GitHub's. Assert: every object Synced and Ready (the
    probe Synced and not Ready); UIDs new; `status.atProvider.id` equals the external name
@@ -366,10 +374,47 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 7. Cleanup deletes the managed resources (the default policies delete the GitHub objects;
    the Membership keeps `Orphan`), removes the Provider and sweeps.
 
-`report.md` ends with three tables: per managed resource (phase, Ready, Synced,
+**Migration note: keep the connection secrets of webhooks that use `secretKeyRef`.** A
+webhook's secret cannot be read back from GitHub (it is masked), so the controller compares
+the secret in the spec against the applied value recorded in the object's
+`writeConnectionSecretToRef` Secret. That Secret is owned by the managed resource and is
+garbage-collected when the old object is deleted. Without it the adopting object reports
+Ready=False under Observe for the organization webhooks and for a Repository whose
+`webhooks[]` use `secretKeyRef` (Synced stays True), and the first full-management reconcile
+re-applies the hook once, rewriting it with the same values and recording the secret again. A run of this scenario that did not restore the
+Secrets measured exactly that: each of the three objects issued one Update and nothing else
+changed. Keep the Secrets and the objects are Ready from the first reconcile.
+
+**An Organization reset by something outside the cluster.** The test organization is written
+back to the values it held before the harness changed it (its description and its
+Actions-enabled repositories) about every five minutes by a writer this harness does not
+control. The provider is not that writer: under Observe it logs no Organization write. The
+harness therefore samples the organization's description and Actions-enabled repositories (two
+GETs a sample, every third of the poll period, `MIGRATION_ORG_SAMPLE_INTERVAL` seconds to
+change it) into `org-samples.log` from the start of step 4 and classifies, without relaxing any
+other kind:
+
+* an Organization that is Synced, Ready=False, with a Ready message that starts
+  `drift: actions.enabledRepos: GitHub has [<the baseline's enabled repositories>]`, while a
+  sample of the phase shows the baseline values, is a WARN naming that sample ("external reset
+  of the org to its baseline"). Any other message or state, the same message on any other kind,
+  and the signature with no baseline sample in the phase are failures. The waits for Ready
+  count such an Organization as settled, and its `secrets` rows (which the controller returns
+  before observing) are skipped;
+* the zero-write snapshot comparisons leave the Organization's description, Actions settings
+  and `updated_at` out only when a sample of the window shows the baseline values and the
+  provider's log shows no Organization Update (Observe), or only Updates each preceded, within
+  one poll, by a sample that shows them (full management);
+* under full management an Organization Update is the provider correcting the reset (INFO) only
+  when such a sample precedes it; otherwise it is a failure. A reset that lives for less than a
+  sampling interval can be missed: shorten the interval and re-run before reading it as a
+  provider write.
+
+`report.md` ends with the tables: per managed resource (phase, Ready, Synced,
 `status.atProvider.id`, external name, whether they agree, creates and updates in the
 provider log and the reconciles that make zero meaningful), per nested sub-object
-(phase, result, the two values when they differ), and per deliberate change. A run takes
+(phase, result, the two values when they differ), per deliberate change, and one row for every
+object that is not Ready with its Ready reason and message and its Synced message. A run takes
 about an hour and polls dozens of objects, which is why it checks the request budget
 first. (c) adds the reference and both-scopes steps to that, so it needs the budget as well.
 
