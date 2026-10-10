@@ -18,6 +18,18 @@
 #
 # shellcheck shell=bash
 
+# upgrade_reset_run_state -- removes what an earlier run left in EVIDENCE_DIR (the default
+# workdir is reused by every run) and that the comparisons below read or append to: the list of
+# objects the baseline did not settle, the provider logs the write attribution searches, the
+# narrowed snapshots, the per-repository deltas and the report tables. Without it a baseline that
+# settles would still be narrowed by the previous run's list, and an old log's Update lines would
+# be counted as this run's writes. Called once, before anything else is written.
+upgrade_reset_run_state() {
+  rm -f "${EVIDENCE_DIR}/baseline-not-ready.txt" "${EVIDENCE_DIR}/after-upgrade-not-ready.txt" \
+    "${EVIDENCE_DIR}/k8s-regressions.txt" "${EVIDENCE_DIR}/k8s-v2-reread.json" "${EVIDENCE_DIR}/report-tables.md" \
+    "${EVIDENCE_DIR}"/provider-*.log "${EVIDENCE_DIR}"/unreconciled-*-delta.txt "${EVIDENCE_DIR}"/snapshots/*-filtered.json
+}
+
 # upgrade_unreconciled <kind> <baseline-not-ready.txt> <k8s-v1.json> -- the GitHub names (external
 # names) of the objects of one kind that are listed as not settled on the baseline.
 upgrade_unreconciled() {

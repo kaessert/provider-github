@@ -751,6 +751,31 @@ else
   record FAIL "report.md tells an updated_at move on an object the provider updated from one on an object it did not" "$(cat "${U}/tables.md" | tr '\n' ' ' | cut -c1-400)"
 fi
 
+# A run starts from a clean evidence directory: nothing the previous run left may narrow this run's
+# comparison, count as this run's writes, or add a second table to the report.
+up_case stale-baseline never "applied" yes 1413 695
+cp "${U}/candidate.log" "${UP_DIR}/provider-candidate-old-pod.log"
+cp "${U}/tables.md" "${UP_DIR}/report-tables.md"
+echo "Repository/pgh-mig-repo-archive: Ready=False Synced=True" >"${UP_DIR}/k8s-regressions.txt"
+saved_evidence="${EVIDENCE_DIR}"; saved_results="${RESULTS_FILE}"
+EVIDENCE_DIR="${UP_DIR}"; RESULTS_FILE="${UP_DIR}/results.tsv"
+upgrade_reset_run_state
+: >"${RESULTS_FILE}"
+upgrade_prepare_snapshots
+cp "${UP_DIR}/snapshots/after-v1.json" "${UP_DIR}/snapshots/y.json"
+upgrade_write_attribution "${U}/ts-a.json" "${U}/ts-c.json" "${U}/k8s-ts.json" "${GROUP_CLUSTER}" "${UP_DIR}/report-tables.md" "${U}/candidate.log"
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
+if ! compgen -G "${UP_DIR}/provider-*.log" >/dev/null && [ ! -e "${UP_DIR}/baseline-not-ready.txt" ] \
+  && [ ! -e "${UP_DIR}/k8s-regressions.txt" ] && [ ! -e "${UP_DIR}/unreconciled-pgh-mig-repo-main-delta.txt" ] \
+  && [ ! -e "${UP_DIR}/snapshots/after-v1-filtered.json" ] && [ -e "${UP_DIR}/snapshots/y.json" ] \
+  && [ "${SNAP_BEFORE}/${SNAP_AFTER}" = "after-v1/after-v2" ] \
+  && [ ! -s "${UP_DIR}/results.tsv" ] && [ "$(grep -c '^## updated_at moves' "${UP_DIR}/report-tables.md")" = 1 ]; then
+  record PASS "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing"
+else
+  record FAIL "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing" \
+    "$(ls "${UP_DIR}" "${UP_DIR}/snapshots" | tr '\n' ' ') $(cat "${UP_DIR}/results.tsv" 2>/dev/null | head -c 200)"
+fi
+
 # --- entry point fails fast and names the input -----------------------------------
 creds=(PROVIDER_GITHUB_APP_ID=1 PROVIDER_GITHUB_APP_INSTALLATION_ID=2 "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64=$(printf x | base64)")
 out="$(env -i PATH="${PATH}" "${HERE}/run.sh" upgrade 2>&1)"
