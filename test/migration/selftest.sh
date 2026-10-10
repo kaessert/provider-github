@@ -19,6 +19,10 @@
 #     objects the stand-in API holds agrees with it), the verdict of a nested row, the
 #     comparison of two snapshots into changed paths and their classification, and
 #     the write counts read from a provider log;
+#   * the upgrade scenario's comparisons: a repository the baseline never reconciled may gain its settings
+#     and branch protection with its IDs unchanged, one that was Synced and Ready may not, an Organization
+#     reporting a drift: message is re-read before it counts as a regression, and an updated_at move is
+#     attributed to a provider write or to somebody else;
 #   * the entry point fails fast and names the missing input.
 set -uo pipefail
 
@@ -586,6 +590,190 @@ if [ "$(paste -sd, "${T}/excluded.txt")" = "OrganizationVariable/pgh-mig-var-pol
 else
   record FAIL "only objects that are not Synced on the baseline are excluded; a Synced object that is not Ready is adopted and reported with its baseline state" \
     "excluded: $(paste -sd, "${T}/excluded.txt"); kept: $(ls "${T}/excl" | paste -sd,)"
+fi
+
+# --- the upgrade scenario: objects the baseline never reconciled ---------------------------------
+# shellcheck source=upgrade-compare.sh
+. "${HERE}/upgrade-compare.sh"
+U="${T}/up"
+# up_snapshot <out> <repo description> <main branch protection: yes|no> <repo id> <hook id> <repo updated_at> <org updated_at>
+up_snapshot() {
+  jq -n --arg d "$2" --arg bp "$3" --argjson id "$4" --argjson hook "$5" --arg rts "$6" --arg ots "$7" '
+    def repo($n; $i; $desc; $prot; $ts): {id: $i, name: $n, settings: {description: $desc, has_wiki: ($prot == "yes")},
+      branchProtection: (if $prot == "yes" then {main: {required_signatures: {enabled: true},
+        restrictions: {teams: [{id: 20031733, parent: {id: 20031735}}], users: [{id: 25257851}]}}} else {} end),
+      hooks: [{id: $hook, _ts: {updated_at: "h1"}}], _ts: {updated_at: $ts}};
+    {org: {id: 9, description: "o", _ts: {updated_at: $ots}},
+     repos: {"pgh-mig-repo-main": repo("pgh-mig-repo-main"; $id; $d; $bp; $rts),
+             "pgh-mig-repo-archive": repo("pgh-mig-repo-archive"; 77; "kept"; "no"; "a1")},
+     teams: {}, variables: {}, secrets: {actions: {}, dependabot: {}}, orgHooks: {}, runnerGroups: {}}' >"$1"
+}
+# up_case <name> <repo state on the baseline: ok|never> <after: description> <protection> <repo id after> <hook id after>
+up_case() {
+  local saved_evidence="${EVIDENCE_DIR}" saved_results="${RESULTS_FILE}"
+  UP_DIR="${U}/$1"
+  rm -rf "${UP_DIR}"
+  mkdir -p "${UP_DIR}/snapshots"
+  up_snapshot "${UP_DIR}/snapshots/after-v1.json" "declared-later" no 1413 695 "r1" "o1"
+  up_snapshot "${UP_DIR}/snapshots/after-v2.json" "$3" "$4" "$5" "$6" "r2" "o1"
+  cat >"${UP_DIR}/k8s-v1.json" <<'JSON'
+[{"kind":"Repository","name":"pgh-mig-repo-main","externalName":"pgh-mig-repo-main","ready":"False","synced":"False"},
+ {"kind":"Repository","name":"pgh-mig-repo-archive","externalName":"pgh-mig-repo-archive","ready":"True","synced":"True"}]
+JSON
+  : >"${UP_DIR}/baseline-not-ready.txt"
+  [ "$2" != never ] || echo "Repository/pgh-mig-repo-main: Ready=False Synced=False observe failed: branch is not protected" >"${UP_DIR}/baseline-not-ready.txt"
+  EVIDENCE_DIR="${UP_DIR}"
+  RESULTS_FILE="${UP_DIR}/results.tsv"
+  upgrade_prepare_snapshots
+  EVIDENCE_DIR="${saved_evidence}"
+  RESULTS_FILE="${saved_results}"
+  UP_STRICT=0
+  UP_LAX=0
+  "${SNAP}" diff "${UP_DIR}/snapshots/${SNAP_BEFORE}.json" "${UP_DIR}/snapshots/${SNAP_AFTER}.json" >"${UP_DIR}/strict.txt" 2>&1 || UP_STRICT=1
+  "${SNAP}" diff "${UP_DIR}/snapshots/${SNAP_BEFORE}.json" "${UP_DIR}/snapshots/${SNAP_AFTER}.json" --ignore-timestamps >"${UP_DIR}/lax.txt" 2>&1 || UP_LAX=1
+}
+
+# The reported case: the baseline never applied the repository's settings or protection; the candidate does,
+# in one Update, and every ID is unchanged.
+up_case never-reconciled never "applied" yes 1413 695
+if [ "${UP_STRICT}${UP_LAX}" = 00 ] && [ -s "${UP_DIR}/unreconciled-pgh-mig-repo-main-delta.txt" ] \
+  && grep -q '^+.*"has_wiki": true' "${UP_DIR}/unreconciled-pgh-mig-repo-main-delta.txt" \
+  && grep -q '^+.*"required_signatures"' "${UP_DIR}/unreconciled-pgh-mig-repo-main-delta.txt" \
+  && grep -q '^INFO.*completed a reconciliation the baseline never finished' "${UP_DIR}/results.tsv"; then
+  record PASS "a repository the baseline never reconciled may gain its settings and branch protection: identical IDs pass both comparisons, the delta is INFO"
+else
+  record FAIL "a repository the baseline never reconciled may gain its settings and branch protection: identical IDs pass both comparisons, the delta is INFO" \
+    "strict=${UP_STRICT} lax=${UP_LAX}: $(head -c 300 "${UP_DIR}/strict.txt" | tr '\n' ';')"
+fi
+up_case never-recreated never "applied" yes 9999 695
+if [ "${UP_STRICT}${UP_LAX}" = 11 ] && grep -q 'numeric IDs differ' "${UP_DIR}/lax.txt"; then
+  record PASS "a repository the baseline never reconciled still fails when it is recreated (new numeric ID)"
+else
+  record FAIL "a repository the baseline never reconciled still fails when it is recreated (new numeric ID)" "strict=${UP_STRICT} lax=${UP_LAX}"
+fi
+up_case never-hook never "applied" yes 1413 696
+if [ "${UP_STRICT}${UP_LAX}" = 11 ] && grep -q 'numeric IDs differ' "${UP_DIR}/lax.txt"; then
+  record PASS "a repository the baseline never reconciled still fails when its webhook is recreated"
+else
+  record FAIL "a repository the baseline never reconciled still fails when its webhook is recreated" "strict=${UP_STRICT} lax=${UP_LAX}"
+fi
+# The same changes on a repository that was Synced and Ready on the baseline are a write.
+up_case ready-setting ok "applied" yes 1413 695
+if [ "${UP_STRICT}${UP_LAX}" = 11 ] && grep -q '+.*"description": "applied"' "${UP_DIR}/lax.txt" && [ ! -e "${UP_DIR}/snapshots/after-v2-filtered.json" ]; then
+  record PASS "a repository that was Synced and Ready on the baseline and changes a setting after the upgrade still fails"
+else
+  record FAIL "a repository that was Synced and Ready on the baseline and changes a setting after the upgrade still fails" "strict=${UP_STRICT} lax=${UP_LAX}"
+fi
+up_case ready-id ok "declared-later" no 9999 695
+if [ "${UP_STRICT}${UP_LAX}" = 11 ] && grep -q 'numeric IDs differ' "${UP_DIR}/lax.txt"; then
+  record PASS "a repository that was Synced and Ready on the baseline and is recreated after the upgrade still fails"
+else
+  record FAIL "a repository that was Synced and Ready on the baseline and is recreated after the upgrade still fails" "strict=${UP_STRICT} lax=${UP_LAX}"
+fi
+up_case ready-protection ok "declared-later" yes 1413 695
+if [ "${UP_STRICT}${UP_LAX}" = 11 ] && grep -q 'required_signatures' "${UP_DIR}/lax.txt"; then
+  record PASS "a repository that was Synced and Ready on the baseline and gains branch protection after the upgrade still fails"
+else
+  record FAIL "a repository that was Synced and Ready on the baseline and gains branch protection after the upgrade still fails" "strict=${UP_STRICT} lax=${UP_LAX}"
+fi
+# The other repository (Synced and Ready) keeps its strict comparison while the never-reconciled one is narrowed.
+up_case never-and-ready never "applied" yes 1413 695
+jq '.repos["pgh-mig-repo-archive"].settings.description = "changed"' "${UP_DIR}/snapshots/after-v2.json" >"${UP_DIR}/snapshots/x.json"
+upgrade_filter_snapshot "${UP_DIR}/snapshots/x.json" "${UP_DIR}/snapshots/x-filtered.json" "" "pgh-mig-repo-main"
+if ! "${SNAP}" diff "${UP_DIR}/snapshots/after-v1-filtered.json" "${UP_DIR}/snapshots/x-filtered.json" --ignore-timestamps >"${UP_DIR}/x.txt" 2>&1 \
+  && grep -q '"description": "changed"' "${UP_DIR}/x.txt"; then
+  record PASS "narrowing a never-reconciled repository leaves every other repository under the strict comparison"
+else
+  record FAIL "narrowing a never-reconciled repository leaves every other repository under the strict comparison" "$(head -c 200 "${UP_DIR}/x.txt")"
+fi
+
+# An Organization caught mid-correction: Ready=False with a "drift:" message, Synced=True.
+cat >"${U}/k8s-a.json" <<'JSON'
+[{"kind":"Organization","name":"pgh-mig-org","uid":"u1","externalName":"pgh-test","ready":"True","synced":"True","syncedMessage":"","readyMessage":""},
+ {"kind":"Team","name":"pgh-mig-team","uid":"u2","externalName":"t","ready":"True","synced":"True","syncedMessage":"","readyMessage":""},
+ {"kind":"OrganizationVariable","name":"pgh-mig-var","uid":"u3","externalName":"V","ready":"False","synced":"False","syncedMessage":"x","readyMessage":""}]
+JSON
+upgrade_v2() { # upgrade_v2 <out> <org ready> <org synced> <org ready message> <team ready>
+  jq --arg r "$2" --arg s "$3" --arg m "$4" --arg t "$5" '
+    map(if .kind == "Organization" then .ready = $r | .synced = $s | .readyMessage = $m
+        elif .kind == "Team" then .ready = $t else . end)' "${U}/k8s-a.json" >"$1"
+}
+upgrade_v2 "${U}/k8s-drift.json" False True "drift: actions.enabledRepos: [a] != [b]" True
+upgrade_v2 "${U}/k8s-other.json" False True "cannot update organization" True
+upgrade_v2 "${U}/k8s-unsynced.json" False False "drift: x" True
+upgrade_v2 "${U}/k8s-healed.json" True True "" True
+upgrade_v2 "${U}/k8s-team.json" True True "" False
+first="$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-drift.json")"
+final="$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-drift.json" final)"
+if [ "${first%%$'\t'*}" = "Organization/pgh-mig-org" ] && [[ "${first}" == *$'\t'drift-pending:* ]] \
+  && [[ "${final}" == *$'\t'regressed:* ]] && [ -z "$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-healed.json")" ]; then
+  record PASS "an Organization that was Ready and reports a drift: message is pending the re-read; still not Ready on the re-read it is a regression; Ready again it passes"
+else
+  record FAIL "an Organization that was Ready and reports a drift: message is pending the re-read; still not Ready on the re-read it is a regression; Ready again it passes" "first=${first} final=${final}"
+fi
+other="$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-other.json")"
+unsynced="$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-unsynced.json")"
+team="$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-team.json")"
+if [[ "${other}" == *$'\t'regressed:* ]] && [[ "${unsynced}" == *$'\t'regressed:* ]] && [[ "${team}" == "Team/pgh-mig-team"$'\t'regressed:* ]]; then
+  record PASS "only a Synced object with a drift: message is tolerated: another Ready message, Synced=False and any other kind not Ready are regressions"
+else
+  record FAIL "only a Synced object with a drift: message is tolerated: another Ready message, Synced=False and any other kind not Ready are regressions" "other=${other} unsynced=${unsynced} team=${team}"
+fi
+jq 'map(select(.kind != "Team"))' "${U}/k8s-a.json" >"${U}/k8s-gone.json"
+if [[ "$(upgrade_k8s_compare "${U}/k8s-a.json" "${U}/k8s-gone.json")" == "Team/pgh-mig-team"$'\t'deleted ]]; then
+  record PASS "a managed resource the upgrade deleted is still reported"
+else
+  record FAIL "a managed resource the upgrade deleted is still reported"
+fi
+
+# Provider writes told from other updated_at moves.
+up_snapshot "${U}/ts-a.json" d no 1413 695 r1 o1
+up_snapshot "${U}/ts-b.json" d no 1413 695 r2 o2
+jq '.repos["pgh-mig-repo-archive"]._ts.updated_at = "a2"' "${U}/ts-b.json" >"${U}/ts-c.json"
+cat >"${U}/k8s-ts.json" <<'JSON'
+[{"kind":"Organization","name":"pgh-mig-org","externalName":"pgh-test"},
+ {"kind":"Repository","name":"pgh-mig-repo-main","externalName":"pgh-mig-repo-main"},
+ {"kind":"Repository","name":"pgh-mig-repo-archive","externalName":"pgh-mig-repo-archive"}]
+JSON
+cat >"${U}/candidate.log" <<'LOG'
+2026-10-10T14:11:29Z	DEBUG	provider-github	Successfully requested update of external resource	{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"pgh-mig-repo-main"}}
+2026-10-10T14:12:29Z	DEBUG	provider-github	Reconciling	{"controller": "managed/repository.organizations.github.crossplane.io", "request": {"name":"pgh-mig-repo-archive"}}
+2026-10-10T14:12:30Z	DEBUG	provider-github	Reconciling	{"controller": "managed/organization.organizations.github.crossplane.io", "request": {"name":"pgh-mig-org"}}
+LOG
+rm -f "${U}/tables.md"
+upgrade_write_attribution "${U}/ts-a.json" "${U}/ts-c.json" "${U}/k8s-ts.json" "${GROUP_CLUSTER}" "${U}/tables.md" "${U}/candidate.log"
+if grep -q '^| repos/pgh-mig-repo-main/_ts/updated_at | r1 | r2 | provider write: 1 create/update' "${U}/tables.md" \
+  && grep -q '^| repos/pgh-mig-repo-archive/_ts/updated_at | a1 | a2 | NOT a provider write: no create/update line for Repository/pgh-mig-repo-archive' "${U}/tables.md" \
+  && grep -q '^| org/_ts/updated_at | o1 | o2 | NOT a provider write: no create/update line for Organization/pgh-mig-org' "${U}/tables.md" \
+  && [ "${UPGRADE_TS_PROVIDER}/${UPGRADE_TS_OTHER}/${UPGRADE_TS_UNMATCHED}" = 1/2/0 ]; then
+  record PASS "report.md tells an updated_at move on an object the provider updated from one on an object it did not (a reconcile is not an update)"
+else
+  record FAIL "report.md tells an updated_at move on an object the provider updated from one on an object it did not" "$(cat "${U}/tables.md" | tr '\n' ' ' | cut -c1-400)"
+fi
+
+# A run starts from a clean evidence directory: nothing the previous run left may narrow this run's
+# comparison, count as this run's writes, or add a second table to the report.
+up_case stale-baseline never "applied" yes 1413 695
+cp "${U}/candidate.log" "${UP_DIR}/provider-candidate-old-pod.log"
+cp "${U}/tables.md" "${UP_DIR}/report-tables.md"
+echo "Repository/pgh-mig-repo-archive: Ready=False Synced=True" >"${UP_DIR}/k8s-regressions.txt"
+saved_evidence="${EVIDENCE_DIR}"; saved_results="${RESULTS_FILE}"
+EVIDENCE_DIR="${UP_DIR}"; RESULTS_FILE="${UP_DIR}/results.tsv"
+upgrade_reset_run_state
+: >"${RESULTS_FILE}"
+upgrade_prepare_snapshots
+cp "${UP_DIR}/snapshots/after-v1.json" "${UP_DIR}/snapshots/y.json"
+upgrade_write_attribution "${U}/ts-a.json" "${U}/ts-c.json" "${U}/k8s-ts.json" "${GROUP_CLUSTER}" "${UP_DIR}/report-tables.md" "${U}/candidate.log"
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
+if ! compgen -G "${UP_DIR}/provider-*.log" >/dev/null && [ ! -e "${UP_DIR}/baseline-not-ready.txt" ] \
+  && [ ! -e "${UP_DIR}/k8s-regressions.txt" ] && [ ! -e "${UP_DIR}/unreconciled-pgh-mig-repo-main-delta.txt" ] \
+  && [ ! -e "${UP_DIR}/snapshots/after-v1-filtered.json" ] && [ -e "${UP_DIR}/snapshots/y.json" ] \
+  && [ "${SNAP_BEFORE}/${SNAP_AFTER}" = "after-v1/after-v2" ] \
+  && [ ! -s "${UP_DIR}/results.tsv" ] && [ "$(grep -c '^## updated_at moves' "${UP_DIR}/report-tables.md")" = 1 ]; then
+  record PASS "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing"
+else
+  record FAIL "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing" \
+    "$(ls "${UP_DIR}" "${UP_DIR}/snapshots" | tr '\n' ' ') $(cat "${UP_DIR}/results.tsv" 2>/dev/null | head -c 200)"
 fi
 
 # --- entry point fails fast and names the input -----------------------------------

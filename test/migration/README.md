@@ -89,6 +89,7 @@ managed-resource state, the provider logs and the rendered fixtures.
 | `snapshot.sh` | GitHub state snapshot and diff |
 | `oob.sh` | out-of-band setup, seeding and cleanup through the GitHub API |
 | `cluster.sh` | builds, control plane, local package and image loading, managed-resource state |
+| `upgrade-compare.sh` | the upgrade scenario's comparisons: which objects the GitHub comparison narrows, the Kubernetes regression check with its re-read, and the attribution of `updated_at` moves |
 | `scenario.sh`, `scenario-upgrade.sh`, `scenario-adopt-cluster.sh`, `scenario-adopt-namespaced.sh`, `adopt-common.sh` | the three drivers and what they share (`adopt-common.sh` holds the full adoption flow, `run_adopt_full <cluster\|namespaced>`) |
 | `adopt-derive.sh` | derives the adoption manifests from the v1 fixtures (both scopes), the reference twins, the cluster-scoped twins and the both-scopes Teams; the evaluation helpers of the expectation tables and the both-scopes verdicts |
 | `expect-adopt-nested.tsv` | what `status.atProvider` must report for every nested sub-object of `coverage.tsv` and for the fields an Observe-only object omits, against the GitHub snapshot (scenarios (b) and (c)) |
@@ -275,13 +276,25 @@ be back where it started.
    poll cycles, snapshot again.
 4. Assert:
    * the two GitHub snapshots are identical: same IDs, same settings, same
-     timestamps (**no recreate, no write**);
-   * no managed resource was deleted, recreated, renamed, or lost Ready/Synced;
+     timestamps (**no recreate, no write**). Two kinds of object are narrowed first,
+     because the candidate completes work the baseline never did, and each is reported as
+     INFO: an organization variable that is not Synced on the baseline (it never existed on
+     GitHub, so it is left out), and a repository listed as not settled on the baseline
+     (its numeric IDs are still compared; its settings, branch protection and own
+     timestamp are reported as a delta in `unreconciled-<repository>-delta.txt`). An
+     object that was Synced and Ready on the baseline is never narrowed;
+   * no managed resource was deleted, recreated, renamed, or lost Ready/Synced. An object
+     that was Ready and is read as `Ready=False`, `Synced=True` with a Ready message starting
+     `drift:` is read again after one poll period and fails only if it is still not Ready;
    * `status.atProvider.id` is populated on the seven kinds that gain it, and the
      numeric ID of `OrganizationWebhook` and `RunnerGroup` is still GitHub's;
    * the webhook's `writeConnectionSecretToRef` secret is byte-identical;
    * the candidate's logs contain no panic.
-5. Record, without asserting: what happens to `spec.publishConnectionDetailsTo`, the
+5. `report.md` lists every `updated_at` that moved between the two snapshots and says whether
+   the candidate's log has a create or update line for the managed resource that owns it. A
+   move on an object with no such line was made by something else; the strict timestamp
+   assertion is left as it is.
+6. Record, without asserting: what happens to `spec.publishConnectionDetailsTo`, the
    deprecated `spec.providerRef`, the externally published secret, and the objects
    with non-default management policies and `Orphan` deletion.
 
