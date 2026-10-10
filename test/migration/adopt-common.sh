@@ -203,8 +203,8 @@ run_adopt_full() {
 
   scenario_begin "adopt-${scope}"
   # The evidence directory is reused between runs: start the tables empty.
-  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt
-  for t in mr nested change refs both; do : >"${EVIDENCE_DIR}/table-${t}.tsv"; done
+  rm -f "${EVIDENCE_DIR}/report-tables.md" "${EVIDENCE_DIR}"/both-*-verdict.txt "${EVIDENCE_DIR}/changes-echo.tsv"
+  for t in mr nested change refs both notready; do : >"${EVIDENCE_DIR}/table-${t}.tsv"; done
   use_candidate_tools
   require_rate_budget
   fetch_baseline
@@ -365,6 +365,7 @@ adopt_observe_phase() {
   ADOPT_COUNT="$(find "${EVIDENCE_DIR}/rendered/full" -name '*.yaml' | wc -l)"
   [ "${ADOPT_COUNT}" -gt 0 ] || die "no v1 object was Synced on the baseline: nothing to adopt"
   [ "${ADOPT_SCOPE}" != namespaced ] || adopt_prepare_namespaces
+  adopt_restore_conn_secrets "${ADOPT_SCOPE}" "${EVIDENCE_DIR}/rendered/observe"
 
   log "applying ${ADOPT_COUNT} Observe-only adoption manifests (and the drift probe)"
   since="$(now_utc)"
@@ -397,23 +398,41 @@ adopt_observe_phase() {
   kc delete "$(plural_of Team).${ADOPT_GROUP}" "${ADOPT_PROBE_NAME}" ${nsargs[@]+"${nsargs[@]}"} --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
 }
 
-# adopt_prepare_namespaces -- what the namespaced objects read from their own namespace:
-# the Secret the webhook fixtures name, and the connection secrets the baseline wrote under
-# the names the objects give (an empty connection secret when the baseline left none).
+# adopt_prepare_namespaces -- what the namespaced objects read from their own namespace: the
+# namespaces and the Secret the webhook fixtures name.
 adopt_prepare_namespaces() {
-  local ns f cname n=0
+  local ns
   for ns in "${ADOPT_NS_A}" "${ADOPT_NS_B}"; do
     kc create namespace "${ns}" --dry-run=client -o yaml | kc apply -f - >/dev/null
     yq "select(.metadata.name == \"pgh-mig-hook-secret\") | .metadata.namespace = \"${ns}\"" "${EVIDENCE_DIR}/rendered/v1/00-prerequisites.yaml" \
       | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "applying the webhook Secret in ${ns} failed"
   done
-  for f in "${EVIDENCE_DIR}"/rendered/observe/*.yaml; do
-    read -r ns cname < <(yq -o=json -I=0 '.' "${f}" | jq -r '[.metadata.namespace, (.spec.writeConnectionSecretToRef.name // "-")] | @tsv')
+  log "prepared ${ADOPT_NS_A} and ${ADOPT_NS_B}: the webhook Secret"
+}
+
+# adopt_restore_conn_secrets <cluster|namespaced> <manifest dir> -- the connection secrets the
+# baseline wrote, put back for the objects that name one through writeConnectionSecretToRef. A webhook
+# that holds its secret in secretKeyRef cannot read it back from GitHub (it is masked), so the
+# controller compares against the applied value recorded in the object's connection secret; the
+# baseline's secrets are owned by its objects and go with them (baseline-conn-secrets.json keeps
+# them), which models a user who keeps the applied-secret records. The Secret goes where the new
+# object reads it: its own namespace for a namespaced object (an empty one when the baseline wrote
+# none), the namespace named in writeConnectionSecretToRef for a cluster-scoped one (nothing when the
+# baseline wrote none). A manifest without writeConnectionSecretToRef restores nothing.
+adopt_restore_conn_secrets() {
+  local scope="$1" dir="$2" f ns cname n=0 secrets="${EVIDENCE_DIR}/baseline-conn-secrets.json" have
+  for f in "${dir}"/*.yaml; do
+    [ -e "${f}" ] || continue
+    read -r ns cname < <(yq -o=json -I=0 '.' "${f}" | jq -r --arg cns "${CROSSPLANE_NS}" '
+      [((.spec.writeConnectionSecretToRef.namespace // .metadata.namespace // $cns) | if . == "" then "-" else . end),
+       (.spec.writeConnectionSecretToRef.name // "-")] | join(" ")')
     [ "${cname}" != "-" ] || continue
-    if jq -e --arg n "${cname}" 'any(.[]; .metadata.name == $n)' "${EVIDENCE_DIR}/baseline-conn-secrets.json" >/dev/null 2>&1; then
-      jq -c --arg n "${cname}" --arg ns "${ns}" '.[] | select(.metadata.name == $n) | .metadata.namespace = $ns' "${EVIDENCE_DIR}/baseline-conn-secrets.json" \
-        | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "copying the connection secret ${cname} into ${ns} failed"
-    else
+    have=no
+    jq -e --arg n "${cname}" 'any(.[]; .metadata.name == $n)' "${secrets}" >/dev/null 2>&1 && have=yes
+    if [ "${have}" = yes ]; then
+      jq -c --arg n "${cname}" --arg ns "${ns}" '.[] | select(.metadata.name == $n) | .metadata.namespace = $ns' "${secrets}" \
+        | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "restoring the connection secret ${cname} in ${ns} failed"
+    elif [ "${scope}" = namespaced ]; then
       kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 <<YAML || warn "creating the connection secret ${cname} in ${ns} failed"
 apiVersion: v1
 kind: Secret
@@ -422,10 +441,12 @@ metadata:
   namespace: ${ns}
 type: connection.crossplane.io/v1alpha1
 YAML
+    else
+      continue
     fi
     n=$((n + 1))
   done
-  log "prepared ${ADOPT_NS_A} and ${ADOPT_NS_B}: the webhook Secret and ${n} connection secret(s)"
+  log "restored ${n} connection secret(s) of the baseline for the ${scope} objects"
 }
 
 # adopt_check_paths -- every object is on the ProviderConfig path adopt_target gives it, and
@@ -463,12 +484,13 @@ adopt_new_objects() {
 # window-<phase>.log and the snapshot of the phase (adopted | full); one row per
 # managed resource in the per-object table; PASS or FAIL for the aggregate checks.
 adopt_check_state() {
-  local phase="$1" state snap log kind name path ready synced id ext idcheck gid counts creates updates recs p total_p bad_p
+  local phase="$1" state snap log kind name path ready synced id ext rmsg idcheck gid counts creates updates recs p total_p bad_p
   local bad_state="" bad_id="" bad_writes="" bad_idle="" total=0
   state="${EVIDENCE_DIR}/k8s-${phase}.json"
   log="${EVIDENCE_DIR}/window-${phase}.log"
   snap="${EVIDENCE_DIR}/snapshots/$([ "${phase}" = observe ] && echo adopted || echo "${phase}").json"
-  while IFS=$'\t' read -r kind name path ready synced id ext; do
+  adopt_note_not_ready "${phase}" "${state}"
+  while IFS=$'\t' read -r kind name path ready synced id ext rmsg; do
     [ "${name}" = "${ADOPT_PROBE_NAME}" ] && continue
     total=$((total + 1))
     case "${kind}" in
@@ -484,13 +506,21 @@ adopt_check_state() {
     esac
     counts="$(log_counts "${log}" "${kind}" "${name}")"
     read -r creates updates recs <<<"${counts}"
-    [ "${ready}" = True ] && [ "${synced}" = True ] || bad_state+="${kind}/${name} Ready=${ready} Synced=${synced}; "
+    if [ "${ready}" = True ] && [ "${synced}" = True ]; then
+      :
+    else
+      bad_state+="${kind}/${name} Ready=${ready} Synced=${synced}${rmsg:+ (${rmsg:0:100})}; "
+    fi
     case "${idcheck}" in MISMATCH*) bad_id+="${kind}/${name} id=${id} external-name=${ext}; " ;; esac
-    { [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; } || bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
+    if [ "${creates}" -eq 0 ] && [ "${updates}" -eq 0 ]; then
+      :
+    else
+      bad_writes+="${kind}/${name} created ${creates} updated ${updates}; "
+    fi
     [ "${recs}" -gt 0 ] || bad_idle+="${kind}/${name}; "
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${phase}" "${path}" "${kind}" "${name}" "${ready}" "${synced}" "${id}" "${ext}" \
       "${idcheck}" "${creates}" "${updates}" "${recs}" "$(baseline_state "${EVIDENCE_DIR}/k8s-v1.json" "${kind}" "${name}")" >>"${EVIDENCE_DIR}/table-mr.tsv"
-  done < <(jq -r '.[] | [.kind, .name, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end)] | @tsv' "${state}")
+  done < <(jq -r '.[] | [.kind, .name, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .ready, .synced, ((.atProviderId // "-") | tostring), (.externalName | if . == "" then "-" else . end), ((.readyMessage // "") | gsub("[\t\n]"; " "))] | @tsv' "${state}")
 
   if [ -z "${bad_state}" ] && [ "${total}" -gt 0 ]; then
     record PASS "${phase}: every managed resource is Synced=True and Ready=True (${total} objects)"
@@ -523,6 +553,17 @@ adopt_check_state() {
   else
     record FAIL "${phase}: no managed resource issued a create or an update (provider debug log)" "${bad_writes}"
   fi
+}
+
+# adopt_note_not_ready <phase> <state.json> -- one row in table-notready.tsv for every object that is
+# not Ready: why it says so (the Ready condition's reason and message, and the Synced message), which
+# report.md prints in a table of its own.
+adopt_note_not_ready() {
+  jq -r --arg phase "$1" '.[] | select(.ready != "True")
+    | [$phase, (if .namespace == "" then "cluster" else "\(.namespace) (\(.providerConfigKind))" end), .kind, .name,
+       .ready, ((.readyReason // "") | if . == "" then "-" else . end), .synced, ((.readyMessage // "") | if . == "" then "-" else . end),
+       ((.syncedMessage // "") | if . == "" then "-" else . end)]
+    | map(tostring | gsub("[\t\n]"; " ")) | join("\t")' "$2" >>"${EVIDENCE_DIR}/table-notready.tsv"
 }
 
 # adopt_check_probe -- the drift probe reports the difference and writes nothing.
@@ -628,6 +669,16 @@ write_adopt_tables() {
         if ($6 == "PASS") { cmp[k]++; pass[k]++ } else if ($6 == "FAIL") { cmp[k]++; fail[k]++ } else if ($6 == "NOT-MIRRORED") { cmp[k]++; nm[k]++ } }
       END { for (k in keys) { split(k, f, "\t"); printf "| %s | %s | %d | %d | %d | %d | %d | %d | %d |\n", f[1], f[2], objs[k], ok[k], wr[k], cmp[k], pass[k], fail[k], nm[k] } }' \
       "${EVIDENCE_DIR}/table-mr.tsv" "${EVIDENCE_DIR}/table-nested.tsv" | sort
+    if [ -s "${EVIDENCE_DIR}/table-notready.tsv" ]; then
+      echo
+      echo "## Objects that are not Ready"
+      echo
+      echo "Why each says so: the Ready condition's reason and message and the Synced message, as read at the end of the phase (the drift probe is Ready=False by design)."
+      echo
+      echo "| Phase | Path | Kind | Object | Ready | Ready reason | Synced | Ready message | Synced message |"
+      echo "|---|---|---|---|---|---|---|---|---|"
+      awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9 }' "${EVIDENCE_DIR}/table-notready.tsv"
+    fi
     if [ -s "${EVIDENCE_DIR}/table-change.tsv" ]; then
       echo
       echo "## Deliberate change per kind"
@@ -717,9 +768,10 @@ adopt_changes_reflected() {
 
 adopt_change_phase() {
   local kind mr patch check allowed required note since applied=0 waived="" skipped="" counts creates updates recs
-  local nsargs=() changed_kinds=" " reflected on_github bad_unexpected bad_rewrite bad_other bad_unchanged_writes="" lacking_update=""
+  local nsargs=() changed_kinds=" " reflected on_github bad_unexpected bad_rewrite bad_other bad_unchanged_writes="" lacking_update="" slug value
   : >"${EVIDENCE_DIR}/changes-applied.tsv"
   : >"${EVIDENCE_DIR}/changes-allowed.txt"
+  : >"${EVIDENCE_DIR}/changes-echo.tsv"
   since="$(now_utc)"
   log "making one deliberate change per kind"
   while IFS=$'\t' read -r kind mr patch check allowed required note; do
@@ -735,6 +787,8 @@ adopt_change_phase() {
     if kc patch "$(plural_of "${kind}").${ADOPT_GROUP}" "${mr}" ${nsargs[@]+"${nsargs[@]}"} --type merge -p "${patch}" </dev/null >>"${EVIDENCE_DIR}/change.log" 2>&1; then
       printf '%s\t%s\t%s\n' "${kind}" "${mr}" "${check}" >>"${EVIDENCE_DIR}/changes-applied.tsv"
       printf '%s\n' "${allowed}" >>"${EVIDENCE_DIR}/changes-allowed.txt"
+      # A team's new description is also echoed inside the parent object of its child teams.
+      [ "${kind}" != Team ] || jq -r --arg n "${mr}" '(.spec.forProvider.description // empty) | [$n, tojson] | @tsv' <<<"${patch}" >>"${EVIDENCE_DIR}/changes-echo.tsv"
       applied=$((applied + 1))
     else
       record FAIL "the deliberate change to ${kind}/${mr} is accepted by the API server" "$(tail -1 "${EVIDENCE_DIR}/change.log")"
@@ -760,6 +814,9 @@ adopt_change_phase() {
 
   # GitHub: exactly the intended change.
   snapshot_changed_paths "${EVIDENCE_DIR}/snapshots/full.json" "${EVIDENCE_DIR}/snapshots/changed.json" >"${EVIDENCE_DIR}/changed-paths.tsv"
+  while IFS=$'\t' read -r slug value; do
+    team_echo_allowed "${EVIDENCE_DIR}/snapshots/changed.json" "${slug}" "${value}" >>"${EVIDENCE_DIR}/changes-allowed.txt"
+  done <"${EVIDENCE_DIR}/changes-echo.tsv"
   classify_changes "${EVIDENCE_DIR}/changed-paths.tsv" "${EVIDENCE_DIR}/changes-allowed.txt" >"${EVIDENCE_DIR}/changed-classified.txt"
   bad_unexpected="$(grep '^UNEXPECTED ' "${EVIDENCE_DIR}/changed-classified.txt" | head -5 | cut -d' ' -f2- | tr '\n' ';')"
   bad_rewrite="$(grep '^REWRITE ' "${EVIDENCE_DIR}/changed-classified.txt" | head -5 | cut -d' ' -f2- | tr '\n' ';')"
@@ -800,7 +857,9 @@ adopt_change_phase() {
   else
     record FAIL "no object that was not changed issued a create or an update" "${bad_unchanged_writes}"
   fi
-  bad_other="$(jq -r '.[] | select(.synced != "True" or .ready != "True") | "\(.kind)/\(.name) Ready=\(.ready) Synced=\(.synced)"' "${EVIDENCE_DIR}/k8s-change.json" | head -3 | tr '\n' ';')"
+  adopt_note_not_ready change "${EVIDENCE_DIR}/k8s-change.json"
+  bad_other="$(jq -r '.[] | select(.synced != "True" or .ready != "True")
+    | "\(.kind)/\(.name) Ready=\(.ready) Synced=\(.synced)\(if (.readyMessage // "") != "" then " (\(.readyMessage[0:100] | gsub("[\t\n]"; " ")))" else "" end)"' "${EVIDENCE_DIR}/k8s-change.json" | head -3 | tr '\n' ';')"
   [ -z "${bad_other}" ] || record FAIL "every object is Synced and Ready after the changes settled" "${bad_other}"
   write_adopt_tables
 }

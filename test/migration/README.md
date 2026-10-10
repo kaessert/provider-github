@@ -338,6 +338,13 @@ The full adoption flow: everything the baseline created is adopted, then fully m
    * the fields the move to crossplane-runtime v2 removes (`publishConnectionDetailsTo`,
      `providerRef`) are dropped.
 
+   Before the manifests are applied, the connection secrets the baseline wrote (the
+   `*-conn` Secrets its objects named in `writeConnectionSecretToRef`, kept before the
+   objects were deleted) are applied again for every manifest that names one, in the
+   namespace it names. The scenario thereby models a user who keeps the applied-secret
+   records (see the migration note below); scenario (c) does the same into the namespace
+   of each object.
+
    A drift probe is added: a second Observe-only `Team` over the parent team, whose
    declared description differs from GitHub's. Assert: every object Synced and Ready (the
    probe Synced and not Ready); UIDs new; `status.atProvider.id` equals the external name
@@ -366,10 +373,22 @@ The full adoption flow: everything the baseline created is adopted, then fully m
 7. Cleanup deletes the managed resources (the default policies delete the GitHub objects;
    the Membership keeps `Orphan`), removes the Provider and sweeps.
 
-`report.md` ends with three tables: per managed resource (phase, Ready, Synced,
+**Migration note: keep the connection secrets of webhooks that use `secretKeyRef`.** A
+webhook's secret cannot be read back from GitHub (it is masked), so the controller compares
+the secret in the spec against the applied value recorded in the object's
+`writeConnectionSecretToRef` Secret. That Secret is owned by the managed resource and is
+garbage-collected when the old object is deleted. Without it the adopting object reports
+Ready=False under Observe for the organization webhooks and for a Repository whose
+`webhooks[]` use `secretKeyRef` (Synced stays True), and the first full-management reconcile
+re-applies the hook once, rewriting it with the same values and recording the secret again. A run of this scenario that did not restore the
+Secrets measured exactly that: each of the three objects issued one Update and nothing else
+changed. Keep the Secrets and the objects are Ready from the first reconcile.
+
+`report.md` ends with the tables: per managed resource (phase, Ready, Synced,
 `status.atProvider.id`, external name, whether they agree, creates and updates in the
 provider log and the reconciles that make zero meaningful), per nested sub-object
-(phase, result, the two values when they differ), and per deliberate change. A run takes
+(phase, result, the two values when they differ), per deliberate change, and one row for every
+object that is not Ready with its Ready reason and message and its Synced message. A run takes
 about an hour and polls dozens of objects, which is why it checks the request budget
 first. (c) adds the reference and both-scopes steps to that, so it needs the budget as well.
 

@@ -43,7 +43,7 @@ REQLOG="${T}/requests.log"
 python3 "${HERE}/testdata/mockapi.py" "${T}/api" "${REQLOG}" >"${T}/port" 2>"${T}/mock.err" &
 MOCK_PID=$!
 trap 'kill "${MOCK_PID}" 2>/dev/null' EXIT
-for _ in $(seq 1 50); do [ -s "${T}/port" ] && break; sleep 0.1; done
+for _ in $(seq 1 300); do [ -s "${T}/port" ] && break; sleep 0.1; done
 PORT="$(cat "${T}/port")"
 [ -n "${PORT}" ] || die "the stand-in API did not start: $(cat "${T}/mock.err")"
 
@@ -775,6 +775,223 @@ else
   record FAIL "a new upgrade run clears the previous run's baseline list, provider logs, deltas, narrowed snapshots and report tables: a baseline that settled narrows nothing" \
     "$(ls "${UP_DIR}" "${UP_DIR}/snapshots" | tr '\n' ' ') $(cat "${UP_DIR}/results.tsv" 2>/dev/null | head -c 200)"
 fi
+
+# --- the reruns of the cluster-scoped adoption: what the first full run showed ----------------------
+# A directory of its own for the evidence these cases read and write; the run's is restored afterwards.
+# scenario.sh (assert_snapshots_identical) sources lib.sh again, which resets the run's state: keep it.
+saved_evidence="${EVIDENCE_DIR}"; saved_results="${RESULTS_FILE}"; saved_scenario="${SCENARIO}"
+# shellcheck source=scenario.sh
+. "${HERE}/scenario.sh"
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"; SCENARIO="${saved_scenario}"
+# shellcheck disable=SC2034  # read by render in lib.sh
+RUNTIME_ENV=/nonexistent
+rec() { local r="${RESULTS_FILE}"; RESULTS_FILE="${saved_results}"; record "$@"; RESULTS_FILE="${r}"; } # the verdicts go to the run's results
+RR="${T}/rerun"
+rm -rf "${RR}"
+mkdir -p "${RR}/snapshots"
+EVIDENCE_DIR="${RR}"; RESULTS_FILE="${RR}/results.tsv"; : >"${RESULTS_FILE}"
+
+# The connection secrets the baseline wrote come back for the objects that name one, in both scopes.
+cat >"${RR}/baseline-conn-secrets.json" <<'JSON'
+[{"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"secret":"YXBwbGllZA=="},"metadata":{"name":"pgh-mig-hook-wcs-conn"}},
+ {"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"secret":"cmVwbw=="},"metadata":{"name":"pgh-mig-repo-main-conn"}},
+ {"apiVersion":"v1","kind":"Secret","type":"connection.crossplane.io/v1alpha1","data":{"x":"eA=="},"metadata":{"name":"pgh-mig-unrelated-conn"}}]
+JSON
+KCLOG="${RR}/applied.jsonl"
+kc() { # records what is applied: one JSON document per line
+  case "$1" in
+    apply) yq -o=json -I=0 '.' >>"${KCLOG}" ;;
+    *) return 0 ;;
+  esac
+}
+restored() { # restored -- "<namespace>/<name>:<data keys>" of everything applied, sorted
+  jq -r '"\(.metadata.namespace)/\(.metadata.name):\((.data // {}) | keys | join(","))"' "${KCLOG}" 2>/dev/null | sort | paste -sd' '
+}
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${T}/derived" 2>/dev/null
+cluster_restored="$(restored)"
+: >"${KCLOG}"
+adopt_restore_conn_secrets namespaced "${T}/ns-observe" 2>/dev/null
+ns_restored="$(restored)"
+if [ "${cluster_restored}" = "crossplane-system/pgh-mig-hook-wcs-conn:secret crossplane-system/pgh-mig-repo-main-conn:secret" ]; then
+  rec PASS "cluster scope: the baseline's connection secrets named by the Observe manifests are applied into the namespace the manifests name, and no others (a secret the baseline never wrote is not invented)"
+else
+  rec FAIL "cluster scope: the baseline's connection secrets named by the Observe manifests are applied into the namespace the manifests name, and no others" "got: ${cluster_restored}"
+fi
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${T}/derived" 2>/dev/null
+cluster_data="$(jq -r 'select(.metadata.name == "pgh-mig-hook-wcs-conn") | .data.secret' "${KCLOG}")"
+if [ "${cluster_data}" = "YXBwbGllZA==" ] \
+  && [ "${ns_restored}" = "pgh-mig-ns-a/pgh-mig-repo-main-conn:secret pgh-mig-ns-b/pgh-mig-hook-ess-wcs-conn: pgh-mig-ns-b/pgh-mig-hook-wcs-conn:secret" ]; then
+  rec PASS "namespaced scope: the baseline's connection secrets go into the namespace of the object that names them, with their data; one the baseline never wrote is created empty"
+else
+  rec FAIL "namespaced scope: the baseline's connection secrets go into the namespace of the object that names them, with their data; one the baseline never wrote is created empty" "cluster data ${cluster_data}; namespaced: ${ns_restored}"
+fi
+mkdir -p "${RR}/noconn"
+cp "${T}/derived"/*-team-pgh-mig-team-parent.yaml "${RR}/noconn/"
+: >"${KCLOG}"
+adopt_restore_conn_secrets cluster "${RR}/noconn" 2>/dev/null
+adopt_restore_conn_secrets namespaced "${RR}/noconn" 2>/dev/null
+if [ ! -s "${KCLOG}" ]; then
+  rec PASS "a manifest without writeConnectionSecretToRef restores nothing, in either scope"
+else
+  rec FAIL "a manifest without writeConnectionSecretToRef restores nothing, in either scope" "applied: $(restored)"
+fi
+
+# The Ready message of every object that is not Ready, with the reason, is in the report.
+cat >"${RR}/k8s-observe.json" <<'JSON'
+[{"kind":"Organization","name":"pgh-mig-org","namespace":"","providerConfigKind":"ProviderConfig","ready":"False","synced":"True","readyReason":"Unavailable","readyMessage":"drift: description: GitHub has \"a|b\", spec declares \"c\"","syncedMessage":""},
+ {"kind":"Team","name":"pgh-mig-team-parent","namespace":"","providerConfigKind":"ProviderConfig","ready":"True","synced":"True","readyReason":"Available","readyMessage":"","syncedMessage":""},
+ {"kind":"Repository","name":"pgh-mig-repo-main","namespace":"","providerConfigKind":"ProviderConfig","ready":"False","synced":"False","readyReason":"","readyMessage":"","syncedMessage":"observe failed: x"}]
+JSON
+for t in mr nested change refs both notready; do : >"${RR}/table-${t}.tsv"; done
+adopt_note_not_ready observe "${RR}/k8s-observe.json"
+write_adopt_tables
+if [ "$(wc -l <"${RR}/table-notready.tsv")" -eq 2 ] \
+  && grep -qF '| observe | cluster | Organization | pgh-mig-org | False | Unavailable | True | drift: description: GitHub has "a\|b", spec declares "c" | - |' "${RR}/report-tables.md" \
+  && grep -qF '| observe | cluster | Repository | pgh-mig-repo-main | False | - | False | - | observe failed: x |' "${RR}/report-tables.md" \
+  && ! grep -q 'pgh-mig-team-parent' "${RR}/table-notready.tsv"; then
+  rec PASS "the report prints the Ready reason, the Ready message and the Synced message of every object that is not Ready, and nothing for a Ready one"
+else
+  rec FAIL "the report prints the Ready reason, the Ready message and the Synced message of every object that is not Ready, and nothing for a Ready one" "$(cat "${RR}/table-notready.tsv")"
+fi
+
+# --- a changed team's description, echoed inside the parent object of its child under branch protection
+# Two repositories' protections list the child team (restrictions, reviews); GitHub embeds the parent.
+echo_snapshot() { # echo_snapshot <out> <parent description> <child team description> <parent slug>
+  jq -c --arg pd "$2" --arg cd "$3" --arg ps "$4" '
+    .repos["pgh-mig-repo-main"].branchProtection = {main: {
+      restrictions: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]},
+      required_pull_request_reviews: {
+        dismissal_restrictions: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]},
+        bypass_pull_request_allowances: {teams: [{slug: "pgh-mig-team-child", description: $cd, parent: {slug: $ps, description: $pd}}]}}}}' \
+    "${T}/a.json" >"$1"
+}
+echo_snapshot "${RR}/echo-before.json" "old parent" "child" pgh-mig-team-parent
+echo_snapshot "${RR}/echo-after.json" "pgh-mig parent team (changed)" "child" pgh-mig-team-parent
+printf '%s\n' '^teams/pgh-mig-team-parent/description$' >"${RR}/echo-allowed.txt"
+team_echo_allowed "${RR}/echo-after.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"' >>"${RR}/echo-allowed.txt"
+classify_with() { # classify_with <before> <after> <slug> <json value> -- UNEXPECTED/REWRITE lines
+  local allowed="${RR}/allowed.$$.txt"
+  printf '%s\n' '^teams/pgh-mig-team-parent/description$' >"${allowed}"
+  team_echo_allowed "$2" "$3" "$4" >>"${allowed}"
+  snapshot_changed_paths "$1" "$2" >"${RR}/paths.tsv"
+  classify_changes "${RR}/paths.tsv" "${allowed}"
+}
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-after.json" >"${RR}/echo-after-team.json"
+jq -c '.teams["pgh-mig-team-parent"].description = "old parent"' "${RR}/echo-before.json" >"${RR}/echo-before-team.json"
+allowed_lines="$(grep -c . "${RR}/echo-allowed.txt")"
+if [ -z "$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-after-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')" ] && [ "${allowed_lines}" -eq 4 ]; then
+  rec PASS "the changed team's new description is allowed where GitHub echoes it as the parent of a team under branch protection (restrictions, dismissal restrictions, bypass allowances)"
+else
+  rec FAIL "the changed team's new description is allowed where GitHub echoes it as the parent of a team under branch protection" "$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-after-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"' | head -3 | tr '\n' ';') allowed regexes: ${allowed_lines}"
+fi
+# A parent echo holding another value than the one the harness set is a change.
+echo_snapshot "${RR}/echo-other-value.json" "somebody else's text" "child" pgh-mig-team-parent
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-other-value.json" >"${RR}/echo-other-value-team.json"
+other_value="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-other-value-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# The description of the child team itself, in the same place, is not the parent's echo.
+echo_snapshot "${RR}/echo-child.json" "pgh-mig parent team (changed)" "child edited" pgh-mig-team-parent
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-child.json" >"${RR}/echo-child-team.json"
+child_desc="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-child-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# A parent that is another team than the changed one.
+echo_snapshot "${RR}/echo-other-parent.json" "pgh-mig parent team (changed)" "child" pgh-mig-team-other
+jq -c '.teams["pgh-mig-team-parent"].description = "pgh-mig parent team (changed)"' "${RR}/echo-other-parent.json" >"${RR}/echo-other-parent-team.json"
+other_parent="$(classify_with "${RR}/echo-before-team.json" "${RR}/echo-other-parent-team.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+# Any other path under the same protection.
+jq -c '.repos["pgh-mig-repo-main"].branchProtection.main.restrictions.teams[0].parent.privacy = "secret"' "${RR}/echo-after-team.json" >"${RR}/echo-other-path.json"
+other_path="$(classify_with "${RR}/echo-after-team.json" "${RR}/echo-other-path.json" pgh-mig-team-parent '"pgh-mig parent team (changed)"')"
+if [ "$(grep -c '^UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/.*/parent/description$' <<<"${other_value}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/.*/teams/0/description$' <<<"${child_desc}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/description$' <<<"${child_desc}")" -eq 0 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/description$' <<<"${other_parent}")" -eq 3 ] \
+  && [ "$(grep -c '^UNEXPECTED .*/parent/slug$' <<<"${other_parent}")" -eq 3 ] \
+  && [ "${other_path}" = "UNEXPECTED repos/pgh-mig-repo-main/branchProtection/main/restrictions/teams/0/parent/privacy" ]; then
+  rec PASS "a parent echo with another value, the description of the child team itself, a different parent and any other path under branch protection are still unexpected changes"
+else
+  rec FAIL "a parent echo with another value, the description of the child team itself, a different parent and any other path under branch protection are still unexpected changes" \
+    "value: $(head -c 150 <<<"${other_value}" | tr '\n' ';') child: $(head -c 150 <<<"${child_desc}" | tr '\n' ';') parent: $(head -c 150 <<<"${other_parent}" | tr '\n' ';') path: ${other_path}"
+fi
+
+# --- the Organization is checked like every other kind -------------------------------------------------
+ADOPT_SCOPE=cluster; ADOPT_GROUP="${GROUP_CLUSTER}"
+: "${ADOPT_SCOPE}${ADOPT_GROUP}" # read by adopt_check_state
+DRIFT_MSG='drift: actions.enabledRepos: GitHub has [demo-repository-1 demo-repository-2], spec declares [pgh-mig-repo-main pgh-mig-repo-rules]'
+# state_case <phase> <kind> <ready> <ready message> -- sets CASE_FAILS and CASE_WARNS for one Synced object
+# of the kind that may carry one Update line in the window (CASE_UPDATE_AT).
+state_case() {
+  local phase="$1" kind="$2" ready="$3" msg="$4"
+  : >"${RESULTS_FILE}"
+  jq -n --arg k "${kind}" --arg r "${ready}" --arg m "${msg}" '
+    [{kind: $k, name: "pgh-mig-obj", namespace: "", providerConfigKind: "ProviderConfig", ready: $r, synced: "True", readyMessage: $m, readyReason: "",
+      syncedMessage: "", atProviderId: "pgh-mig-obj", externalName: "pgh-mig-obj"}]' >"${RR}/k8s-${phase}.json"
+  mkdir -p "${RR}/snapshots"
+  echo '{}' >"${RR}/snapshots/adopted.json"; echo '{}' >"${RR}/snapshots/full.json"
+  {
+    printf '2026-10-10T15:25:00Z\tDEBUG\tprovider-github\tReconciling\t{"controller": "managed/%s.organizations.github.crossplane.io", "request": {"name":"pgh-mig-obj"}}\n' "$(tr 'A-Z' 'a-z' <<<"${kind}")"
+    [ -z "${CASE_UPDATE_AT:-}" ] || printf '%s\tDEBUG\tprovider-github\tSuccessfully requested update of external resource\t{"controller": "managed/%s.organizations.github.crossplane.io", "request": {"name":"pgh-mig-obj"}}\n' "${CASE_UPDATE_AT}" "$(tr 'A-Z' 'a-z' <<<"${kind}")"
+  } >"${RR}/window-${phase}.log"
+  for t in mr nested change refs both notready; do : >"${RR}/table-${t}.tsv"; done
+  adopt_check_state "${phase}" 2>/dev/null
+  CASE_FAILS="$(grep -c '^FAIL' "${RESULTS_FILE}" || true)"
+  CASE_WARNS="$(grep -c '^WARN' "${RESULTS_FILE}" || true)"
+}
+CASE_UPDATE_AT=""
+state_case observe Organization False "${DRIFT_MSG}"
+org_notready="${CASE_FAILS}/${CASE_WARNS}"; org_fail_text="$(grep '^FAIL' "${RESULTS_FILE}")"
+state_case observe Team False "${DRIFT_MSG}"
+team_notready="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization True ""
+org_ready="${CASE_FAILS}/${CASE_WARNS}"
+CASE_UPDATE_AT="2026-10-10T15:26:10Z"
+state_case full Organization True ""
+org_update_full="${CASE_FAILS}/${CASE_WARNS}"
+state_case observe Organization True ""
+org_update_observe="${CASE_FAILS}/${CASE_WARNS}"
+CASE_UPDATE_AT=""
+if [ "${org_notready}" = 1/0 ] && [ "${team_notready}" = 1/0 ] && [ "${org_ready}" = 0/0 ] \
+  && [ "${org_update_full}" = 1/0 ] && [ "${org_update_observe}" = 1/0 ] && [[ "${org_fail_text}" == *"drift: actions.enabledRepos"* ]]; then
+  rec PASS "an Organization that is Ready=False, or issues an Update in a zero-write window, fails like any other kind (and the failure carries the Ready message)"
+else
+  rec FAIL "an Organization that is Ready=False, or issues an Update in a zero-write window, fails like any other kind (and the failure carries the Ready message)" \
+    "Organization not Ready ${org_notready}, Team not Ready ${team_notready}, Organization Ready ${org_ready}, update under full ${org_update_full}, update under Observe ${org_update_observe}: ${org_fail_text:0:300}"
+fi
+
+# An Organization that is Ready=False is not settled for the wait loops.
+mr_state() { cat "${RR}/mr-state.json"; }
+jq -n --arg m "${DRIFT_MSG}" '[{kind:"Organization",name:"pgh-mig-org",ready:"False",synced:"True",readyMessage:$m},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_org=1; adopt_settled "${GROUP_CLUSTER}" 2 && settled_org=0
+jq -n '[{kind:"Organization",name:"pgh-mig-org",ready:"True",synced:"True",readyMessage:""},{kind:"Team",name:"pgh-mig-team-parent",ready:"True",synced:"True",readyMessage:""}]' >"${RR}/mr-state.json"
+settled_ok=0; adopt_settled "${GROUP_CLUSTER}" 2 && settled_ok=1
+if [ "${settled_org}" = 1 ] && [ "${settled_ok}" = 1 ]; then
+  rec PASS "waiting for the adopted objects does not accept a Ready=False Organization as settled"
+else
+  rec FAIL "waiting for the adopted objects does not accept a Ready=False Organization as settled" "not-Ready Organization rejected ${settled_org}, all Ready accepted ${settled_ok}"
+fi
+unset -f mr_state
+
+# The zero-write comparison has no Organization exception: a moved description fails it.
+cp "${T}/a.json" "${RR}/snapshots/orphaned.json"
+jq -c '.org.description = "pgh-test"' "${T}/a.json" >"${RR}/snapshots/adopted.json"
+: >"${RESULTS_FILE}"
+assert_snapshots_identical "zero-write case" orphaned adopted 2>/dev/null
+org_desc_verdict="$(awk -F'\t' '$2 == "zero-write case" { print $1 }' "${RESULTS_FILE}")"
+if [ "${org_desc_verdict}" = FAIL ]; then
+  rec PASS "a change to the organization's own values fails the zero-write snapshot comparison like any other"
+else
+  rec FAIL "a change to the organization's own values fails the zero-write snapshot comparison like any other" "verdict: ${org_desc_verdict:-none}"
+fi
+
+# The Ready message and reason reach the not-Ready table of the report.
+: >"${RR}/table-notready.tsv"
+jq -n '[{kind:"Repository",name:"pgh-mig-repo-main",namespace:"",providerConfigKind:"ProviderConfig",ready:"False",readyReason:"Unavailable",readyMessage:"hook secret differs",synced:"True",syncedMessage:""}]' >"${RR}/k8s-notready.json"
+adopt_note_not_ready observe "${RR}/k8s-notready.json"
+if grep -q $'^observe\tcluster\tRepository\tpgh-mig-repo-main\tFalse\tUnavailable\tTrue\thook secret differs\t-$' "${RR}/table-notready.tsv"; then
+  rec PASS "every not-Ready object gets a row with its Ready reason and Ready message"
+else
+  rec FAIL "every not-Ready object gets a row with its Ready reason and Ready message" "$(cat "${RR}/table-notready.tsv")"
+fi
+EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
 
 # --- entry point fails fast and names the input -----------------------------------
 creds=(PROVIDER_GITHUB_APP_ID=1 PROVIDER_GITHUB_APP_INSTALLATION_ID=2 "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64=$(printf x | base64)")
