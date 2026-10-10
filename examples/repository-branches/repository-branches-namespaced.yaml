@@ -1,0 +1,27 @@
+# A repository created from a template with all of the template's branches, so
+# it has more than one branch from the start. Branch protection rules and the
+# default branch can only be applied to a repository that already has a
+# branch, so this example is the one that exercises them.
+#
+# The template repository must exist in the organization before the managed
+# resource is created and must carry at least two branches.
+apiVersion: organizations.github.m.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-e2e-repository-branches-ns
+  namespace: default
+spec:
+  forProvider:
+    org: pgh-test
+    description: Crossplane provider-github example repository created from a template
+    private: true
+    # GitHub only deletes a repository when forceDelete is true; without it the
+    # managed resource cannot be removed.
+    forceDelete: true
+    createFromTemplate:
+      owner: pgh-test
+      repo: pgh-e2e-template
+      includeAllBranches: true
+  providerConfigRef:
+    kind: ProviderConfig
+    name: default

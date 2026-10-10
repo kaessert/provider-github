@@ -1,0 +1,131 @@
+for: organizations.github.crossplane.io/v1alpha1/Repository
+meta.upbound.io/example-id: organizations/v1alpha1/repository
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-repository-branches.sh
+crossplane.io/update-test: |
+  - field: branchProtectionRules
+    value:
+      - branch: master
+        enforceAdmins: false
+        requireLinearHistory: true
+    expect:
+      - branch: master
+        enforceAdmins: false
+        requireLinearHistory: true
+        allowForcePushes: false
+        allowDeletions: false
+        requiredConversationResolution: false
+        lockBranch: false
+        allowForkSyncing: false
+        requireSignedCommits: false
+  - field: branchProtectionRules
+    value: []
+  - field: defaultBranch
+    value: test
+  - field: defaultBranch
+    value: master
+  - field: description
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#description
+  - field: topics
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#topics
+  - field: hasIssues
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#hasIssues
+  - field: hasProjects
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#hasProjects
+  - field: hasWiki
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#hasWiki
+  - field: hasDiscussions
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#hasDiscussions
+  - field: deleteBranchOnMerge
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#deleteBranchOnMerge
+  - field: allowUpdateBranch
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#allowUpdateBranch
+  - field: allowAutoMerge
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#allowAutoMerge
+  - field: mergeCommitMessage
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#mergeCommitMessage
+  - field: mergeCommitTitle
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#mergeCommitTitle
+  - field: squashMergeCommitMessage
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#squashMergeCommitMessage
+  - field: squashMergeCommitTitle
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#squashMergeCommitTitle
+  - field: allowRebaseMerge
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#allowRebaseMerge
+  - field: allowMergeCommit
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#allowMergeCommit
+  - field: allowSquashMerge
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#allowSquashMerge
+  - field: isTemplate
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#isTemplate
+  - field: private
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#private
+  - field: permissions.teams
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#permissions.teams
+  - field: webhooks
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#webhooks
+  - field: repositoryRules
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#repositoryRules
+  - field: archived
+    skip:
+      reason: covered-elsewhere
+      by: ../repository/repository.yaml#archived
+  - field: permissions.users
+    skip:
+      reason: fixture-missing
+      evidence: "the test organization has no collaborator login set aside for the suite, and adding a person to a repository notifies them"
+  - field: createFromTemplate
+    skip:
+      reason: fixture-missing
+      evidence: "create-time only: the template is applied when the repository is created, and an existing repository cannot be re-created from another template"
+  - field: createFork
+    skip:
+      reason: fixture-missing
+      evidence: "create-time only: the repository is created from a template, and an existing repository cannot be turned into a fork"
+  - field: forceDelete
+    skip:
+      reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"

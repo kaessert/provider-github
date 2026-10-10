@@ -48,8 +48,8 @@ func TestNamespacedExamplesDecodeStrictly(t *testing.T) {
 			files = append(files, file)
 		}
 	}
-	if len(files) != 9 {
-		t.Fatalf("found %d namespaced examples, want 9", len(files))
+	if len(files) != 10 {
+		t.Fatalf("found %d namespaced examples, want 10", len(files))
 	}
 
 	for _, file := range files {
