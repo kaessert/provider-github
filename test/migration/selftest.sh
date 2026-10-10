@@ -664,33 +664,56 @@ else
 fi
 
 # baseline_case <name> <state json> [wait-branch exit status] -- one settle of the Repository fixtures
-# against a stand-in cluster that shows <state json>; the stand-in becomes Synced once the protection is seeded.
+# against a stand-in cluster that shows <state json>; the stand-in becomes Synced and Ready once the
+# protection is seeded. CASE_SEQ (an array of state JSONs) is shown one per look, before <state json>
+# holds; CASE_AFTER (an array) replaces what the following looks show once the protection is seeded.
 # Sets CASE_RC (the function's status; 99 when it exited), CASE_OOB (the calls to oob.sh) and CASE_RESULTS.
+CASE_SEQ=()
+CASE_AFTER=()
 baseline_case() {
-  local state="$2" wb="${3:-0}" d="${BL}/$1"
-  mkdir -p "${d}"
+  local state="$2" wb="${3:-0}" d="${BL}/$1" i
+  rm -rf "${d}"
+  mkdir -p "${d}/q" "${d}/after"
   printf '%s' "${state}" >"${d}/state.json"
+  for i in "${!CASE_SEQ[@]}"; do printf '%s' "${CASE_SEQ[$i]}" >"${d}/q/$((i + 1))"; done
+  for i in "${!CASE_AFTER[@]}"; do printf '%s' "${CASE_AFTER[$i]}" >"${d}/after/$((i + 1))"; done
   : >"${d}/oob.log"
   ( # a subshell: the stand-ins and the exit of the function stay inside it
     EVIDENCE_DIR="${d}"; RESULTS_FILE="${d}/results.tsv"; : >"${RESULTS_FILE}"
-    mr_state() { cat "${d}/state.json"; }
+    mr_state() {
+      local next
+      next="$(ls "${d}/q" | head -1)"
+      if [ -n "${next}" ]; then mv "${d}/q/${next}" "${d}/state.json"; fi
+      cat "${d}/state.json"
+    }
     baseline_oob() {
       echo "$*" >>"${d}/oob.log"
       case "$1" in
         wait-branch) return "${wb}" ;;
-        seed-protection) jq -c 'map(if .name == "pgh-mig-repo-main" then .synced = "True" | .syncedMessage = "" else . end)' "${d}/state.json" >"${d}/state.new" && mv "${d}/state.new" "${d}/state.json" ;;
+        seed-protection)
+          if [ -n "$(ls "${d}/after")" ]; then
+            rm -f "${d}"/q/*
+            for f in "${d}"/after/*; do mv "${f}" "${d}/q/$(basename "${f}")"; done
+          else
+            jq -c 'map(if .name == "pgh-mig-repo-main" then .synced = "True" | .ready = "True" | .syncedMessage = "" else . end)' "${d}/state.json" >"${d}/state.new" && mv "${d}/state.new" "${d}/state.json"
+          fi
+          ;;
       esac
     }
-    wait_until() { shift 2; for _ in 1 2 3; do "$@" && return 0; done; return 1; }
+    wait_until() { shift 2; for _ in 1 2 3 4 5 6; do "$@" && return 0; done; return 1; }
     baseline_settle_protected_repos "${T}/ex" "${GROUP_CLUSTER}" 30
   ) >"${d}/out.txt" 2>&1
   CASE_RC=$?
   CASE_OOB="$(paste -sd';' "${d}/oob.log" | sed "s|${T}|T|g")"
   CASE_RESULTS="$(cut -f1,2 "${d}/results.tsv" 2>/dev/null | paste -sd'|')"
+  CASE_SEQ=()
+  CASE_AFTER=()
 }
 STUCK='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"False","ready":"False","syncedMessage":"cannot observe external resource: error: branch is not protected"}]'
 OTHER='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"False","ready":"False","syncedMessage":"cannot create external resource: HTTP 403"}]'
 DONE='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"True","ready":"True","syncedMessage":""}]'
+CREATING='[{"kind":"Repository","name":"pgh-mig-repo-main","synced":"True","ready":"False","readyReason":"Creating","syncedMessage":"","readyMessage":""}]'
+PENDING_DETAIL="$(printf '%s' "${CREATING}" >"${BL}/creating.json"; baseline_protection_state "${BL}/creating.json" pgh-mig-repo-main)"
 
 baseline_case stuck "${STUCK}"
 if [ "${CASE_RC}" = 0 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30;seed-protection T/ex pgh-mig-repo-main" ] \
@@ -711,6 +734,58 @@ if [ "${CASE_RC}" = 1 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main
   record PASS "a Repository that is not Synced for any other reason is not seeded and the wait reports it unsettled"
 else
   record FAIL "a Repository that is not Synced for any other reason is not seeded and the wait reports it unsettled" "rc ${CASE_RC}; oob: ${CASE_OOB}"
+fi
+# A just-created, never-observed object is Synced=True and Ready=False (Creating): not settled.
+if [ "${PENDING_DETAIL}" = pending ] \
+  && [ "$(baseline_protection_state "${BL}/creating.json" pgh-mig-absent)" = pending ] \
+  && [ "$(printf '%s' "${DONE}" >"${BL}/done.json"; baseline_protection_state "${BL}/done.json" pgh-mig-repo-main)" = settled ] \
+  && [ "$(printf '%s' "${STUCK}" >"${BL}/stuck.json"; baseline_protection_state "${BL}/stuck.json" pgh-mig-repo-main)" = unprotected ]; then
+  record PASS "a just-created Repository (Synced=True, Ready=False, Creating) is pending; only Synced=True and Ready=True is settled; 'branch is not protected' is still unprotected"
+else
+  record FAIL "a just-created Repository (Synced=True, Ready=False, Creating) is pending; only Synced=True and Ready=True is settled; 'branch is not protected' is still unprotected" \
+    "creating: ${PENDING_DETAIL}"
+fi
+# The failure seen live: the first look is the transient Creating state, the next one the deadlock.
+# The object is seeded exactly once and must then reach Ready=True; "applied itself" is not recorded.
+CASE_SEQ=("${CREATING}" "${STUCK}" "${STUCK}")
+CASE_AFTER=("${CREATING}" "${DONE}")
+baseline_case creating-then-stuck "${DONE}"
+if [ "${CASE_RC}" = 0 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30;seed-protection T/ex pgh-mig-repo-main" ] \
+  && [[ "${CASE_RESULTS}" == "INFO	branch protection of pgh-mig-repo-main seeded out-of-band" ]]; then
+  record PASS "a Repository seen Synced=True/Ready=False (Creating) that then reports 'branch is not protected' is seeded exactly once, then settles at Ready=True; 'applied itself' is not recorded"
+else
+  record FAIL "a Repository seen Synced=True/Ready=False (Creating) that then reports 'branch is not protected' is seeded exactly once, then settles at Ready=True; 'applied itself' is not recorded" \
+    "rc ${CASE_RC}; oob: ${CASE_OOB}; results: ${CASE_RESULTS}"
+fi
+# A seeded object that stays Synced=True/Ready=False is not settled: the run fails naming it.
+CASE_AFTER=("${CREATING}")
+baseline_case seeded-never-ready "${STUCK}"
+if [ "${CASE_RC}" = 1 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30;seed-protection T/ex pgh-mig-repo-main" ] \
+  && grep -q $'^FAIL\t.*\tRepository/pgh-mig-repo-main: Ready=False Synced=True reason=Creating' "${BL}/seeded-never-ready/results.tsv" \
+  && ! grep -q 'applied the declared branch protection itself' "${BL}/seeded-never-ready/results.tsv"; then
+  record PASS "a seeded Repository that never reaches Ready=True is seeded once and then fails the settle, naming the object and its Ready/Synced state"
+else
+  record FAIL "a seeded Repository that never reaches Ready=True is seeded once and then fails the settle, naming the object and its Ready/Synced state" \
+    "rc ${CASE_RC}; oob: ${CASE_OOB}; $(cat "${BL}/seeded-never-ready/results.tsv")"
+fi
+# Synced=True and Ready=True with no seeding: the baseline applied the protection itself.
+CASE_SEQ=("${CREATING}" "${DONE}")
+baseline_case ready-itself "${DONE}"
+if [ "${CASE_RC}" = 0 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ] \
+  && [[ "${CASE_RESULTS}" == "INFO	the baseline applied the declared branch protection itself" ]]; then
+  record PASS "a Repository that reaches Ready=True without seeding records 'the baseline applied the declared branch protection itself'"
+else
+  record FAIL "a Repository that reaches Ready=True without seeding records 'the baseline applied the declared branch protection itself'" "rc ${CASE_RC}; oob: ${CASE_OOB}; results: ${CASE_RESULTS}"
+fi
+# Synced=True and Ready=False for the whole timeout: unsettled, never seeded, never 'applied itself'.
+baseline_case creating-forever "${CREATING}"
+if [ "${CASE_RC}" = 1 ] && [ "${CASE_OOB}" = "wait-branch pgh-mig-repo-main main 30" ] \
+  && grep -q $'^FAIL\t.*\tRepository/pgh-mig-repo-main: Ready=False Synced=True reason=Creating' "${BL}/creating-forever/results.tsv" \
+  && ! grep -q 'applied the declared branch protection itself' "${BL}/creating-forever/results.tsv"; then
+  record PASS "a Repository that stays Synced=True and Ready=False for the whole timeout is unsettled and named in a FAIL, never recorded as applied itself"
+else
+  record FAIL "a Repository that stays Synced=True and Ready=False for the whole timeout is unsettled and named in a FAIL, never recorded as applied itself" \
+    "rc ${CASE_RC}; oob: ${CASE_OOB}; $(cat "${BL}/creating-forever/results.tsv")"
 fi
 # ... and the run then fails on it, naming the object, instead of dropping it with its nested rows.
 # ... and the run then fails on it, naming the object, instead of dropping it with its nested rows:
