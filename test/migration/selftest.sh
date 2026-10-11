@@ -408,6 +408,18 @@ if [ "$(find "${T}/refs" -name '*.yaml' | wc -l)" -eq 5 ] \
 else
   record FAIL "the reference twins hold Ref and Selector fields in place of the plain strings, in the namespace of their targets, and the cross-namespace twin names a target of the other namespace"
 fi
+# A twin never names its source's connection secret: the Repository source does (the adopter owns
+# it), the twin carries none, and no other twin gains or loses any other spec field for it.
+rt_src="$(compgen -G "${T}/ns-observe/*-repository-pgh-mig-repo-main.yaml")"
+rt_keys() { yq -o=json -I=0 '.spec | keys' "$1"; }
+if [ "$(fy '.spec.writeConnectionSecretToRef.name' "${rt_src}")" = pgh-mig-repo-main-conn ] \
+  && [ "$(fy '.spec | has("writeConnectionSecretToRef")' "${rt_repo}")" = false ] \
+  && [ "$(rt_keys "$(compgen -G "${rt_repo}")")" = "$(yq -o=json -I=0 '.spec | del(.writeConnectionSecretToRef) | keys' "${rt_src}")" ] \
+  && [ -z "$(grep -l writeConnectionSecretToRef "${T}"/refs/*.yaml 2>/dev/null)" ]; then
+  record PASS "a reference twin carries no writeConnectionSecretToRef although its adopted source does, and keeps its other spec fields"
+else
+  record FAIL "a reference twin carries no writeConnectionSecretToRef although its adopted source does, and keeps its other spec fields"
+fi
 # A twin whose target is missing from the adopted set is skipped.
 rm -f "${T}/ns-observe"/*-team-pgh-mig-team-parent.yaml
 derive_ref_twins "${T}/ns-observe" "${T}/refs-missing"

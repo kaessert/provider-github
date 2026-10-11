@@ -321,6 +321,15 @@ cel_check "CEL rules of the candidate CRDs hold for the reference twins" "${CAND
 cel_check "CEL rules of the candidate CRDs hold for the cluster-scoped twins" "${CAND_CRDS}" "${WORK}/rendered/cluster-twins"
 cel_check "CEL rules of the candidate CRDs hold for the Teams of the both-scopes probe" "${CAND_CRDS}" "${WORK}/rendered/both-teams"
 
+# No derived twin holds a connection secret reference: the object a twin duplicates is adopted
+# and owns its Secret, and two managed resources must not publish into one Secret.
+twin_secrets="$(grep -l writeConnectionSecretToRef "${WORK}"/rendered/ref-twins/*.yaml "${WORK}"/rendered/cluster-twins/*.yaml "${WORK}"/rendered/both-teams/*.yaml 2>/dev/null | xargs -r -n1 basename | paste -sd, -)"
+if [ -z "${twin_secrets}" ] && [ -n "$(compgen -G "${WORK}/rendered/ref-twins/*.yaml")" ]; then
+  record PASS "no reference twin, cluster-scoped twin or both-scopes Team holds a connection secret reference"
+else
+  record FAIL "no reference twin, cluster-scoped twin or both-scopes Team holds a connection secret reference" "${twin_secrets:-no reference twin was derived}"
+fi
+
 ns_obs_count="$(find "${WORK}/rendered/derived-ns-observe" -name '*.yaml' ! -name "*-${ADOPT_PROBE_NAME}.yaml" | wc -l)"
 ns_full_count="$(find "${WORK}/rendered/derived-ns-full" -name '*.yaml' | wc -l)"
 if [ "${v1_count}" -gt 0 ] && [ "${v1_count}" -eq "${ns_obs_count}" ] && [ "${v1_count}" -eq "${ns_full_count}" ]; then
