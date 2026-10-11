@@ -11,3 +11,4 @@ guidelines and responsibilities for the steering committee and maintainers.
 ## Maintainers
 
 * Tobias Kässer <t.kaesser@gmail.com> ([atarax](https://github.com/atarax))
+* Iulian Mandache <mandache.dym@gmail.com>
