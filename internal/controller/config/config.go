@@ -24,9 +24,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	clusterv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // Setup adds controllers that reconcile ProviderConfigs by accounting for

@@ -6,10 +6,10 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
-	clusterorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
-	namespacedorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
+	clusterorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	clusterv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
+	namespacedorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
 )
 
 // AddToSchemes may be used to add all resources defined in the project to a Scheme.

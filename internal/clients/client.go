@@ -19,8 +19,8 @@ package clients
 import (
 	"context"
 
-	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/google/go-github/v90/github"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // Client is the GitHub client controllers use. It wraps a *Services with

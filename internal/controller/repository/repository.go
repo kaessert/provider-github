@@ -46,12 +46,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/controller/driftcmp"
-	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/driftcmp"
+	"github.com/provider-github/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/internal/util"
 )
 
 const (

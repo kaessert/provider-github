@@ -24,14 +24,14 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // DependabotSecretAccessParameters are the configurable fields of a DependabotSecretAccess.
 // +kubebuilder:validation:XValidation:rule="!has(self.visibility) || self.visibility != 'selected' || (has(self.selectedRepositories) && size(self.selectedRepositories) > 0)",message="selectedRepositories is required when visibility is selected"
 type DependabotSecretAccessParameters struct {
 	// Org is the name of the GitHub organization that owns this secret.
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.

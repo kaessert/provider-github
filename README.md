@@ -334,7 +334,7 @@ The provider is built on crossplane-runtime v2. Compared with earlier releases:
 * `ProviderConfig` carries the `crossplane`, `provider` and `github`
   categories, so `kubectl get crossplane` also lists it.
 * The Go API packages moved to `apis/cluster/...`
-  (`github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1`
+  (`github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1`
   and `.../apis/cluster/v1alpha1`) and four exported fields were renamed to Go
   initialism style: `Url` to `URL`, `InsecureSsl` to `InsecureSSL`, `ActorId`
   to `ActorID` and `IntegrationId` to `IntegrationID`. Their JSON names are

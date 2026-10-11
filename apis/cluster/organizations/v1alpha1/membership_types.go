@@ -24,7 +24,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // MembershipParameters are the configurable fields of a Membership.
@@ -34,7 +34,7 @@ type MembershipParameters struct {
 
 	// Org is the Organization for the Membership
 	// +immutable
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization

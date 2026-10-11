@@ -29,10 +29,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/telemetry"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"

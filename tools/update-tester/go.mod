@@ -1,4 +1,4 @@
-module github.com/crossplane/provider-github/tools/update-tester
+module github.com/provider-github/provider-github/tools/update-tester
 
 go 1.26.9
 

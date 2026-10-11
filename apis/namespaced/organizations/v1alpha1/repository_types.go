@@ -24,7 +24,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // RepositoryParameters are the configurable fields of a Repository.
@@ -50,7 +50,7 @@ type RepositoryParameters struct {
 
 	// Org is the Organization for the Membership
 	// +immutable
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Organization
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization
@@ -164,7 +164,7 @@ type RepositoryPermissions struct {
 
 type RepositoryUser struct {
 	// Name is the name of the user
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Membership
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Membership
 	User string `json:"user,omitempty"`
 
 	// Name is a reference to an Membership
@@ -181,7 +181,7 @@ type RepositoryUser struct {
 
 type RepositoryTeam struct {
 	// Team is the name of the team
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Team
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Team
 	Team string `json:"team,omitempty"`
 
 	// TeamRef is a reference to a Team

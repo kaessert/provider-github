@@ -25,8 +25,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	pointer "k8s.io/utils/ptr"
 )
 

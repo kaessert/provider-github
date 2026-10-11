@@ -10,19 +10,19 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 
-	clusterorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	namespacedorganizationsv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
-	"github.com/crossplane/provider-github/internal/controller/actionssecretaccess"
-	"github.com/crossplane/provider-github/internal/controller/config"
-	"github.com/crossplane/provider-github/internal/controller/dependabotsecretaccess"
-	"github.com/crossplane/provider-github/internal/controller/membership"
-	"github.com/crossplane/provider-github/internal/controller/organization"
-	"github.com/crossplane/provider-github/internal/controller/organizationvariable"
-	"github.com/crossplane/provider-github/internal/controller/organizationwebhook"
-	"github.com/crossplane/provider-github/internal/controller/repository"
-	"github.com/crossplane/provider-github/internal/controller/runnergroup"
-	"github.com/crossplane/provider-github/internal/controller/team"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	clusterorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/internal/controller/actionssecretaccess"
+	"github.com/provider-github/provider-github/internal/controller/config"
+	"github.com/provider-github/provider-github/internal/controller/dependabotsecretaccess"
+	"github.com/provider-github/provider-github/internal/controller/membership"
+	"github.com/provider-github/provider-github/internal/controller/organization"
+	"github.com/provider-github/provider-github/internal/controller/organizationvariable"
+	"github.com/provider-github/provider-github/internal/controller/organizationwebhook"
+	"github.com/provider-github/provider-github/internal/controller/repository"
+	"github.com/provider-github/provider-github/internal/controller/runnergroup"
+	"github.com/provider-github/provider-github/internal/controller/team"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // setupFunc wires one controller into the manager.

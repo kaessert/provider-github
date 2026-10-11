@@ -14,7 +14,7 @@ UP_ORG ?= atarax
 ifeq ($(strip $(UP_ORG)),)
 UP_ORG := atarax
 endif
-PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
+PROJECT_REPO := github.com/provider-github/$(PROJECT_NAME)
 
 PLATFORMS ?= linux_amd64 linux_arm64
 

@@ -24,9 +24,9 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 const (

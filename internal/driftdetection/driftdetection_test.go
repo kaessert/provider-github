@@ -29,8 +29,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 
-	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	dd "github.com/crossplane/provider-github/apis/common/driftdetection"
+	clusterv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	dd "github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // Organization is the one kind whose status.atProvider carries a counterpart

@@ -19,8 +19,8 @@ import (
 
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // telemetryNewForTest builds a RateLimitMetrics instance without

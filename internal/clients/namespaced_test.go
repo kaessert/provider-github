@@ -29,7 +29,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
 )
 
 func namespacedSpec(secretNamespace string) namespacedv1alpha1.ProviderConfigSpec {
