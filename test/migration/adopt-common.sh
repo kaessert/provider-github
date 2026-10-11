@@ -477,33 +477,53 @@ adopt_prepare_namespaces() {
 # none), the namespace named in writeConnectionSecretToRef for a cluster-scoped one (nothing when the
 # baseline wrote none). A manifest without writeConnectionSecretToRef restores nothing.
 adopt_restore_conn_secrets() {
-  local scope="$1" dir="$2" f ns cname n=0 secrets="${EVIDENCE_DIR}/baseline-conn-secrets.json" have
+  local scope="$1" dir="$2" f ns cname n=0
   for f in "${dir}"/*.yaml; do
     [ -e "${f}" ] || continue
     read -r ns cname < <(yq -o=json -I=0 '.' "${f}" | jq -r --arg cns "${CROSSPLANE_NS}" '
       [((.spec.writeConnectionSecretToRef.namespace // .metadata.namespace // $cns) | if . == "" then "-" else . end),
        (.spec.writeConnectionSecretToRef.name // "-")] | join(" ")')
     [ "${cname}" != "-" ] || continue
-    have=no
-    jq -e --arg n "${cname}" 'any(.[]; .metadata.name == $n)' "${secrets}" >/dev/null 2>&1 && have=yes
-    if [ "${have}" = yes ]; then
-      jq -c --arg n "${cname}" --arg ns "${ns}" '.[] | select(.metadata.name == $n) | .metadata.namespace = $ns' "${secrets}" \
-        | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "restoring the connection secret ${cname} in ${ns} failed"
-    elif [ "${scope}" = namespaced ]; then
-      kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 <<YAML || warn "creating the connection secret ${cname} in ${ns} failed"
+    adopt_put_conn_secret "${scope}" "${ns}" "${cname}" "${cname}" && n=$((n + 1))
+  done
+  log "restored ${n} connection secret(s) of the baseline for the ${scope} objects"
+}
+
+# adopt_put_conn_secret <cluster|namespaced> <namespace> <name> <baseline secret> -- the Secret <name> in
+# <namespace>, holding what the baseline's Secret <baseline secret> held (baseline-conn-secrets.json).
+# When the baseline wrote none: an empty one for the namespaced scope, nothing (return 1) for the
+# cluster-scoped one.
+adopt_put_conn_secret() {
+  local scope="$1" ns="$2" name="$3" from="$4" secrets="${EVIDENCE_DIR}/baseline-conn-secrets.json" have=no
+  jq -e --arg n "${from}" 'any(.[]; .metadata.name == $n)' "${secrets}" >/dev/null 2>&1 && have=yes
+  if [ "${have}" = yes ]; then
+    jq -c --arg from "${from}" --arg n "${name}" --arg ns "${ns}" '.[] | select(.metadata.name == $from) | .metadata.name = $n | .metadata.namespace = $ns' "${secrets}" \
+      | kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 || warn "restoring the connection secret ${name} in ${ns} failed"
+  elif [ "${scope}" = namespaced ]; then
+    kc apply -f - >>"${EVIDENCE_DIR}/apply.log" 2>&1 <<YAML || warn "creating the connection secret ${name} in ${ns} failed"
 apiVersion: v1
 kind: Secret
 metadata:
-  name: ${cname}
+  name: ${name}
   namespace: ${ns}
 type: connection.crossplane.io/v1alpha1
 YAML
-    else
-      continue
-    fi
-    n=$((n + 1))
-  done
-  log "restored ${n} connection secret(s) of the baseline for the ${scope} objects"
+  else
+    return 1
+  fi
+}
+
+# adopt_seed_twin_conn_secrets <ref twin dir> -- the Secret each reference twin names (conn-secrets.tsv),
+# in the twin's namespace, holding what the baseline wrote for the object it twins. The twin is
+# Observe-only and publishes nothing, but a Repository with a webhook secret compares the spec against
+# the applied value recorded there: a missing Secret fails Observe, an empty one reads as drift.
+adopt_seed_twin_conn_secrets() {
+  local ns name from n=0
+  while IFS=$'\t' read -r ns name from; do
+    [ -n "${name}" ] || continue
+    adopt_put_conn_secret namespaced "${ns}" "${name}" "${from}" && n=$((n + 1))
+  done <"$1/conn-secrets.tsv"
+  log "seeded ${n} connection secret(s) for the reference twins (a copy of their source's)"
 }
 
 # adopt_check_paths -- every object is on the ProviderConfig path adopt_target gives it, and
@@ -965,13 +985,21 @@ adopt_change_phase() {
 
 # --- references between objects of one namespace -------------------------------------
 
+# refs_offenders <names.meta> -- the twins that are not as expected, one line each with their
+# conditions and Synced message: a twin that must resolve and is not Synced and Ready (or is
+# missing), a twin that must not and is not Synced=False. Reads the managed resources from the cluster.
+refs_offenders() {
+  mr_state "${ADOPT_GROUP}" | jq -r --slurpfile n "$1" '
+    def line: "\(.kind)/\(.name): Ready=\(.ready) Synced=\(.synced) \(.syncedMessage)";
+    def find($x): ([.[] | select(.name == $x)] | first) // {kind: "?", name: $x, ready: "-", synced: "-", syncedMessage: "(absent)"};
+    ($n[0].resolvable[] as $x | find($x) | select(.synced != "True" or .ready != "True") | line),
+    ($n[0].unresolvable[] as $x | find($x) | select(.synced != "False") | line)'
+}
+
 # refs_settled <names.meta> -- every twin that must resolve is Synced and Ready, and every
 # twin that must not is Synced=False.
 refs_settled() {
-  mr_state "${ADOPT_GROUP}" | jq -e --slurpfile n "$1" '
-    . as $s
-    | ($n[0].resolvable | all(. as $x | any($s[]; .name == $x and .synced == "True" and .ready == "True")))
-      and ($n[0].unresolvable | all(. as $x | any($s[]; .name == $x and .synced == "False")))' >/dev/null 2>&1
+  [ -z "$(refs_offenders "$1")" ]
 }
 
 # adopt_refs_phase -- Observe-only twins of adopted objects that hold their references as
@@ -987,6 +1015,7 @@ adopt_refs_phase() {
     record WARN "no reference twin could be derived: the objects they point at are not in the adopted set"
     return 0
   fi
+  adopt_seed_twin_conn_secrets "${dir}"
   log "applying the reference twins"
   since="$(now_utc)"
   apply_fixtures "${dir}"
@@ -994,7 +1023,7 @@ adopt_refs_phase() {
     record PASS "the reference twins in the namespace of their targets are Synced and Ready; the twin that names an object of the other namespace is Synced=False"
   else
     record FAIL "the reference twins in the namespace of their targets are Synced and Ready; the twin that names an object of the other namespace is Synced=False" \
-      "$(mr_state "${ADOPT_GROUP}" | jq -r --slurpfile n "${dir}/names.meta" '.[] | select(.name as $x | ($n[0].resolvable + $n[0].unresolvable) | index($x)) | "\(.kind)/\(.name): Ready=\(.ready) Synced=\(.synced) \(.syncedMessage)"' | head -3 | tr '\n' ';')"
+      "$(refs_offenders "${dir}/names.meta" | head -3 | tr '\n' ';')"
   fi
   settle_pause 2
   mr_state "${ADOPT_GROUP}" >"${state}"

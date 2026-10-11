@@ -480,8 +480,12 @@ orphaned, the candidate is installed.
    it was given and that every object reaching GitHub through each path is Synced and Ready.
 5. **References.** Five Observe-only twins over objects of `pgh-mig-ns-a` (and one of
    `pgh-mig-ns-b`), each holding its references as `*Ref` and `*Selector` fields in place of the
-   plain strings of the object it twins (a twin carries no `writeConnectionSecretToRef`: the
-   object it twins is adopted and owns that Secret, and two objects must not publish into one):
+   plain strings of the object it twins (a twin whose source names a connection secret names its own, `<twin>-conn`, never the source's:
+   the source is adopted and owns its Secret and two objects must not publish into one, yet a
+   Repository that declares a webhook with a secret cannot be observed without one. Before the twins
+   are applied, each such Secret is created in the twin's namespace as a copy of the Secret the
+   baseline wrote for the source, because an empty one would read as drift of the webhook secret;
+   a source the baseline wrote none for gets an empty Secret, as its adopter does):
 
    | Twin | Fields |
    |---|---|
@@ -494,7 +498,8 @@ orphaned, the candidate is installed.
    Assert: the four twins in the namespace of their targets are Synced and Ready and the resolver
    has filled `spec.forProvider.<field>` with the value the plain-string object declares; the
    cross-namespace twin is Synced=False and its field stays unset (a reference resolves inside
-   the namespace of the object that holds it); no twin writes. The twins are deleted afterwards.
+   the namespace of the object that holds it); no twin writes. When the wait ends without that state, the failure lists only the twins that are
+   not as expected, with their Synced message. The twins are deleted afterwards.
 6. **Both scopes, Observe-only.** The cluster-scoped Observe-only twin of one object per kind
    (same external name, named `pgh-mig-cl-<object>`) is applied while the namespaced object is
    Ready. Recorded, not asserted: Ready, Synced and message of each, what each controller did,

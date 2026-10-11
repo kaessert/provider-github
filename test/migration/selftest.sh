@@ -408,17 +408,21 @@ if [ "$(find "${T}/refs" -name '*.yaml' | wc -l)" -eq 5 ] \
 else
   record FAIL "the reference twins hold Ref and Selector fields in place of the plain strings, in the namespace of their targets, and the cross-namespace twin names a target of the other namespace"
 fi
-# A twin never names its source's connection secret: the Repository source does (the adopter owns
-# it), the twin carries none, and no other twin gains or loses any other spec field for it.
+# A twin never shares its source's connection secret (the adopter owns it, and two objects must not
+# publish into one), yet a twin whose source names one names one of its own: a Repository with a
+# webhook secret cannot be observed without it. No other spec field of the twin changes for it.
 rt_src="$(compgen -G "${T}/ns-observe/*-repository-pgh-mig-repo-main.yaml")"
 rt_keys() { yq -o=json -I=0 '.spec | keys' "$1"; }
 if [ "$(fy '.spec.writeConnectionSecretToRef.name' "${rt_src}")" = pgh-mig-repo-main-conn ] \
-  && [ "$(fy '.spec | has("writeConnectionSecretToRef")' "${rt_repo}")" = false ] \
-  && [ "$(rt_keys "$(compgen -G "${rt_repo}")")" = "$(yq -o=json -I=0 '.spec | del(.writeConnectionSecretToRef) | keys' "${rt_src}")" ] \
-  && [ -z "$(grep -l writeConnectionSecretToRef "${T}"/refs/*.yaml 2>/dev/null)" ]; then
-  record PASS "a reference twin carries no writeConnectionSecretToRef although its adopted source does, and keeps its other spec fields"
+  && [ "$(fy '.spec.writeConnectionSecretToRef | keys | join(",")' "${rt_repo}")" = name ] \
+  && [ "$(fy '.spec.writeConnectionSecretToRef.name' "${rt_repo}")" = pgh-mig-ref-repo-conn ] \
+  && [ "$(rt_keys "$(compgen -G "${rt_repo}")")" = "$(rt_keys "${rt_src}")" ] \
+  && [ "$(fy '.spec | has("writeConnectionSecretToRef")' "${rt_team}")" = false ] \
+  && [ "$(grep -l writeConnectionSecretToRef "${T}"/refs/*.yaml | wc -l)" -eq 1 ] \
+  && [ "$(cat "${T}/refs/conn-secrets.tsv")" = "${ADOPT_NS_A}"$'\tpgh-mig-ref-repo-conn\tpgh-mig-repo-main-conn' ]; then
+  record PASS "a reference twin whose adopted source names a connection secret names its own (<twin>-conn), a twin whose source names none names none, and the other spec fields are the source's"
 else
-  record FAIL "a reference twin carries no writeConnectionSecretToRef although its adopted source does, and keeps its other spec fields"
+  record FAIL "a reference twin whose adopted source names a connection secret names its own (<twin>-conn), a twin whose source names none names none, and the other spec fields are the source's"
 fi
 # A twin whose target is missing from the adopted set is skipped.
 rm -f "${T}/ns-observe"/*-team-pgh-mig-team-parent.yaml
@@ -1132,6 +1136,53 @@ if [ ! -s "${KCLOG}" ]; then
   rec PASS "a manifest without writeConnectionSecretToRef restores nothing, in either scope"
 else
   rec FAIL "a manifest without writeConnectionSecretToRef restores nothing, in either scope" "applied: $(restored)"
+fi
+
+# The Secret a reference twin names is seeded in the twin's namespace with the content of its source's.
+: >"${KCLOG}"
+mkdir -p "${RR}/refs-secret"
+printf 'pgh-mig-ns-a\tpgh-mig-ref-repo-conn\tpgh-mig-repo-main-conn\n' >"${RR}/refs-secret/conn-secrets.tsv"
+adopt_seed_twin_conn_secrets "${RR}/refs-secret" 2>/dev/null
+twin_seeded="$(restored)"
+twin_data="$(jq -r 'select(.metadata.name == "pgh-mig-ref-repo-conn") | .data.secret' "${KCLOG}")"
+if [ "${twin_seeded}" = "pgh-mig-ns-a/pgh-mig-ref-repo-conn:secret" ] && [ "${twin_data}" = "cmVwbw==" ]; then
+  rec PASS "the connection secret of a reference twin is applied in the twin's namespace under the twin's own name, holding the data of the source's"
+else
+  rec FAIL "the connection secret of a reference twin is applied in the twin's namespace under the twin's own name, holding the data of the source's" "applied: ${twin_seeded}, data ${twin_data}"
+fi
+: >"${KCLOG}"
+mkdir -p "${RR}/refs-nosecret"
+: >"${RR}/refs-nosecret/conn-secrets.tsv"
+adopt_seed_twin_conn_secrets "${RR}/refs-nosecret" 2>/dev/null
+if [ ! -s "${KCLOG}" ]; then
+  rec PASS "no reference twin naming a connection secret seeds nothing"
+else
+  rec FAIL "no reference twin naming a connection secret seeds nothing" "applied: $(restored)"
+fi
+
+# The failure of the references wait names the twins that are not as expected, and only those.
+jq -n '{resolvable: ["pgh-mig-ref-repo","pgh-mig-ref-team","pgh-mig-ref-org","pgh-mig-ref-membership"], unresolvable: ["pgh-mig-ref-xns-var","pgh-mig-ref-late"]}' >"${RR}/refs-names.meta"
+mr_state() { cat "${RR}/mr-state.json"; }
+jq -n '[{kind:"Team",name:"pgh-mig-ref-team",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"Membership",name:"pgh-mig-ref-membership",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"Repository",name:"pgh-mig-ref-repo",ready:"False",synced:"False",syncedMessage:"cannot observe: spec.writeConnectionSecretToReference is not set"},
+        {kind:"OrganizationVariable",name:"pgh-mig-ref-xns-var",ready:"False",synced:"False",syncedMessage:"cannot resolve"},
+        {kind:"OrganizationVariable",name:"pgh-mig-ref-late",ready:"True",synced:"True",syncedMessage:""}]' >"${RR}/mr-state.json"
+offenders="$(refs_offenders "${RR}/refs-names.meta" | paste -sd'|')"
+settled_bad=0; refs_settled "${RR}/refs-names.meta" && settled_bad=1
+jq -n '[{kind:"Team",name:"pgh-mig-ref-team",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"Membership",name:"pgh-mig-ref-membership",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"Repository",name:"pgh-mig-ref-repo",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"Organization",name:"pgh-mig-ref-org",ready:"True",synced:"True",syncedMessage:""},
+        {kind:"OrganizationVariable",name:"pgh-mig-ref-xns-var",ready:"False",synced:"False",syncedMessage:"cannot resolve"},
+        {kind:"OrganizationVariable",name:"pgh-mig-ref-late",ready:"False",synced:"False",syncedMessage:"cannot resolve"}]' >"${RR}/mr-state.json"
+settled_ok=0; refs_settled "${RR}/refs-names.meta" && settled_ok=1
+unset -f mr_state
+if [ "${offenders}" = "Repository/pgh-mig-ref-repo: Ready=False Synced=False cannot observe: spec.writeConnectionSecretToReference is not set|?/pgh-mig-ref-org: Ready=- Synced=- (absent)|OrganizationVariable/pgh-mig-ref-late: Ready=True Synced=True " ] \
+  && [ "${settled_bad}" = 0 ] && [ "${settled_ok}" = 1 ]; then
+  rec PASS "the references wait lists only the twins that are not as expected (a resolvable one not Synced and Ready or absent, an unresolvable one Synced), and settles when there are none"
+else
+  rec FAIL "the references wait lists only the twins that are not as expected (a resolvable one not Synced and Ready or absent, an unresolvable one Synced), and settles when there are none" "offenders: ${offenders}; settled with offenders ${settled_bad}, without ${settled_ok}"
 fi
 
 # The Ready message of every object that is not Ready, with the reason, is in the report.

@@ -321,13 +321,31 @@ cel_check "CEL rules of the candidate CRDs hold for the reference twins" "${CAND
 cel_check "CEL rules of the candidate CRDs hold for the cluster-scoped twins" "${CAND_CRDS}" "${WORK}/rendered/cluster-twins"
 cel_check "CEL rules of the candidate CRDs hold for the Teams of the both-scopes probe" "${CAND_CRDS}" "${WORK}/rendered/both-teams"
 
-# No derived twin holds a connection secret reference: the object a twin duplicates is adopted
-# and owns its Secret, and two managed resources must not publish into one Secret.
-twin_secrets="$(grep -l writeConnectionSecretToRef "${WORK}"/rendered/ref-twins/*.yaml "${WORK}"/rendered/cluster-twins/*.yaml "${WORK}"/rendered/both-teams/*.yaml 2>/dev/null | xargs -r -n1 basename | paste -sd, -)"
-if [ -z "${twin_secrets}" ] && [ -n "$(compgen -G "${WORK}/rendered/ref-twins/*.yaml")" ]; then
-  record PASS "no reference twin, cluster-scoped twin or both-scopes Team holds a connection secret reference"
+# A reference twin holds a connection secret reference iff the object it twins does, and names a
+# Secret of its own: no two objects of one namespace name one Secret (two managed resources must
+# not publish into one). The cluster-scoped twins and the Teams of the both-scopes probe hold none.
+twin_secrets="$(grep -l writeConnectionSecretToRef "${WORK}"/rendered/cluster-twins/*.yaml "${WORK}"/rendered/both-teams/*.yaml 2>/dev/null | xargs -r -n1 basename | paste -sd, -)"
+bad_twin_secrets="$(while IFS='^' read -r kind source twin _; do
+  adopt_have "${WORK}/rendered/ref-twins" "${kind}" "${twin}" || continue
+  jq -rn --arg twin "${twin}" --arg source "${source}" \
+    --slurpfile t <(yq -o=json -I=0 '.' "$(adopt_file "${WORK}/rendered/ref-twins" "${kind}" "${twin}")") \
+    --slurpfile s <(yq -o=json -I=0 '.' "$(adopt_file "${WORK}/rendered/derived-ns-observe" "${kind}" "${source}")") '
+    ($t[0].spec.writeConnectionSecretToRef.name // null) as $mine
+    | ($s[0].spec.writeConnectionSecretToRef.name // null) as $theirs
+    | if ($mine == null) != ($theirs == null) then "\($twin): holds a connection secret reference only if \($source) does"
+      elif $mine != null and $mine == $theirs then "\($twin): shares \($mine) with \($source)"
+      else empty end'
+done <<<"${ADOPT_REF_TWINS}")"
+shared_secrets="$(for d in derived-ns-observe ref-twins; do
+  for f in "${WORK}/rendered/${d}"/*.yaml; do
+    yq -o=json -I=0 '.' "${f}" | jq -r 'select(.spec.writeConnectionSecretToRef) | "\(.metadata.namespace)/\(.spec.writeConnectionSecretToRef.name)"'
+  done
+done | sort | uniq -d | paste -sd, -)"
+if [ -z "${twin_secrets}" ] && [ -z "${bad_twin_secrets}" ] && [ -z "${shared_secrets}" ] && [ -n "$(compgen -G "${WORK}/rendered/ref-twins/*.yaml")" ]; then
+  record PASS "a reference twin holds a connection secret reference iff its source does, under a name of its own; no two objects of a namespace name one Secret; the cluster-scoped twins and both-scopes Teams hold none"
 else
-  record FAIL "no reference twin, cluster-scoped twin or both-scopes Team holds a connection secret reference" "${twin_secrets:-no reference twin was derived}"
+  record FAIL "a reference twin holds a connection secret reference iff its source does, under a name of its own; no two objects of a namespace name one Secret; the cluster-scoped twins and both-scopes Teams hold none" \
+    "${twin_secrets:+held by ${twin_secrets}; }${bad_twin_secrets:+$(printf '%s' "${bad_twin_secrets}" | head -3 | tr '\n' ';') }${shared_secrets:+named twice: ${shared_secrets}}$([ -n "$(compgen -G "${WORK}/rendered/ref-twins/*.yaml")" ] || echo 'no reference twin was derived')"
 fi
 
 ns_obs_count="$(find "${WORK}/rendered/derived-ns-observe" -name '*.yaml' ! -name "*-${ADOPT_PROBE_NAME}.yaml" | wc -l)"

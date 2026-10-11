@@ -193,27 +193,31 @@ OrganizationVariable^pgh-mig-var-all^pgh-mig-ref-xns-var^no^Organization/pgh-mig
 #   pgh-mig-ref-repo        Repository: orgSelector, teamSelector, userSelector
 #   pgh-mig-ref-xns-var     OrganizationVariable in the OTHER namespace: an orgRef naming an
 #                           Organization that exists only in namespace A (must NOT resolve)
-# A twin carries no writeConnectionSecretToRef: its source (adopted, fully or Observe-only) owns
-# that Secret, and two namespaced objects must not publish into one Secret. A twin is skipped when
-# its source or a target is not in the adopted set. Also writes
-# <out-dir>/checks.tsv (twin, kind, namespace, resolvable yes|no, jq path over the twin, the
-# value the plain-string source declares for that path; null where the path must stay unset)
-# and <out-dir>/names.meta.
+# A twin whose source names a connection secret names its OWN, <twin>-conn: the source (adopted,
+# fully or Observe-only) owns its Secret and two namespaced objects must not publish into one, yet
+# a Repository that declares a webhook with a secret cannot be observed without one. A twin whose
+# source names none names none. A twin is skipped when its source or a target is not in the
+# adopted set. Also writes <out-dir>/checks.tsv (twin, kind, namespace, resolvable yes|no, jq path
+# over the twin, the value the plain-string source declares for that path; null where the path must
+# stay unset), <out-dir>/names.meta and <out-dir>/conn-secrets.tsv (namespace, the twin's secret,
+# the source's secret it is a copy of: adopt_seed_twin_conn_secrets applies them).
 derive_ref_twins() {
   local src="$1" out="$2" kind source twin resolvable needs filter paths t srcf path want ns doc
   mkdir -p "${out}"
-  rm -f "${out}"/*.yaml "${out}/checks.tsv" "${out}/names.meta"
+  rm -f "${out}"/*.yaml "${out}/checks.tsv" "${out}/names.meta" "${out}/conn-secrets.tsv"
   : >"${out}/checks.tsv"
+  : >"${out}/conn-secrets.tsv"
   while IFS='^' read -r kind source twin resolvable needs filter paths; do
     [ -n "${kind}" ] || continue
     adopt_have "${src}" "${kind}" "${source}" || continue
     for t in ${needs}; do adopt_have "${src}" "${t%%/*}" "${t#*/}" || continue 2; done
     srcf="$(adopt_file "${src}" "${kind}" "${source}")"
     doc="$(yq -o=json -I=0 '.' "${srcf}")"
-    jq --arg name "${twin}" "${ADOPT_REF_JQ} .metadata.name = \$name | del(.metadata.labels) | del(.spec.writeConnectionSecretToRef) | ${filter}" <<<"${doc}" \
+    jq --arg name "${twin}" "${ADOPT_REF_JQ} .metadata.name = \$name | del(.metadata.labels) | (if .spec.writeConnectionSecretToRef then .spec.writeConnectionSecretToRef = {name: (\$name + \"-conn\")} else . end) | ${filter}" <<<"${doc}" \
       | yq -P '.' >"${out}/$(basename "${srcf}" | sed -E 's/^([0-9]+)-.*/\1/')-$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')-${twin}.yaml" \
       || die "cannot derive ${kind}/${twin}"
     ns="$(jq -r '.metadata.namespace' <<<"${doc}")"
+    jq -r --arg ns "${ns}" --arg twin "${twin}" '.spec.writeConnectionSecretToRef.name // empty | [$ns, "\($twin)-conn", .] | @tsv' <<<"${doc}" >>"${out}/conn-secrets.tsv"
     while IFS= read -r path; do
       [ -n "${path}" ] || continue
       if [ "${resolvable}" = yes ]; then want="$(jq -c "${path}" <<<"${doc}")"; else want=null; fi
