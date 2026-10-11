@@ -480,7 +480,8 @@ orphaned, the candidate is installed.
    it was given and that every object reaching GitHub through each path is Synced and Ready.
 5. **References.** Five Observe-only twins over objects of `pgh-mig-ns-a` (and one of
    `pgh-mig-ns-b`), each holding its references as `*Ref` and `*Selector` fields in place of the
-   plain strings of the object it twins:
+   plain strings of the object it twins (a twin carries no `writeConnectionSecretToRef`: the
+   object it twins is adopted and owns that Secret, and two objects must not publish into one):
 
    | Twin | Fields |
    |---|---|

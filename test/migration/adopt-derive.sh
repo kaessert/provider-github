@@ -193,7 +193,9 @@ OrganizationVariable^pgh-mig-var-all^pgh-mig-ref-xns-var^no^Organization/pgh-mig
 #   pgh-mig-ref-repo        Repository: orgSelector, teamSelector, userSelector
 #   pgh-mig-ref-xns-var     OrganizationVariable in the OTHER namespace: an orgRef naming an
 #                           Organization that exists only in namespace A (must NOT resolve)
-# A twin is skipped when its source or a target is not in the adopted set. Also writes
+# A twin carries no writeConnectionSecretToRef: its source (adopted, fully or Observe-only) owns
+# that Secret, and two namespaced objects must not publish into one Secret. A twin is skipped when
+# its source or a target is not in the adopted set. Also writes
 # <out-dir>/checks.tsv (twin, kind, namespace, resolvable yes|no, jq path over the twin, the
 # value the plain-string source declares for that path; null where the path must stay unset)
 # and <out-dir>/names.meta.
@@ -208,7 +210,7 @@ derive_ref_twins() {
     for t in ${needs}; do adopt_have "${src}" "${t%%/*}" "${t#*/}" || continue 2; done
     srcf="$(adopt_file "${src}" "${kind}" "${source}")"
     doc="$(yq -o=json -I=0 '.' "${srcf}")"
-    jq --arg name "${twin}" "${ADOPT_REF_JQ} .metadata.name = \$name | del(.metadata.labels) | ${filter}" <<<"${doc}" \
+    jq --arg name "${twin}" "${ADOPT_REF_JQ} .metadata.name = \$name | del(.metadata.labels) | del(.spec.writeConnectionSecretToRef) | ${filter}" <<<"${doc}" \
       | yq -P '.' >"${out}/$(basename "${srcf}" | sed -E 's/^([0-9]+)-.*/\1/')-$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')-${twin}.yaml" \
       || die "cannot derive ${kind}/${twin}"
     ns="$(jq -r '.metadata.namespace' <<<"${doc}")"
