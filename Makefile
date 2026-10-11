@@ -77,8 +77,7 @@ IMAGES = provider-github
 # Setup XPKG
 
 XPKG_REG_ORGS ?= docker.io/$(UP_ORG)
-# NOTE(hasheddan): skip promoting on xpkg.upbound.io as channel tags are
-# inferred.
+# NOTE(hasheddan): skip promoting; channel tags are inferred.
 XPKG_REG_ORGS_NO_PROMOTE ?= docker.io/$(UP_ORG)
 XPKGS = provider-github
 -include build/makelib/xpkg.mk
@@ -98,8 +97,8 @@ XPKGS = provider-github
 # the push. UP_API_TOKEN is a robot token, and up's RegistryKeychain falls back
 # to the Docker keychain for robot tokens ("robot tokens cannot be used for
 # registry login 401 Unauthorized"), so CI must additionally `docker login`
-# to xpkg.upbound.io with UP_ROBOT_ID as the username. See the "Login to xpkg
-# with robot" step in .github/workflows/release.yaml.
+# to the registry host in XPKG_REG_ORGS. See the registry login steps in
+# .github/workflows/release.yaml.
 UP ?= up
 
 XPKG_PLATFORM_FILES := $(foreach p,$(XPKG_LINUX_PLATFORMS),$(XPKG_OUTPUT_DIR)/$(p)/$(PROJECT_NAME)-$(VERSION).xpkg)
@@ -127,7 +126,7 @@ xpkg.check.base-layer: xpkg.normalize.base-layer
 	@hack/check-xpkg-base-consistency.sh local $(XPKG_PLATFORM_FILES) || $(FAIL)
 	@$(OK) xpkg base layer consistent
 
-xpkg.push.up: xpkg.check.base-layer ## Push the built xpkg to xpkg.upbound.io using the up CLI.
+xpkg.push.up: xpkg.check.base-layer ## Push the built xpkg to XPKG_REG_ORGS using the up CLI.
 	@$(INFO) Pushing package $(XPKG_REG_ORGS)/$(PROJECT_NAME):$(VERSION)
 	@$(UP) xpkg push \
 		$(foreach p,$(XPKG_LINUX_PLATFORMS),-f $(XPKG_OUTPUT_DIR)/$(p)/$(PROJECT_NAME)-$(VERSION).xpkg) \

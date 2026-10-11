@@ -127,7 +127,7 @@ hack/verify-release.sh vX.Y.Z
 ### SBOM identity
 
 The Go-module SBOM's `metadata.component.name` is this project's module
-path, `github.com/upbound/provider-github`. A module path and the
+path, `github.com/provider-github/provider-github`. A module path and the
 name of the git repository hosting this project are independent
 identifiers, and are allowed to disagree — this is not a substitution or a
 mismatch: the module path names who publishes this project, while a
