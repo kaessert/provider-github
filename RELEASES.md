@@ -42,6 +42,12 @@ kind this provider serves:
 Management policies are always enabled, so `--enable-management-policies` no
 longer gates them.
 
+The Go module path is now `github.com/provider-github/provider-github`; it was
+`github.com/crossplane/provider-github`, which resolves to a different
+repository. Go code that imports this provider's `apis/...` packages must update
+its import paths and `go.mod`. Installed packages, CRDs and resource behaviour
+are unaffected.
+
 Everything else in `v1alpha1` is unchanged: no other field is removed, renamed
 or re-typed, and existing manifests that do not use the fields above are
 accepted exactly as before. New namespaced variants of every kind, and an

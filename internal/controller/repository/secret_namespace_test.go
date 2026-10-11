@@ -27,7 +27,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 )
 
 // A namespaced resource reads a webhook secret from its own namespace only,

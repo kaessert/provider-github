@@ -22,7 +22,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
 )
 
 func newFakeKubeWithSecret(t *testing.T, name, namespace string, data map[string][]byte) *fake.ClientBuilder {

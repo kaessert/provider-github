@@ -19,7 +19,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
 )
 
 // resolveAllCredentials extracts every credential entry on pc (the primary

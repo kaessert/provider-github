@@ -25,7 +25,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 )
 
 const errMirror = "cannot record the observed state of the repository"

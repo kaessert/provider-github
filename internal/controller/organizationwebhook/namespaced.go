@@ -29,13 +29,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1alpha1 "github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
-	namespacedapis "github.com/crossplane/provider-github/apis/namespaced/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/controller/scopebridge"
-	"github.com/crossplane/provider-github/internal/driftdetection"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	clusterv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	namespacedapis "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/scopebridge"
+	"github.com/provider-github/provider-github/internal/driftdetection"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // SetupNamespaced adds a controller that reconciles namespaced OrganizationWebhook managed resources.

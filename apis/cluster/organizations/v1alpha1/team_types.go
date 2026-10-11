@@ -24,7 +24,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // TeamParameters are the configurable fields of a Team.
@@ -36,7 +36,7 @@ type TeamParameters struct {
 
 	// Org is the Organization for the Membership
 	// +immutable
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Organization
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization
@@ -48,7 +48,7 @@ type TeamParameters struct {
 	OrgSelector *xpv2.Selector `json:"orgSelector,omitempty"`
 
 	// Parent is the parent team of a Team
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Team
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Team
 	Parent *string `json:"parent,omitempty"`
 
 	// ParentRef is a reference to a parent team
@@ -65,7 +65,7 @@ type TeamParameters struct {
 
 type TeamMemberUser struct {
 	// Name is the name of the user
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Membership
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Membership
 	User string `json:"user,omitempty"`
 
 	// Name is a reference to an Membership
@@ -82,7 +82,7 @@ type TeamMemberUser struct {
 
 type TeamMemberTeam struct {
 	// Team is the name of the team
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1.Team
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1.Team
 	Team string `json:"team,omitempty"`
 
 	// TeamRef is a reference to a Team

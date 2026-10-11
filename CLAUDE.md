@@ -125,7 +125,7 @@ The seventh, `github_repository_unreconcilable{organization, repository, dimensi
 
 ## Code conventions
 
-- Go 1.25, modules. Module path: `github.com/crossplane/provider-github`.
+- Go 1.25, modules. Module path: `github.com/provider-github/provider-github`.
 - Imports follow `goimports` with local prefix `github.com/my/project` (per `.golangci.yml` — yes, that prefix string is a quirk of the config).
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.

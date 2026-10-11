@@ -23,8 +23,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	"github.com/crossplane/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/internal/clients/fake"
 )
 
 func namedRepos(ids map[string]int64) func(context.Context, string, string, *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {

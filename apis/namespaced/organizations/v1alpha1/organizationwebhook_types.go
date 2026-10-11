@@ -24,13 +24,13 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // OrganizationWebhookParameters are the configurable fields of an OrganizationWebhook.
 type OrganizationWebhookParameters struct {
 	// Org is the name of the GitHub organization that owns this webhook.
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Organization
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Organization
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.

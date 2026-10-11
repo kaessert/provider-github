@@ -16,8 +16,8 @@ import (
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // pickCredsForPool returns the entry from resolvedCreds whose corresponding

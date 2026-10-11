@@ -24,7 +24,7 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/common/driftdetection"
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
 )
 
 // ActionsConfiguration are the configurable fields of an Organization Actions.
@@ -51,7 +51,7 @@ type ActionsConfiguration struct {
 
 type ActionEnabledRepo struct {
 	// Name of the repository
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Repository
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Repository
 	Repo string `json:"repo,omitempty"`
 
 	// RepoRef is a reference to the Repositories
@@ -65,7 +65,7 @@ type ActionEnabledRepo struct {
 
 type SecretSelectedRepo struct {
 	// Name of the repository
-	// +crossplane:generate:reference:type=github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1.Repository
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Repository
 	Repo string `json:"repo,omitempty"`
 
 	// RepoRef is a reference to the Repositories

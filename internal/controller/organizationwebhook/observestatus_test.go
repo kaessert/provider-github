@@ -27,8 +27,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	"github.com/crossplane/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/internal/clients/fake"
 )
 
 func assertUnavailable(t *testing.T, cr *v1alpha1.OrganizationWebhook) {

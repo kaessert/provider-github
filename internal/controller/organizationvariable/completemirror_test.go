@@ -22,11 +22,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	namespacedv1alpha1 "github.com/crossplane/provider-github/apis/namespaced/organizations/v1alpha1"
-	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/crossplane/provider-github/internal/controller/scopebridge"
-	"github.com/crossplane/provider-github/internal/driftdetection/ddtest"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/controller/scopebridge"
+	"github.com/provider-github/provider-github/internal/driftdetection/ddtest"
 )
 
 type observed struct {

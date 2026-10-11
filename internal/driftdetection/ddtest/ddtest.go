@@ -33,7 +33,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 
-	"github.com/crossplane/provider-github/internal/driftdetection"
+	"github.com/provider-github/provider-github/internal/driftdetection"
 )
 
 // RequirePassThrough observes a fresh resource through a bare client and

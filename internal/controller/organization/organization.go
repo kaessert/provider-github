@@ -32,10 +32,10 @@ import (
 	"github.com/pkg/errors"
 	pointer "k8s.io/utils/ptr"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/controller/driftcmp"
-	"github.com/crossplane/provider-github/internal/controller/mgmtpolicy"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/driftcmp"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 
 	"github.com/google/go-github/v90/github"
 )

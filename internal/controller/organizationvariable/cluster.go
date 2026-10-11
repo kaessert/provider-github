@@ -31,11 +31,11 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 
-	"github.com/crossplane/provider-github/apis/cluster/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/cluster/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/driftdetection"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/driftdetection"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // Setup adds a controller that reconciles OrganizationVariable managed resources.

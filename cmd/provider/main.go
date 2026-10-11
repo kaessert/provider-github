@@ -44,11 +44,11 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/customresourcesgate"
 
-	"github.com/crossplane/provider-github/apis"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	github "github.com/crossplane/provider-github/internal/controller"
-	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/provider-github/provider-github/apis"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	github "github.com/provider-github/provider-github/internal/controller"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 const (
