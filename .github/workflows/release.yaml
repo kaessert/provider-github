@@ -49,19 +49,19 @@ concurrency:
 
 env:
   # ── Image coordinates ─────────────────────────────────────────────
-  # Derived from the same XPKG_REGISTRY/UP_ORG pair as the Makefile's
-  # XPKG_REG_ORGS (xpkg.upbound.io/$(UP_ORG)). A workflow-level env entry
-  # cannot reference another one, so the host and package name are spelled
-  # out in XPKG_IMAGE rather than composed.
-  XPKG_REGISTRY: xpkg.upbound.io
-  XPKG_IMAGE: xpkg.upbound.io/${{ secrets.UP_ORG }}/provider-github
+  # The registry host and org are recorded facts of this provider, read from
+  # the same Makefile as XPKG_REG_ORGS (docker.io/$(UP_ORG)). A
+  # workflow-level env entry cannot reference another one, so the host, org
+  # and package name are spelled out in XPKG_IMAGE rather than composed. The
+  # org is a literal, not a secret: it names a public package, and the image a
+  # release signs must be the one the Makefile pushes.
+  XPKG_REGISTRY: docker.io
+  XPKG_IMAGE: docker.io/atarax/provider-github
   # ── Credentials ───────────────────────────────────────────────────
-  # An Upbound API token (UP_API_TOKEN) plus an organization (UP_ORG), with
-  # UP_ROBOT_ID as the registry username. Copied into env so steps can test
-  # 'env.XXX != ""'.
-  UP_API_TOKEN: ${{ secrets.UP_API_TOKEN }}
-  UP_ORG: ${{ secrets.UP_ORG }}
-  UP_ROBOT_ID: ${{ secrets.UP_ROBOT_ID }}
+  # A username and an access token for docker.io. Copied into env so
+  # steps can test 'env.XXX != ""'.
+  XPKG_REGISTRY_USERNAME: ${{ secrets.XPKG_REGISTRY_USERNAME }}
+  XPKG_REGISTRY_TOKEN: ${{ secrets.XPKG_REGISTRY_TOKEN }}
   # ── Security gate ─────────────────────────────────────────────────
   VEX_EXCEPTIONS: security/vex-exceptions.openvex.json
   VENS_CONFIG: security/vens-config.yaml
@@ -466,9 +466,8 @@ jobs:
       - name: Check credentials
         run: |
           MISSING=""
-          [ -n "$UP_API_TOKEN" ] || MISSING="$MISSING UP_API_TOKEN"
-          [ -n "$UP_ORG" ]       || MISSING="$MISSING UP_ORG"
-          [ -n "$UP_ROBOT_ID" ]  || MISSING="$MISSING UP_ROBOT_ID"
+          [ -n "$XPKG_REGISTRY_USERNAME" ] || MISSING="$MISSING XPKG_REGISTRY_USERNAME"
+          [ -n "$XPKG_REGISTRY_TOKEN" ]    || MISSING="$MISSING XPKG_REGISTRY_TOKEN"
           if [ -n "$MISSING" ]; then
             echo "::error::missing required secret(s):$MISSING"
             exit 1
@@ -507,23 +506,21 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install and login with up
+      # `make xpkg.push.up` and `up alpha xpkg append` need the up CLI, but this
+      # registry is not Upbound's, so there is nothing to log in to: install only.
+      - name: Install up
         uses: upbound/action-up@2c4d9663b902087b0808b79fe2c7ec68424d87d8 # v1.2.0
         with:
-          api-token: ${{ secrets.UP_API_TOKEN }}
-          organization: ${{ secrets.UP_ORG }}
+          skip-login: 'true'
 
-      # The up login above is NOT sufficient to push. UP_API_TOKEN is a robot
-      # token, and up's RegistryKeychain explicitly falls back to the Docker
-      # keychain for robot tokens ("robot tokens cannot be used for registry
-      # login 401 Unauthorized"), so the push credentials must come from a
-      # docker login. The robot id is the username.
-      - name: Login to xpkg with robot
+      # up falls back to the Docker keychain for registry credentials, so the push
+      # credentials come from a docker login against docker.io.
+      - name: Login to docker.io
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.XPKG_REGISTRY }}
-          username: ${{ env.UP_ROBOT_ID }}
-          password: ${{ env.UP_API_TOKEN }}
+          username: ${{ env.XPKG_REGISTRY_USERNAME }}
+          password: ${{ env.XPKG_REGISTRY_TOKEN }}
 
       - name: Vendor Dependencies
         run: make vendor vendor.check
@@ -544,7 +541,7 @@ jobs:
           name: output
           path: _output/**
 
-      - name: Push Package to xpkg.upbound.io
+      - name: Push Package to docker.io
         run: make xpkg.push.up VERSION=${{ needs.resolve.outputs.tag }}
 
       # Record exactly what was pushed. The attest job re-resolves the tag and
@@ -626,18 +623,17 @@ jobs:
         with:
           name: security-artifacts
 
-      - name: Install and login with up
+      - name: Install up
         uses: upbound/action-up@2c4d9663b902087b0808b79fe2c7ec68424d87d8 # v1.2.0
         with:
-          api-token: ${{ secrets.UP_API_TOKEN }}
-          organization: ${{ secrets.UP_ORG }}
+          skip-login: 'true'
 
-      - name: Login to xpkg with robot
+      - name: Login to docker.io
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.XPKG_REGISTRY }}
-          username: ${{ env.UP_ROBOT_ID }}
-          password: ${{ env.UP_API_TOKEN }}
+          username: ${{ env.XPKG_REGISTRY_USERNAME }}
+          password: ${{ env.XPKG_REGISTRY_TOKEN }}
 
       # Confirm the tag still resolves to what build-and-push pushed before
       # anything is derived from it. Everything downstream then works from

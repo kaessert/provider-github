@@ -3,11 +3,12 @@ kind: Provider
 metadata:
   name: provider-github
   annotations:
-    meta.crossplane.io/maintainer: Crossplane Maintainers <info@crossplane.io>
-    meta.crossplane.io/source: github.com/crossplane/provider-github
+    meta.crossplane.io/maintainer: Tobias Kässer <t.kaesser@gmail.com>, Iulian Mandache <mandache.dym@gmail.com>
+    meta.crossplane.io/source: github.com/provider-github/provider-github
     meta.crossplane.io/license: Apache-2.0
     meta.crossplane.io/description: |
-      A github that can be used to create Crossplane providers.
+      A Crossplane provider for managing GitHub organizations, repositories,
+      teams and memberships.
 spec:
   capabilities:
     - safe-start

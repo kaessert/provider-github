@@ -50,6 +50,90 @@ See [RELEASES.md](./RELEASES.md) for the release and support policy: which
 releases receive fixes, what each version number means, and what to expect when
 upgrading or downgrading.
 
+## Verifying this package
+
+Every release publishes an image signature plus a full ladder of OCI 1.1
+attestations — two SBOMs, two VEX statements, SLSA provenance, and a
+vens risk-scoring context document — using [Sigstore
+cosign](https://github.com/sigstore/cosign) keyless signing. There is no key
+to manage or rotate: the signing identity is the GitHub Actions OIDC token
+for the release workflow run.
+
+**Requires cosign >= 3.0.6.** cosign v3.x attaches
+attestations as OCI 1.1 referrers, not the legacy `.sig`/`.att` tag scheme —
+`crane ls` on the image shows only the version tag and the digest tag. An
+older cosign, and some Kyverno / policy-controller configurations expecting
+the legacy tags, report "no signatures found" on an image that is correctly
+signed. Install a current cosign before running the commands below.
+
+Every referrer currently carries the same
+`dev.sigstore.bundle.predicateType: https://sigstore.dev/cosign/sign/v1`
+annotation, including the SBOMs — this is upstream cosign behavior, not
+specific to this project, so do not filter referrers on that annotation.
+Select the one you want with `--type` on `cosign verify-attestation`, as the
+commands below do.
+
+```bash
+UP_ORG=atarax
+GITHUB_ORG=provider-github
+PROJECT_NAME=provider-github
+VERSION=vX.Y.Z                     # the release you are verifying
+ISSUER="https://token.actions.githubusercontent.com"
+
+# The repository segment, unlike the org segment, is a naming rule that
+# binds every provider: releases are only ever cut upstream, never from a
+# fork, so the repository's name is always ${PROJECT_NAME} -- read from a
+# recorded rule, not guessed. The identity also stays pinned to the org,
+# the workflow path and the exact tag.
+# VERSION is regexp-escaped before interpolation -- an unescaped '.'
+# is a wildcard that would let a tag differing from VERSION only at a '.'
+# position verify here too.
+VERSION_RE="${VERSION//./\\.}"
+IDENTITY_REGEXP="^https://github\.com/${GITHUB_ORG}/${PROJECT_NAME}/\.github/workflows/release\.yaml@refs/tags/${VERSION_RE}\$"
+IMAGE="docker.io/${UP_ORG}/${PROJECT_NAME}"
+
+DIGEST=$(crane digest "${IMAGE}:${VERSION}")
+SUBJECT="${IMAGE}@${DIGEST}"
+
+# Signature
+cosign verify \
+  --certificate-identity-regexp "$IDENTITY_REGEXP" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$SUBJECT"
+
+# SBOMs
+cosign verify-attestation --type spdxjson  --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+cosign verify-attestation --type cyclonedx --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# VEX
+cosign verify-attestation --type openvex                    --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+cosign verify-attestation --type https://cyclonedx.org/vex  --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# SLSA provenance
+cosign verify-attestation --type slsaprovenance1 --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# vens risk-scoring context
+cosign verify-attestation --type https://vens.dev/risk-context/v1 --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+```
+
+Or run the whole ladder non-interactively, including the cross-check that
+every attestation's subject digest matches what the tag currently resolves
+to:
+
+```bash
+hack/verify-release.sh vX.Y.Z
+```
+
+### SBOM identity
+
+The Go-module SBOM's `metadata.component.name` is this project's module
+path, `github.com/upbound/provider-github`. A module path and the
+name of the git repository hosting this project are independent
+identifiers, and are allowed to disagree — this is not a substitution or a
+mismatch: the module path names who publishes this project, while a
+repository name is only a hostname path segment, free to differ from it.
+
+
 ## GitHub App permissions
 
 See [PERMISSIONS.md](./PERMISSIONS.md) for the GitHub App permissions
