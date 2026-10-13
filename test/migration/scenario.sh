@@ -63,6 +63,9 @@ scenario_cleanup() {
   else
     record FAIL "the organization is back at its baseline snapshot" "see baseline-diff.txt"
   fi
+  # The installation token cached for the run (mint_token) is no longer needed:
+  # the sweep and the baseline comparison were the last callers.
+  rm -f "${MIGRATION_WORKDIR}/.token"
   write_report
   summarize
   local status=$?
