@@ -54,35 +54,6 @@ CREDS="${PROVIDER_GITHUB_APP_ID},${PROVIDER_GITHUB_APP_INSTALLATION_ID},${PEM}"
 echo "setup.sh: GitHub App credentials are set, proceeding..."
 
 # ---------------------------------------------------------------------------
-# Wait for the ProviderConfig-family CRDs to be Established.
-#
-# local.xpkg.deploy.provider.* applies the Provider package and returns before
-# the package manager has unpacked it and registered its CRDs, so an
-# un-retried apply of a ProviderConfig races that and fails with "no matches
-# for kind ProviderConfig ... ensure CRDs are installed first". The jsonpath
-# poll reads an EMPTY string both while the CRD does not exist and while it
-# exists with no .status yet, so both races fall into the same retry.
-# ---------------------------------------------------------------------------
-wait_for_crd_established() {
-  local crd="$1"
-  local max_wait=120
-  local elapsed=0
-  while [ "$(${KUBECTL} get "crd/${crd}" -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null)" != "True" ]; do
-    if [ "${elapsed}" -ge "${max_wait}" ]; then
-      echo "setup.sh: ERROR: CRD ${crd} not Established within ${max_wait}s" >&2
-      return 1
-    fi
-    sleep 3
-    elapsed=$((elapsed + 3))
-  done
-}
-
-for crd in providerconfigs.github.crossplane.io providerconfigs.github.m.crossplane.io clusterproviderconfigs.github.m.crossplane.io; do
-  echo "setup.sh: waiting for CRD ${crd} to be Established..."
-  wait_for_crd_established "${crd}"
-done
-
-# ---------------------------------------------------------------------------
 # Namespaces. Cluster-scoped examples publish connection secrets into
 # crossplane-system; namespaced examples live in default.
 # ---------------------------------------------------------------------------

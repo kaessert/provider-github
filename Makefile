@@ -512,6 +512,14 @@ build: $(if $(filter e2e e2e.%,$(MAKECMDGOALS)),e2e-preflight,)
 # otherwise the provider hangs at Installed=False reason=UnpackingPackage.
 e2e e2e.%: VERSION := v0.0.0-e2e
 
+.PHONY: e2e-wait-crds
+e2e-wait-crds: $(KUBECTL) ## Wait until every CRD the package owns is Established and served
+	@$(INFO) waiting for every package CRD to be Established and served
+	@KUBECTL=$(KUBECTL) hack/e2e-wait-crds.sh || $(FAIL)
+	@$(OK) every package CRD is Established and served
+
+uptest: e2e-wait-crds
+
 # Per-resource E2E target blocks, sorted alphabetically by resource name.
 
 e2e.actions-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS)
