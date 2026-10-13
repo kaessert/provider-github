@@ -22,8 +22,8 @@
 # MIGRATION_WORKDIR is unset, so two runs at once (two worktrees, two shells) never
 # share results files. The directory is removed when the step passes and kept, with
 # its path printed, when it fails. An explicit MIGRATION_WORKDIR is used as given. The
-# three scenarios keep the documented default, which later runs reuse (the token
-# cache, the baseline checkout, the cleanup baseline).
+# three scenarios keep the documented default, which later runs reuse (the baseline
+# checkout, the cleanup baseline).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
