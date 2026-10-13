@@ -1,5 +1,5 @@
 /*
-Copyright 2020 The Crossplane Authors.
+Copyright 2026 The Crossplane Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha1 contains the v1alpha1 group Sample resources of the {{ .Env.PROVIDER }} provider.
+// Package {{ .Env.APIVERSION | strings.ToLower }} contains the {{ .Env.APIVERSION | strings.ToLower }} group {{ .Env.GROUP | strings.ToLower }} resources of the {{ .Env.PROVIDER }} provider.
 // +kubebuilder:object:generate=true
-// +groupName={{ .Env.GROUP | strings.ToLower }}.{{ .Env.PROVIDER | strings.ToLower }}.crossplane.io
+// +groupName={{ .Env.GROUP | strings.ToLower }}.{{ .Env.PROVIDER | strings.ToLower }}{{ if eq .Env.SCOPE "namespaced" }}.m{{ end }}.crossplane.io
 // +versionName={{ .Env.APIVERSION | strings.ToLower }}
 package {{ .Env.APIVERSION | strings.ToLower }}
 
@@ -27,7 +27,7 @@ import (
 
 // Package type metadata.
 const (
-	Group   = "{{ .Env.GROUP | strings.ToLower }}.{{ .Env.PROVIDER | strings.ToLower }}.crossplane.io"
+	Group   = "{{ .Env.GROUP | strings.ToLower }}.{{ .Env.PROVIDER | strings.ToLower }}{{ if eq .Env.SCOPE "namespaced" }}.m{{ end }}.crossplane.io"
 	Version = "{{ .Env.APIVERSION | strings.ToLower }}"
 )
 

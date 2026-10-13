@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Crossplane Authors.
+Copyright 2026 The Crossplane Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,14 +22,13 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	ghclient "github.com/provider-github/provider-github/internal/clients"
-	"github.com/provider-github/provider-github/apis/organizations/v1alpha1"
-  // "github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"{{ .Env.PROJECT_REPO }}/apis/cluster/{{ .Env.GROUP | strings.ToLower }}/{{ .Env.APIVERSION | strings.ToLower }}"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -40,16 +39,16 @@ import (
 // https://github.com/golang/go/wiki/TestComments
 // https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md#contributing-code
 
-type {{ .Env.KIND | strings.ToLower }}Modifier func(*v1alpha1.{{ .Env.KIND }})
+type {{ .Env.KIND | strings.ToLower }}Modifier func(*{{ .Env.APIVERSION | strings.ToLower }}.{{ .Env.KIND }})
 
 // func withProperty() {{ .Env.KIND | strings.ToLower }}Modifier {
-// 	return func(r *v1alpha1.{{ .Env.KIND }}) {
+// 	return func(r *{{ .Env.APIVERSION | strings.ToLower }}.{{ .Env.KIND }}) {
 // 		r.Spec.ForProvider.ConfigurableField = "value"
 // 	}
 // }
 
-func {{ .Env.KIND | strings.ToLower }}(m ...{{ .Env.KIND | strings.ToLower }}Modifier) *v1alpha1.{{ .Env.KIND }} {
-	cr := &v1alpha1.{{ .Env.KIND }}{}
+func {{ .Env.KIND | strings.ToLower }}(m ...{{ .Env.KIND | strings.ToLower }}Modifier) *{{ .Env.APIVERSION | strings.ToLower }}.{{ .Env.KIND }} {
+	cr := &{{ .Env.APIVERSION | strings.ToLower }}.{{ .Env.KIND }}{}
 
 	meta.SetExternalName(cr, "")
 
@@ -60,10 +59,6 @@ func {{ .Env.KIND | strings.ToLower }}(m ...{{ .Env.KIND | strings.ToLower }}Mod
 }
 
 func TestObserve(t *testing.T) {
-	type fields struct {
-		github *ghclient.Client
-	}
-
 	type args struct {
 		ctx context.Context
 		mg  resource.Managed
@@ -76,16 +71,35 @@ func TestObserve(t *testing.T) {
 
 	cases := map[string]struct {
 		reason string
-		fields fields
 		args   args
 		want   want
 	}{
+		"ErrNot{{ .Env.KIND }}": {
+			reason: "An observed resource of the wrong kind must be reported as an error.",
+			args: args{
+				ctx: context.Background(),
+				mg:  nil,
+			},
+			want: want{
+				err: errors.New(errNot{{ .Env.KIND }}),
+			},
+		},
+		"Exists": {
+			reason: "The stub reports the resource as existing and up to date.",
+			args: args{
+				ctx: context.Background(),
+				mg:  {{ .Env.KIND | strings.ToLower }}(),
+			},
+			want: want{
+				o: managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true},
+			},
+		},
 		// TODO: Add test cases.
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			e := external{github: tc.fields.github}
+			e := external{}
 			got, err := e.Observe(tc.args.ctx, tc.args.mg)
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("\n%s\ne.Observe(...): -want error, +got error:\n%s\n", tc.reason, diff)

@@ -14,8 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Please set ProviderNameLower & ProviderNameUpper environment variables before running this script.
-# See: https://github.com/crossplane/terrajet/blob/main/docs/generating-a-provider.md
+# Adds a managed resource type in both API scopes: the cluster-scoped and the
+# namespaced API packages, and one controller package serving both.
+# Required environment: PROVIDER, GROUP, KIND, PROJECT_REPO, GOMPLATE.
+# Run `make generate` afterwards to produce the deepcopy and managed-resource
+# methods, the CRDs and the controller registration.
 set -euo pipefail
 
 APIVERSION="${APIVERSION:-v1alpha1}"
@@ -30,15 +33,32 @@ export PROJECT_REPO
 kind_lower=$(echo "${KIND}" | tr "[:upper:]" "[:lower:]")
 group_lower=$(echo "${GROUP}" | tr "[:upper:]" "[:lower:]")
 
-mkdir -p "apis/${group_lower}/${APIVERSION}"
-${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/GROUP_LOWER.go.tmpl" > "apis/${group_lower}/${group_lower}.go"
-${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/APIVERSION/KIND_LOWER_types.go.tmpl" > "apis/${group_lower}/${APIVERSION}/${kind_lower}_types.go"
-${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/APIVERSION/doc.go.tmpl" > "apis/${group_lower}/${APIVERSION}/doc.go"
-${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/APIVERSION/groupversion_info.go.tmpl" > "apis/${group_lower}/${APIVERSION}/groupversion_info.go"
+# The plural the CRD gets, which the RBAC markers must name.
+case "${kind_lower}" in
+  *s|*x|*ch|*sh) PLURAL="${kind_lower}es" ;;
+  *[!aeiou]y) PLURAL="${kind_lower%y}ies" ;;
+  *) PLURAL="${kind_lower}s" ;;
+esac
+export PLURAL
+
+for scope in cluster namespaced; do
+  export SCOPE="${scope}"
+  api_dir="apis/${scope}/${group_lower}/${APIVERSION}"
+  mkdir -p "${api_dir}"
+  ${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/APIVERSION/KIND_LOWER_types.go.tmpl" > "${api_dir}/${kind_lower}_types.go"
+  # The package files are shared by every kind in the group: keep existing ones.
+  for f in doc groupversion_info; do
+    if [ ! -e "${api_dir}/${f}.go" ]; then
+      ${GOMPLATE} < "hack/helpers/apis/GROUP_LOWER/APIVERSION/${f}.go.tmpl" > "${api_dir}/${f}.go"
+    fi
+  done
+done
 
 mkdir -p "internal/controller/${kind_lower}"
-${GOMPLATE} < "hack/helpers/controller/KIND_LOWER/KIND_LOWER.go.tmpl" > "internal/controller/${kind_lower}/${kind_lower}.go"
-${GOMPLATE} < "hack/helpers/controller/KIND_LOWER/KIND_LOWER_test.go.tmpl" > "internal/controller/${kind_lower}/${kind_lower}_test.go"
+for f in KIND_LOWER cluster namespaced rbac KIND_LOWER_test; do
+  out="${f//KIND_LOWER/${kind_lower}}"
+  ${GOMPLATE} < "hack/helpers/controller/KIND_LOWER/${f}.go.tmpl" > "internal/controller/${kind_lower}/${out}.go"
+done
 
-
-
+# The templates cannot align struct fields and constants for every kind name.
+gofmt -w "apis/cluster/${group_lower}/${APIVERSION}" "apis/namespaced/${group_lower}/${APIVERSION}" "internal/controller/${kind_lower}"

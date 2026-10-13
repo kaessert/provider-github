@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Crossplane Authors.
+Copyright 2026 The Crossplane Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package {{ .Env.APIVERSION }}
+package {{ .Env.APIVERSION | strings.ToLower }}
 
 import (
 	"reflect"
@@ -22,11 +22,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // {{ .Env.KIND }}Parameters are the configurable fields of a {{ .Env.KIND }}.
 type {{ .Env.KIND }}Parameters struct {
+	// Org is the name of the GitHub organization that owns this resource.
+	Org string `json:"org"`
+
 	ConfigurableField string `json:"configurableField"`
 }
 
@@ -37,14 +40,14 @@ type {{ .Env.KIND }}Observation struct {
 
 // A {{ .Env.KIND }}Spec defines the desired state of a {{ .Env.KIND }}.
 type {{ .Env.KIND }}Spec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       {{ .Env.KIND }}Parameters `json:"forProvider"`
+	xpv2.{{ if eq .Env.SCOPE "cluster" }}Cluster{{ end }}ManagedResourceSpec `json:",inline"`
+	ForProvider {{ .Env.KIND }}Parameters `json:"forProvider"`
 }
 
 // A {{ .Env.KIND }}Status represents the observed state of a {{ .Env.KIND }}.
 type {{ .Env.KIND }}Status struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          {{ .Env.KIND }}Observation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 {{ .Env.KIND }}Observation `json:"atProvider,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -55,7 +58,7 @@ type {{ .Env.KIND }}Status struct {
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,{{ .Env.PROVIDER | strings.ToLower }}}
+// +kubebuilder:resource:scope={{ if eq .Env.SCOPE "cluster" }}Cluster{{ else }}Namespaced{{ end }},categories={crossplane,managed,{{ .Env.PROVIDER | strings.ToLower }}}
 type {{ .Env.KIND }} struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

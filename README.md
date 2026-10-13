@@ -435,7 +435,7 @@ To add a new resource follow these steps:
   export type=MyType # Camel casee.g. Bucket, Database, CacheCluster, etc.
   make provider.addtype provider=GitHub group=${group} kind=${type}
 ```
-3. Call the `Setup` function of your controller here `internal/controller/github.go`
+3. Run `make generate` to generate the deepcopy and managed-resource methods, the CRDs and the controller registration (`make generate-registration` writes `apis/zz_generated_register.go` and `internal/controller/zz_generated_register.go`)
 4. Run `make run` to run locally
 5. Run `make reviewable` to run code generation, linters, and tests.
 6. Run `make build` to build the provider.
