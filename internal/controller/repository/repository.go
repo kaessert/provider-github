@@ -50,6 +50,7 @@ import (
 	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
 	"github.com/provider-github/provider-github/internal/controller/driftcmp"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 	"github.com/provider-github/provider-github/internal/telemetry"
 	"github.com/provider-github/provider-github/internal/util"
 )
@@ -133,7 +134,12 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// status.atProvider shows what GitHub holds for the sections after the first
 	// one that differs; drift records only that a section differed. The read path
 	// follows GitHub's archived state, not the spec's.
-	drift := pointer.Deref(cr.Spec.ForProvider.Archived, false) != pointer.Deref(repo.Archived, false)
+	//
+	// Under an Observe-only policy a field the spec omits is not compared: there
+	// is no write that could correct it, so reporting it would hold Ready False.
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
+	drift := (cr.Spec.ForProvider.Archived != nil || writes) &&
+		pointer.Deref(cr.Spec.ForProvider.Archived, false) != pointer.Deref(repo.Archived, false)
 	if pointer.Deref(repo.Archived, false) {
 		return c.observeArchived(ctx, cr, repo, name, drift)
 	}
@@ -147,7 +153,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
 	cr.Status.AtProvider.Permissions.Users = mirrorUsers(collaborators.observed)
-	drift = drift || collaborators.hasDrift()
+	drift = drift || ((cr.Spec.ForProvider.Permissions.Users != nil || writes) && collaborators.hasDrift())
 
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTToPermission, err := getRepoTeamsWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -156,7 +162,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTToPermission)
 
-	drift = drift || !driftcmp.Equal(ghTToPermission, crTToPermission)
+	drift = drift || ((cr.Spec.ForProvider.Permissions.Teams != nil || writes) && !driftcmp.Equal(ghTToPermission, crTToPermission))
 
 	if cr.Spec.ForProvider.Webhooks != nil {
 		ghRepoWebhooks, err := getRepoWebhooks(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -445,14 +451,16 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 		return managed.ExternalObservation{}, err
 	}
 	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTeams)
-	teamsDrift := !driftcmp.Equal(ghTeams, crTeams)
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
+	teamsDrift := (cr.Spec.ForProvider.Permissions.Teams != nil || writes) && !driftcmp.Equal(ghTeams, crTeams)
 
 	topicsDrift := false
 	if cr.Spec.ForProvider.Topics != nil {
 		topicsDrift = !driftcmp.Equal(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
 	}
 
-	if drift || len(removable) > 0 || teamsDrift || topicsDrift {
+	usersDrift := (cr.Spec.ForProvider.Permissions.Users != nil || writes) && len(removable) > 0
+	if drift || usersDrift || teamsDrift || topicsDrift {
 		return drifted(cr), nil
 	}
 
@@ -1645,17 +1653,24 @@ const (
 const typeSettingsPartial xpv2.ConditionType = "SettingsPartial"
 
 // editRequest builds the settings Edit Update sends; Observe compares the same request against GitHub.
+// Under an Observe-only policy a description, isTemplate or private the spec
+// omits is left out of the request, so Observe does not compare it.
 func editRequest(cr *v1alpha1.Repository, repo *github.Repository, name string) *github.Repository {
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
 	archived := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
 	req := &github.Repository{
-		Name:        &name,
-		Description: &cr.Spec.ForProvider.Description,
-		Archived:    &archived,
-		IsTemplate:  &isTemplate,
+		Name:     &name,
+		Archived: &archived,
+	}
+	if cr.Spec.ForProvider.Description != "" || writes {
+		req.Description = &cr.Spec.ForProvider.Description
+	}
+	if cr.Spec.ForProvider.IsTemplate != nil || writes {
+		isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
+		req.IsTemplate = &isTemplate
 	}
 	// Visibility can't be changed on a fork.
-	if !pointer.Deref(repo.Fork, false) {
+	if !pointer.Deref(repo.Fork, false) && (cr.Spec.ForProvider.Private != nil || writes) {
 		private := pointer.Deref(cr.Spec.ForProvider.Private, true)
 		req.Private = &private
 	}
