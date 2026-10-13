@@ -38,6 +38,7 @@ import (
 
 	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 )
 
 // GitHub team membership roles.
@@ -371,13 +372,18 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghParentTeamSlug = pointer.Deref(t.Parent.Slug, "")
 	}
 
-	structuralDrift := crParentTeamSlug != ghParentTeamSlug ||
-		pointer.Deref(cr.Spec.ForProvider.Privacy, "secret") != pointer.Deref(t.Privacy, "secret") ||
-		cr.Spec.ForProvider.Description != pointer.Deref(t.Description, "")
+	// Under an Observe-only policy a field the spec omits is not compared: no
+	// write could correct it, so reporting it would hold Ready False.
+	p := cr.Spec.ForProvider
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
+	structuralDrift := ((p.Parent != nil || writes) && crParentTeamSlug != ghParentTeamSlug) ||
+		((p.Privacy != nil || writes) && pointer.Deref(p.Privacy, "secret") != pointer.Deref(t.Privacy, "secret")) ||
+		((p.Description != "" || writes) && p.Description != pointer.Deref(t.Description, ""))
+	memberDrift := (p.Members != nil || writes) && categorized.hasMemberDrift()
 
 	setTeamMembershipPartialCondition(ctx, cr, categorized.pendingOrg, categorized.pendingTeam, categorized.roleEnforced)
 
-	if structuralDrift || categorized.hasMemberDrift() {
+	if structuralDrift || memberDrift {
 		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{
 			ResourceExists:   true,

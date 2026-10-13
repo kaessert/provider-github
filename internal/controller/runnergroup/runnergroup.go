@@ -31,6 +31,7 @@ import (
 
 	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 	"github.com/provider-github/provider-github/internal/util"
 )
 
@@ -71,11 +72,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Every section is read and mirrored before a difference is reported, so
 	// status.atProvider shows the repositories GitHub gives access to even when
 	// a field before them differs.
-	// An omitted visibility (an Observe-only import) is not compared.
+	// An omitted visibility, allowsPublicRepositories or selectedWorkflows
+	// under an Observe-only policy is not compared.
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
 	drift := (p.Visibility != "" && g.GetVisibility() != p.Visibility) ||
-		g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories ||
-		g.GetRestrictedToWorkflows() != (len(want) > 0) ||
-		!util.EqualUnordered(g.SelectedWorkflows, want)
+		((p.AllowsPublicRepositories || writes) && g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories) ||
+		((p.SelectedWorkflows != nil || writes) &&
+			(g.GetRestrictedToWorkflows() != (len(want) > 0) || !util.EqualUnordered(g.SelectedWorkflows, want)))
 
 	// The list exists on GitHub's side while GitHub's visibility is selected,
 	// whatever the spec says.

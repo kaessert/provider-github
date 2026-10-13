@@ -35,6 +35,7 @@ import (
 
 	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 	"github.com/provider-github/provider-github/internal/util"
 )
 
@@ -88,7 +89,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		meta.SetExternalName(cr, id)
 	}
 
-	if !configUpToDate(h, p) {
+	if !configUpToDate(h, p, cr.GetManagementPolicies()) {
 		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false, ResourceLateInitialized: lateInit}, nil
 	}
@@ -125,14 +126,19 @@ func mirrorHook(ap *v1alpha1.OrganizationWebhookObservation, h *github.Hook, org
 	ap.InsecureSSL = &insecure
 }
 
-// configUpToDate compares every hook field except the secret. A url,
-// contentType or events the spec omits (an Observe-only import) is not compared.
-func configUpToDate(h *github.Hook, p v1alpha1.OrganizationWebhookParameters) bool {
+// configUpToDate compares every hook field except the secret. A url or
+// contentType the spec omits, and events the spec omits or leaves empty, are
+// not compared (an Observe-only import); a declared empty events list is
+// compared under an Observe-only policy. An active or insecureSsl the spec
+// omits is compared only under a policy that writes.
+func configUpToDate(h *github.Hook, p v1alpha1.OrganizationWebhookParameters, policies xpv2.ManagementPolicies) bool {
+	writes := mgmtpolicy.WritesDeclared(policies)
+	eventsDeclared := len(p.Events) > 0 || (p.Events != nil && !writes)
 	return (p.URL == "" || h.Config.GetURL() == p.URL) &&
 		(p.ContentType == "" || h.Config.GetContentType() == p.ContentType) &&
-		(len(p.Events) == 0 || util.EqualUnordered(h.Events, p.Events)) &&
-		h.GetActive() == pointer.Deref(p.Active, true) &&
-		(h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSSL, false)
+		(!eventsDeclared || util.EqualUnordered(h.Events, p.Events)) &&
+		((p.Active == nil && !writes) || h.GetActive() == pointer.Deref(p.Active, true)) &&
+		((p.InsecureSSL == nil && !writes) || (h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSSL, false))
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
@@ -237,7 +243,9 @@ func (c *external) findHook(ctx context.Context, cr *v1alpha1.OrganizationWebhoo
 func (c *external) secretUpToDate(ctx context.Context, cr *v1alpha1.OrganizationWebhook, h *github.Hook) (bool, error) {
 	ghHasSecret := h.Config != nil && h.Config.Secret != nil
 	if cr.Spec.ForProvider.SecretKeyRef == nil {
-		return !ghHasSecret, nil
+		// An omitted secretKeyRef is a declared "no secret" only under a policy
+		// that writes; under an Observe-only policy the secret is not compared.
+		return !ghHasSecret || !mgmtpolicy.WritesDeclared(cr.GetManagementPolicies()), nil
 	}
 	if !ghHasSecret {
 		return false, nil
