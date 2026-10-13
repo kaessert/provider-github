@@ -84,9 +84,13 @@ releases_json() {
 # final release reporting only what changed since its last candidate, which is
 # usually nothing. Notes are cumulative across a candidate series by design.
 #
-# A provider whose only releases are candidates has no stable baseline, so it
-# falls back to the most recent release of any kind rather than producing
-# nothing.
+# A repository with no earlier stable release has no baseline to measure
+# against, and the answer is then nothing at all: pick_prev prints an empty
+# line and the range becomes the whole history up to the tag. That holds for
+# the first candidate AND for the first stable release, whose notes must cover
+# everything in its candidates. Falling back to the newest candidate instead
+# would make the first stable release report only what landed after its last
+# candidate.
 #
 # "Newest" is decided by semantic version, not by publication date. A backport
 # release on an older line publishes out of chronological order by
@@ -104,9 +108,7 @@ pick_prev() {
     | ( [ $rel[] | select(.prerelease | not)
                  | select((.tag_name | semver) as $v | $v < $tagver) ]
         | sort_by([ (.tag_name | semver), .published_at ]) | reverse | .[0].tag_name ) as $stable
-    | ( $stable
-        // ( $rel | sort_by([ (.tag_name | semver), .published_at ]) | reverse | .[0].tag_name )
-        // empty )
+    | ( $stable // empty )
   '
 }
 
@@ -117,6 +119,11 @@ resolve_prev() {
 
 range_shas() {
   local prev="$1"
+  if [ -z "$prev" ]; then
+    # No baseline: every commit reachable from the tag.
+    gh api "repos/$REPO/commits?sha=$TAG&per_page=100" --paginate --jq '.[].sha'
+    return
+  fi
   gh api "repos/$REPO/compare/$prev...$TAG" --jq '.commits[].sha'
 }
 
@@ -141,8 +148,7 @@ collect() {
     nums="${RELNOTES_FIXTURE_RANGE:-$(printf '%s' "$all" | jq -c '[ .[].number ]')}"
   else
     prev=$(resolve_prev)
-    [ -n "$prev" ] || { echo "release-notes: no previous release found" >&2; return 1; }
-    echo "release-notes: range $prev...$TAG" >&2
+    echo "release-notes: range ${prev:-<start of history>}...$TAG" >&2
     shas=$(range_shas "$prev" | jq -R . | jq -s .)
     nums=$(printf '%s' "$all" | jq -c --argjson shas "$shas" \
            '[ .[] | select(.merge_commit_sha as $s | $shas | index($s)) | .number ]')
