@@ -23,6 +23,8 @@
 #     and branch protection with its IDs unchanged, one that was Synced and Ready may not, an Organization
 #     reporting a drift: message is re-read before it counts as a regression, and an updated_at move is
 #     attributed to a provider write or to somebody else;
+#   * the cleanup every scenario ends with removes the cached installation token after the
+#     sweep and the baseline comparison, whether the scenario body passed or failed;
 #   * the entry point fails fast and names the missing input.
 set -uo pipefail
 
@@ -1459,6 +1461,50 @@ else
     "observe ${n_observe} (${n_observe_detail}), unlisted ${n_observe_plain}, full created ${n_full_created}, full missing ${n_full_missing}, full unlisted ${n_full_unlisted}, full undeclared ${n_full_undeclared}, extra in atProvider ${n_reports_extra}"
 fi
 EVIDENCE_DIR="${saved_evidence}"; RESULTS_FILE="${saved_results}"
+
+# --- the cached installation token does not outlive the run ----------------------
+# scenario_cleanup is the exit trap of every scenario. It runs here in a child shell against
+# a copy of the harness whose oob.sh is a stand-in that reports whether the token was still
+# there when the sweep and the baseline comparison ran, and then ends the run with the status
+# under test.
+token_case() { # token_case <name> <scenario body exit status>
+  local d="${T}/token-$1" rc=0
+  rm -rf "${d}"
+  mkdir -p "${d}/harness"
+  for f in lib.sh cluster.sh baseline.sh scenario.sh; do ln -s "${HERE}/${f}" "${d}/harness/${f}"; done
+  cat >"${d}/harness/oob.sh" <<OOB
+#!/usr/bin/env bash
+[ -f "${d}/wd/.token" ] && echo "\$1 saw-token" >>"${d}/oob.log"
+exit 0
+OOB
+  chmod +x "${d}/harness/oob.sh"
+  : >"${d}/oob.log"
+  env -i PATH="${PATH}" MIGRATION_WORKDIR="${d}/wd" MIGRATION_DIR="${d}/harness" bash -c '
+    . "${MIGRATION_DIR}/scenario.sh"
+    require_tools() { :; }; require_credentials() { :; }; require_cluster_env() { :; }
+    scenario_begin tokentest
+    printf secret >"${MIGRATION_WORKDIR}/.token"
+    exit '"$2"'
+  ' >"${d}/out.txt" 2>&1 || rc=$?
+  TOKEN_RC="${rc}"
+  TOKEN_PRESENT=no
+  [ -e "${d}/wd/.token" ] && TOKEN_PRESENT=yes
+  TOKEN_OOB="$(paste -sd';' "${d}/oob.log")"
+}
+token_case pass 0
+if [ "${TOKEN_RC}" = 0 ] && [ "${TOKEN_PRESENT}" = no ] && [ "${TOKEN_OOB}" = "sweep saw-token;verify-baseline saw-token" ]; then
+  record PASS "a scenario that passes leaves no cached installation token behind, and the sweep and the baseline comparison still had it"
+else
+  record FAIL "a scenario that passes leaves no cached installation token behind, and the sweep and the baseline comparison still had it" \
+    "rc ${TOKEN_RC}, token present ${TOKEN_PRESENT}, oob ${TOKEN_OOB}; $(tail -3 "${T}/token-pass/out.txt" | tr '\n' ';')"
+fi
+token_case fail 3
+if [ "${TOKEN_RC}" != 0 ] && [ "${TOKEN_PRESENT}" = no ] && [ "${TOKEN_OOB}" = "sweep saw-token;verify-baseline saw-token" ]; then
+  record PASS "a scenario that fails leaves no cached installation token behind, and the sweep and the baseline comparison still had it"
+else
+  record FAIL "a scenario that fails leaves no cached installation token behind, and the sweep and the baseline comparison still had it" \
+    "rc ${TOKEN_RC}, token present ${TOKEN_PRESENT}, oob ${TOKEN_OOB}; $(tail -3 "${T}/token-fail/out.txt" | tr '\n' ';')"
+fi
 
 # --- entry point fails fast and names the input -----------------------------------
 creds=(PROVIDER_GITHUB_APP_ID=1 PROVIDER_GITHUB_APP_INSTALLATION_ID=2 "PROVIDER_GITHUB_APP_PRIVATE_KEY_B64=$(printf x | base64)")
