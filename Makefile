@@ -225,15 +225,19 @@ reviewable: check-breaking-changes
 # ====================================================================================
 # Tool tests
 #
-# Standalone tool modules (their own go.mod, kept out of GO_SUBDIRS so `make
-# test`/`make reviewable` never pull them into the provider's module graph)
-# and shell guardrail tests under test/hooks/ and hack/ have no runner
+# test/sealedbox is a package of the main module, but GO_SUBDIRS stops at the
+# product code (cmd internal apis), so `make test` never reaches it; this
+# target runs it. Standalone tool modules (their own go.mod, kept out of
+# GO_SUBDIRS so `make test`/`make reviewable` never pull them into the
+# provider's module graph) and shell guardrail tests under test/hooks/ and hack/ have no runner
 # otherwise. Discovers modules rather than naming them, and skips package-less
 # ones -- a stub module holding only go.mod/go.sum makes `go test ./...` exit 1
 # ("no packages to test") even though there is nothing to test. Any failing
 # iteration fails the target.
-test.tools: ## Run unit tests for tools/*/ modules and the shell guardrail tests
-	@rc=0; for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \; 2>/dev/null); do \
+test.tools: ## Run unit tests for tools/*/ modules, test/sealedbox and the shell guardrail tests
+	@rc=0; $(INFO) go test ./test/sealedbox; \
+	go test ./test/sealedbox/... -count=1 || rc=1; \
+	for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \; 2>/dev/null); do \
 		[ -n "$$(cd $$d && go list ./... 2>/dev/null)" ] || continue; \
 		$(INFO) go test $$d; \
 		(cd $$d && go test ./... -count=1) || rc=1; \
