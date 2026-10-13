@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // fakeManager satisfies the two ctrl.Manager methods the precheck uses.
@@ -92,7 +93,7 @@ func TestCanWatchCRDRetriesUntilGranted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := canWatchCRD(ctx, &fakeManager{c: c})
+	got, err := canWatchCRD(ctx, &fakeManager{c: c}, logging.NewNopLogger())
 	if err != nil {
 		t.Fatalf("canWatchCRD(...): unexpected error: %v", err)
 	}
@@ -105,11 +106,52 @@ func TestCanWatchCRDDenialAtDeadlineIsNotAnError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	got, err := canWatchCRD(ctx, &fakeManager{c: reviewClient(func(int) bool { return false }, nil)})
+	got, err := canWatchCRD(ctx, &fakeManager{c: reviewClient(func(int) bool { return false }, nil)}, logging.NewNopLogger())
 	if err != nil {
 		t.Fatalf("canWatchCRD(...): a denial at the deadline must not be an error, got %v", err)
 	}
 	if got {
 		t.Error("canWatchCRD(...): got true, want false for a permanent denial")
+	}
+}
+
+func TestCanWatchCRDTransientErrorIsRetried(t *testing.T) {
+	// The first review fails with a transient error, the second is allowed: the
+	// precheck must keep polling instead of ending on the error.
+	failed := false
+	c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+			if !failed {
+				failed = true
+				return errors.New("connection reset by peer")
+			}
+			if sar, ok := obj.(*authv1.SelfSubjectAccessReview); ok {
+				sar.Status.Allowed = true
+			}
+			return nil
+		},
+	}).Build()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := canWatchCRD(ctx, &fakeManager{c: c}, logging.NewNopLogger())
+	if err != nil {
+		t.Fatalf("canWatchCRD(...): a transient error must not be returned, got %v", err)
+	}
+	if !got {
+		t.Error("canWatchCRD(...): got false, want true once a review is allowed after the transient error")
+	}
+}
+
+func TestCanWatchCRDPersistentErrorFallsBackAtDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	got, err := canWatchCRD(ctx, &fakeManager{c: reviewClient(func(int) bool { return true }, errors.New("boom"))}, logging.NewNopLogger())
+	if err != nil {
+		t.Fatalf("canWatchCRD(...): an error at the deadline must not be returned, got %v", err)
+	}
+	if got {
+		t.Error("canWatchCRD(...): got true, want false when every review errors")
 	}
 }
