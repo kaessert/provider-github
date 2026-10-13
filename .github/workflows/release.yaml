@@ -34,11 +34,13 @@ on:
         description: "Version to release (e.g. v1.0.0-rc1). Must already exist as a tag."
         required: true
 
+# Read-only by default. A job that needs more declares its own `permissions:`
+# block, which REPLACES this one for that job, so each block lists contents
+# explicitly. No job holds a write scope it has no step for: security-gate
+# executes downloaded tooling and a third-party API key, resolve needs no
+# token at all.
 permissions:
-  contents: write          # create releases, attach assets
-  pull-requests: read      # read release-note blocks from merged PR bodies
-  id-token: write          # keyless cosign via Sigstore OIDC
-  attestations: write      # SLSA provenance attestation
+  contents: read
 
 # Never let two releases of the same version run concurrently -- they would
 # race on `xpkg append`, which re-pushes the image and moves the digest out
@@ -77,6 +79,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   resolve:
     runs-on: ubuntu-latest
+    permissions: {}          # no checkout, no API call -- needs no token scope
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
@@ -86,16 +89,16 @@ jobs:
           INPUT_VERSION: ${{ github.event.inputs.version }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${INPUT_VERSION:-$REF_NAME}"
-          case "$TAG" in
+          VERSION="${INPUT_VERSION:-$REF_NAME}"
+          case "$VERSION" in
             v*) ;;
             *)
-              echo "::error::resolved version '$TAG' does not look like a release tag (expected a leading 'v')"
+              echo "::error::version '$VERSION' does not look like a release tag (expected a leading 'v')"
               exit 1
               ;;
           esac
-          echo "Releasing $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
 
   # ════════════════════════════════════════════════════════════════════
   # Security gate: runs on source only, so nothing is published unless
@@ -104,6 +107,8 @@ jobs:
   security-gate:
     needs: resolve
     runs-on: ubuntu-latest
+    permissions:
+      contents: read        # actions/checkout; nothing else here touches the API
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -159,12 +164,9 @@ jobs:
           tar xzf "/tmp/${TARBALL}" -C /tmp vens
           install -m 0755 /tmp/vens /usr/local/bin/vens
 
-          # grype: same treatment as vens. The previous form piped
-          # raw.githubusercontent.com/anchore/grype/main/install.sh straight to
-          # sh -- an unverified fetch from a MUTABLE branch ref, executed in a
-          # job that holds id-token: write (enough to mint Sigstore tokens
-          # asserting this repository's identity). Release tarball plus
-          # checksum instead, so nothing in this job runs unverified code.
+          # grype: same treatment as vens. Release tarball plus checksum, never
+          # a pipe of a mutable branch ref's install.sh into sh, so nothing in
+          # this job runs unverified code.
           GRYPE_TARBALL="grype_${GRYPE_VERSION#v}_linux_amd64.tar.gz"
           GRYPE_BASE="https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}"
           curl -sSfL "${GRYPE_BASE}/${GRYPE_TARBALL}" -o "/tmp/${GRYPE_TARBALL}"
@@ -457,6 +459,9 @@ jobs:
   build-and-push:
     needs: [resolve, security-gate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read        # actions/checkout; the registry push authenticates
+                            # with the secrets login below, not GITHUB_TOKEN
     outputs:
       digest: ${{ steps.pushed.outputs.digest }}
     steps:
@@ -591,6 +596,13 @@ jobs:
   attest:
     needs: [resolve, build-and-push]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # `gh api .../releases/generate-notes` fallback in
+                            # "Generate release notes" (POST needs contents:write)
+      pull-requests: read   # hack/release-notes.sh reads release-note blocks
+                            # from merged PR bodies
+      id-token: write       # keyless cosign via Sigstore OIDC
+      attestations: write   # actions/attest-build-provenance
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -849,6 +861,8 @@ jobs:
   release:
     needs: [resolve, attest]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # softprops/action-gh-release creates the Release
     steps:
       - name: Download release assets
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1

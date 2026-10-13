@@ -44,6 +44,16 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
           MESSAGE: ${{ github.event.inputs.message }}
         run: |
+          # Validate before anything is created: a tag pushed with a bad name
+          # is left on the repository, and release.yaml's identical check
+          # only runs after the push.
+          case "$VERSION" in
+            v*) ;;
+            *)
+              echo "::error::version '$VERSION' does not look like a release tag (expected a leading 'v')"
+              exit 1
+              ;;
+          esac
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$VERSION" -m "$MESSAGE"
