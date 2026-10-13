@@ -32,6 +32,20 @@ check() {
   fi
 }
 
+# check_eq is exact equality, for the cases where the expected value is empty
+# and a substring match would pass vacuously.
+check_eq() {
+  local name="$1" expected="$2" actual="$3"
+  if [ "$actual" = "$expected" ]; then
+    echo "PASS: $name"
+  else
+    echo "FAIL: $name"
+    echo "  expected exactly: '$expected'"
+    echo "  got:              '$actual'"
+    fails=$((fails + 1))
+  fi
+}
+
 refute() {
   local name="$1" unexpected="$2" actual="$3"
   if printf '%s' "$actual" | grep -qF -- "$unexpected"; then
@@ -163,11 +177,67 @@ check "final release measures against last stable, not its own candidates" \
 check "a draft release is never chosen as the baseline" \
   "v0.1.0" "$(pick v0.3.0 "$HERE/testdata/release-notes-releases.json")"
 
-check "with no stable release yet, falls back to newest candidate" \
-  "v0.1.0-rc2" "$(pick v0.1.0-rc3 "$HERE/testdata/release-notes-releases-nostable.json")"
+# No earlier STABLE release means no baseline: pick_prev prints nothing and the
+# range is the whole history. A candidate is never the baseline, even for the
+# first stable release, whose notes must cover everything in its candidates.
+check_eq "with no stable release yet, a candidate has no baseline" \
+  "" "$(pick v0.1.0-rc3 "$HERE/testdata/release-notes-releases-nostable.json")"
+
+check_eq "first stable release does not measure against its own candidates" \
+  "" "$(pick v0.1.0 "$HERE/testdata/release-notes-releases-nostable.json")"
+
+check_eq "a repository's first release has no baseline" \
+  "" "$(pick v0.1.0-rc1 "$HERE/testdata/release-notes-releases-only-self.json")"
+
+check_eq "first stable release with only a draft elsewhere has no baseline" \
+  "" "$(pick v0.1.0 "$HERE/testdata/release-notes-releases-only-self.json")"
 
 refute "the tag being released is never its own baseline" \
   "v0.2.0-rc2" "$(pick v0.2.0-rc2 "$HERE/testdata/release-notes-releases.json")"
+
+# With no baseline the whole history is the range. Driven end to end through a
+# stub gh so the choice of endpoint is observable: the history listing, never
+# a compare against a guessed ref.
+STUB="$(mktemp -d)"
+trap 'rm -rf "$STUB"' EXIT
+cat > "$STUB/gh" <<'GH'
+#!/usr/bin/env bash
+echo "$*" >> "$STUB_LOG"
+case "$*" in
+  *"/commits?sha="*) printf '%s\n' sha-one sha-two ;;
+  *"/pulls?"*)       jq -c '.[]' "$STUB_PRS" ;;
+  *)                 echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+GH
+chmod +x "$STUB/gh"
+cat > "$STUB/prs.json" <<'JSON'
+[
+ {"number":1,"title":"one","body":"```release-note\nFirst thing\n```","user":{"login":"a"},"labels":[],"merged_at":"2026-01-01T00:00:00Z","merge_commit_sha":"sha-one"},
+ {"number":2,"title":"two","body":"```release-note\nSecond thing\n```","user":{"login":"a"},"labels":[],"merged_at":"2026-01-02T00:00:00Z","merge_commit_sha":"sha-two"},
+ {"number":3,"title":"three","body":"```release-note\nNot in the tag\n```","user":{"login":"a"},"labels":[],"merged_at":"2026-01-03T00:00:00Z","merge_commit_sha":"sha-after"}
+]
+JSON
+: > "$STUB/log"
+FIRST_OUT=$(PATH="$STUB:$PATH" STUB_LOG="$STUB/log" STUB_PRS="$STUB/prs.json" \
+            RELNOTES_RELEASES_FIXTURE="$HERE/testdata/release-notes-releases-only-self.json" \
+            GITHUB_REPOSITORY='upbound/provider-first' \
+            "$SCRIPT" v0.1.0-rc1 2>"$STUB/err")
+check "first release lists the first pull request" "* First thing by @a" "$FIRST_OUT"
+check "first release lists the second pull request" "* Second thing by @a" "$FIRST_OUT"
+refute "first release omits a pull request outside the tag" "Not in the tag" "$FIRST_OUT"
+refute "first release has no compare link to a baseline" "compare/" "$FIRST_OUT"
+check "first release reads the history up to the tag" "commits?sha=v0.1.0-rc1" "$(cat "$STUB/log")"
+refute "first release never calls compare" "/compare/" "$(cat "$STUB/log")"
+
+# The first stable release is cumulative across its candidates: with only
+# candidates published it too reads the whole history.
+: > "$STUB/log"
+STABLE_OUT=$(PATH="$STUB:$PATH" STUB_LOG="$STUB/log" STUB_PRS="$STUB/prs.json" \
+             RELNOTES_RELEASES_FIXTURE="$HERE/testdata/release-notes-releases-nostable.json" \
+             GITHUB_REPOSITORY='upbound/provider-first' \
+             "$SCRIPT" v0.1.0 2>/dev/null)
+check "first stable release includes what landed in its candidates" "* First thing by @a" "$STABLE_OUT"
+refute "first stable release never calls compare against a candidate" "/compare/" "$(cat "$STUB/log")"
 
 # A backport release on an older line publishes AFTER a newer minor by
 # construction (infobloxnios v0.1.2 published after v0.2.2), so date order is
