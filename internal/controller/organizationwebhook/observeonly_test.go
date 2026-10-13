@@ -75,6 +75,16 @@ func TestObserveOnlyOmittedFieldsNoDrift(t *testing.T) {
 	}
 }
 
+// A declared empty events list is sent as omitted on the write path, so it is
+// not compared under an Observe-only policy either.
+func TestObserveOnlyEmptyEventsNotCompared(t *testing.T) {
+	cr := observeOnlyCR(xpv2.ManagementActionObserve)
+	cr.Spec.ForProvider.Events = []string{}
+	if !observeHook(t, cr, disabledInsecureHook()) {
+		t.Fatalf("ResourceUpToDate = false, want true")
+	}
+}
+
 // Under a policy that writes, the omitted fields keep their defaults and
 // report drift, as before.
 func TestObserveWritesAllowedOmittedFieldsStillDrift(t *testing.T) {
@@ -99,8 +109,7 @@ func TestObserveWritesAllowedOmittedFieldsStillDrift(t *testing.T) {
 	}
 }
 
-// A field the Observe-only spec does declare is still compared, an explicitly
-// empty events list included.
+// A field the Observe-only spec does declare is still compared.
 func TestObserveOnlyDeclaredFieldsStillDrift(t *testing.T) {
 	cases := map[string]struct {
 		hook *github.Hook
@@ -116,10 +125,6 @@ func TestObserveOnlyDeclaredFieldsStillDrift(t *testing.T) {
 				cr.Spec.ForProvider.Active = github.Ptr(false)
 				cr.Spec.ForProvider.InsecureSSL = github.Ptr(false)
 			},
-		},
-		"EmptyEvents": {
-			hook: ghHook(),
-			mod:  func(cr *v1alpha1.OrganizationWebhook) { cr.Spec.ForProvider.Events = []string{} },
 		},
 		"Events": {
 			hook: ghHook(),

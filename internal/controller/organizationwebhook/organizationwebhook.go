@@ -127,16 +127,15 @@ func mirrorHook(ap *v1alpha1.OrganizationWebhookObservation, h *github.Hook, org
 }
 
 // configUpToDate compares every hook field except the secret. A url or
-// contentType the spec omits, and events the spec omits or leaves empty, are
-// not compared (an Observe-only import); a declared empty events list is
-// compared under an Observe-only policy. An active or insecureSsl the spec
-// omits is compared only under a policy that writes.
+// contentType the spec omits, and events the spec omits or leaves empty (the
+// write path sends an empty list as omitted, so GitHub applies its default),
+// are not compared under any policy. An active or insecureSsl the spec omits
+// is compared only under a policy that writes.
 func configUpToDate(h *github.Hook, p v1alpha1.OrganizationWebhookParameters, policies xpv2.ManagementPolicies) bool {
 	writes := mgmtpolicy.WritesDeclared(policies)
-	eventsDeclared := len(p.Events) > 0 || (p.Events != nil && !writes)
 	return (p.URL == "" || h.Config.GetURL() == p.URL) &&
 		(p.ContentType == "" || h.Config.GetContentType() == p.ContentType) &&
-		(!eventsDeclared || util.EqualUnordered(h.Events, p.Events)) &&
+		(len(p.Events) == 0 || util.EqualUnordered(h.Events, p.Events)) &&
 		((p.Active == nil && !writes) || h.GetActive() == pointer.Deref(p.Active, true)) &&
 		((p.InsecureSSL == nil && !writes) || (h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSSL, false))
 }
