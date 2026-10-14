@@ -24,7 +24,10 @@ PLATFORMS ?= linux_amd64 linux_arm64
 # Note: ROOT_DIR is not yet set (common.mk sets it), so we use CURDIR.
 ifneq (,$(wildcard $(CURDIR)/../.env))
   include $(CURDIR)/../.env
-  export
+  DOTENV_KEYS := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[:?+]*=.*/\1/p' $(CURDIR)/../.env)
+  ifneq (,$(strip $(DOTENV_KEYS)))
+    export $(DOTENV_KEYS)
+  endif
 endif
 GOLANGCILINT_VERSION ?= 2.12.2
 # VERSION guard: reachability, not just existence, of git tags.
@@ -566,16 +569,9 @@ e2e.organization-webhook: e2e
 # deleted. Both scopes manage that one organization, so they run as two sequential
 # passes instead of a comma pair.
 e2e.organization: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION)
-# The namespaced pass is a sub-make, and the bare `export` near the top of this
-# file (active whenever ../.env exists) hands it every variable of this make as an
-# environment variable. Two of them corrupt a second pass: IMAGE_TEMP_DIR (made by
-# imagelight.mk, deleted by the first pass's img.done, then recreated as a regular
-# file by the second pass's `cp`) and UPTEST_ARGS (an environment value that the
-# sub-make's `+=` lines append to a second time, so uptest rejects the repeated
-# --teardown-script flag). The sub-make gets its own temp dir and no inherited
-# UPTEST_ARGS.
+# The namespaced pass runs as a sub-make after the cluster pass.
 e2e.organization: e2e
-	@env -u UPTEST_ARGS $(MAKE) e2e IMAGE_TEMP_DIR=$$(mktemp -d) UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+	@$(MAKE) e2e UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
 
 e2e.repository-branches: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY_BRANCHES)
 e2e.repository-branches: e2e
