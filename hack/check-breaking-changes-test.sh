@@ -131,6 +131,30 @@ m_newcrd()    { base_crd | sed 's/widgets/gadgets/g; s/Widget/Gadget/g; s/widget
 m_colname()   { perl -0pi -e "s/      name: READY/      name: v1beta9/" "$CRD"; }
 m_coltrap()   { perl -0pi -e "s/      name: v1beta9/      name: READY/" "$CRD"; m_del_prop; }
 
+# The dropped-version trap: the BASE serves v1alpha1 and v1alpha0; the revision
+# drops v1alpha0 (permitted) and, in the same change, deletes a property from
+# v1alpha1. Dropping a version exempts only that version — the survivor is
+# still compared.
+b_twover()    { python3 - "$CRD" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+i = s.index("  versions:\n") + len("  versions:\n")
+item = s[i:]
+open(p, "w").write(s + item.replace("    name: v1alpha1\n", "    name: v1alpha0\n"))
+PY
+}
+m_dropold()   { python3 - "$CRD" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+i = s.index("  - additionalPrinterColumns:", s.index("  versions:\n") + 12)
+j = s.index("  - additionalPrinterColumns:", i + 1)
+open(p, "w").write(s[:j])
+PY
+}
+m_dropold_del() { m_dropold; m_del_prop; }
+
 echo "crddiff pin under test: $CRDDIFF_VERSION"
 echo
 
@@ -144,6 +168,8 @@ run_case version-rotated      0 "VERSION-REMOVED:"    m_rotate
 run_case crd-deleted          1 "kind disappears"     m_delete
 run_case crd-added            0 "NEW:"                m_newcrd
 run_case printer-column-trap  1 "BREAKING:"           m_coltrap            m_colname
+run_case version-dropped-clean    0 "VERSION-REMOVED:" m_dropold            b_twover
+run_case version-dropped-survivor-broken 1 "breaking=1"  m_dropold_del      b_twover
 
 # The default pin: with CRDDIFF_VERSION unset the script must still run, using
 # CRDDIFF_DEFAULT. This is the path `make check-breaking-changes` takes, since

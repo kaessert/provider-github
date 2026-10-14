@@ -131,6 +131,43 @@ print("\n".join(out))
 ' "$1"
 }
 
+# strip_versions <file> <names> — <file> with the listed versions cut out of
+# spec.versions. Items are delimited the way served() reads them: an item opens
+# at a two-space `- ` and runs to the next one or to the first line that leaves
+# the block.
+strip_versions() {
+  python3 -c '
+import re, sys
+drop = set(sys.argv[2].split())
+lines = open(sys.argv[1], errors="ignore").read().split("\n")
+out, item, inv = [], [], False
+
+def flush():
+    global item
+    names = [m.group(1) for l in item for m in [re.match(r"^ {4}name: (\S+)$", l)] if m]
+    if not (names and names[0] in drop):
+        out.extend(item)
+    item = []
+
+for line in lines:
+    if re.match(r"^  versions:\s*$", line):
+        out.append(line); inv = True
+        continue
+    if inv:
+        if line.strip() and not re.match(r"^  - |^ {4}", line):
+            flush(); inv = False
+        elif re.match(r"^  - ", line):
+            flush(); item.append(line)
+            continue
+        elif item:
+            item.append(line)
+            continue
+    out.append(line)
+flush()
+print("\n".join(out), end="")
+' "$1" "$2"
+}
+
 changed=0 compared=0 skipped_new=0 removed=0 breaking=0
 FINDINGS="$WORK/findings.md"
 : > "$FINDINGS"
@@ -185,20 +222,27 @@ for crd in "${CHANGED[@]}"; do
   head_versions="$(served "$crd")"
   dropped="$(comm -23 <(echo "$base_versions" | sort -u) <(echo "$head_versions" | sort -u) | tr -d ' ')"
 
+  cmp_base="$base_file"
   if [ -n "$dropped" ]; then
-    # The sanctioned move for an incompatible change is to
-    # drop the version and serve its successor, not to reshape the version in
-    # place. crddiff cannot compare a version that is gone, and it should not
-    # have to — removal is the remedy this gate exists to steer people toward.
+    # The sanctioned move for an incompatible change is to drop the version and
+    # serve its successor, not to reshape the version in place. crddiff cannot
+    # compare a version that is gone, and it should not have to — removal is
+    # the remedy this gate exists to steer people toward. Dropping a version
+    # exempts only that version: it is cut from the base copy so crddiff still
+    # compares every version both files serve.
     echo "VERSION-REMOVED: ${crd} no longer serves $(echo "$dropped" | tr '\n' ' ')— replacement, not mutation; permitted"
     removed=$((removed + 1))
-    continue
+    if [ -z "$(comm -12 <(echo "$base_versions" | sort -u) <(echo "$head_versions" | sort -u))" ]; then
+      continue
+    fi
+    cmp_base="$WORK/base-common.yaml"
+    strip_versions "$base_file" "$dropped" > "$cmp_base"
   fi
 
   resolve_crddiff
 
   set +e
-  out="$("$CRDDIFF_BIN" revision "$base_file" "$crd" 2>&1)"
+  out="$("$CRDDIFF_BIN" revision "$cmp_base" "$crd" 2>&1)"
   rc=$?
   set -e
   compared=$((compared + 1))
