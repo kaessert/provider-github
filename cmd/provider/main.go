@@ -147,7 +147,7 @@ func main() {
 
 	precheckCtx, cancel := context.WithTimeout(context.Background(), safeStartPrecheckTimeout)
 	defer cancel()
-	canSafeStart, err := canWatchCRD(precheckCtx, mgr)
+	canSafeStart, err := canWatchCRD(precheckCtx, mgr, log)
 	kingpin.FatalIfError(err, "SafeStart precheck failed")
 	if canSafeStart {
 		crdGate := new(gate.Gate[schema.GroupVersionKind])
@@ -191,25 +191,35 @@ func main() {
 // the permission is granted or ctx expires: crossplane-rbac-manager creates a
 // provider revision's ClusterRole asynchronously, after the ServiceAccount and
 // ClusterRoleBinding exist, so a single early denial means "not yet", not
-// "never". A denial that outlasts ctx is not an error; the caller falls back to
-// starting every controller eagerly.
-func canWatchCRD(ctx context.Context, mgr ctrl.Manager) (bool, error) {
+// "never". A transient API error is handled the same way as a denial. A denial
+// or an error that outlasts ctx is not an error; the caller falls back to
+// starting every controller eagerly. The only error returned is a failed
+// scheme registration.
+func canWatchCRD(ctx context.Context, mgr ctrl.Manager, log logging.Logger) (bool, error) {
 	if err := authv1.AddToScheme(mgr.GetScheme()); err != nil {
 		return false, err
 	}
 
-	var allowed bool
+	var (
+		allowed bool
+		lastErr error
+	)
 	pollErr := wait.PollUntilContextCancel(ctx, safeStartPrecheckInterval, true, func(pollCtx context.Context) (bool, error) {
 		ok, err := hasCRDWatchPermissions(pollCtx, mgr)
-		if err != nil {
-			return false, err
-		}
+		// A transient error is "not yet", exactly like a denial: remember it and
+		// keep polling until the deadline instead of ending the precheck and
+		// crash-looping the pod. ok is false whenever err is set, and lastErr is
+		// cleared by the next review that completes without error.
+		lastErr = err
 		allowed = ok
 		// A denial keeps polling until the deadline; permission stops the poll.
 		return ok, nil
 	})
 	if pollErr != nil && !wait.Interrupted(pollErr) {
 		return false, pollErr
+	}
+	if !allowed && lastErr != nil {
+		log.Info("SafeStart precheck could not complete a SelfSubjectAccessReview before the deadline", "error", lastErr.Error())
 	}
 	// wait.Interrupted means the deadline was reached without every verb being
 	// allowed: a denial, not an error.
