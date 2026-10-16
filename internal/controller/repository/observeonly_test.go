@@ -53,7 +53,7 @@ func publicRepositories(archivedOnGitHub bool) func() *externalFixture {
 			r.Archived = github.Ptr(archivedOnGitHub)
 			return r, nil, nil
 		}
-		return &externalFixture{e: &external{github: clientFor(repos)}}
+		return &externalFixture{e: &external{github: clientFor(repos, upToDateRulesets())}}
 	}
 }
 

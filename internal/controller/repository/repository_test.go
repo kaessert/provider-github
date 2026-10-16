@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +34,7 @@ import (
 	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
 	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 	"github.com/provider-github/provider-github/internal/telemetry"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
@@ -42,6 +45,7 @@ import (
 	"github.com/google/go-github/v90/github"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -324,7 +328,7 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 			},
 		},
 	}
-	cr.Spec.ForProvider.RepositoryRules = []v1alpha1.RepositoryRuleset{
+	cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{
 		{
 			Name:        rr1name,
 			Target:      &rr1target,
@@ -480,35 +484,47 @@ func githubProtectedBranch() *github.Protection {
 	}
 }
 
-func githubRuleset() []*github.RepositoryRuleset {
-	return []*github.RepositoryRuleset{
+func githubRuleset() []*rulesets.Ruleset {
+	return []*rulesets.Ruleset{
 		{
 			ID:          &rr1Id,
 			Name:        rr1name,
-			Target:      github.Ptr(github.RulesetTarget(rr1target)),
-			Enforcement: github.RulesetEnforcement(rr1enforcement),
-			Conditions: &github.RepositoryRulesetConditions{
-				RefName: &github.RepositoryRulesetRefConditionParameters{
+			Target:      github.Ptr(rr1target),
+			Enforcement: rr1enforcement,
+			Conditions: &rulesets.Conditions{
+				RefName: &rulesets.RefName{
 					Include: rr1Include,
 					Exclude: rr1Exclude,
 				},
 			},
-			BypassActors: []*github.BypassActor{
+			BypassActors: []*rulesets.BypassActor{
 				{
 					ActorID:    &rr1actorId,
-					ActorType:  github.Ptr(github.BypassActorType(rr1actorType)),
-					BypassMode: github.Ptr(github.BypassMode(rr1bypassMode)),
+					ActorType:  github.Ptr(rr1actorType),
+					BypassMode: github.Ptr(rr1bypassMode),
 				},
 			},
-			Rules: &github.RepositoryRulesetRules{
-				Creation:              &github.EmptyRuleParameters{},
-				Deletion:              &github.EmptyRuleParameters{},
-				Update:                &github.UpdateRuleParameters{},
-				RequiredLinearHistory: &github.EmptyRuleParameters{},
-				RequiredSignatures:    &github.EmptyRuleParameters{},
-				NonFastForward:        &github.EmptyRuleParameters{},
+			Rules: []*rulesets.Rule{
+				{Type: "creation"},
+				{Type: "deletion"},
+				{Type: "update"},
+				{Type: "required_linear_history"},
+				{Type: "required_signatures"},
+				{Type: "non_fast_forward"},
 			},
 		},
+	}
+}
+
+// githubRules is the typed form of githubRuleset's rules, with fetch and merge off.
+func githubRules() *rulesets.ModelledRules {
+	return &rulesets.ModelledRules{
+		Creation:              &rulesets.EmptyRuleParameters{},
+		Deletion:              &rulesets.EmptyRuleParameters{},
+		Update:                &rulesets.UpdateRuleParameters{UpdateAllowsFetchAndMerge: github.Ptr(false)},
+		RequiredLinearHistory: &rulesets.EmptyRuleParameters{},
+		RequiredSignatures:    &rulesets.EmptyRuleParameters{},
+		NonFastForward:        &rulesets.EmptyRuleParameters{},
 	}
 }
 
@@ -575,6 +591,7 @@ func TestObserve(t *testing.T) {
 		"NotUpToDate": {
 			fields: fields{github: &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -596,12 +613,6 @@ func TestObserve(t *testing.T) {
 						},
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -621,6 +632,7 @@ func TestObserve(t *testing.T) {
 		"UpToDate": {
 			fields: fields{github: &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -642,12 +654,6 @@ func TestObserve(t *testing.T) {
 						},
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -667,6 +673,7 @@ func TestObserve(t *testing.T) {
 		"NotUpToDateTopicsMismatch": {
 			fields: fields{github: &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -688,12 +695,6 @@ func TestObserve(t *testing.T) {
 						},
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -740,6 +741,7 @@ func TestObserve(t *testing.T) {
 		"PendingInvitationUpToDate": {
 			fields: fields{github: &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -762,12 +764,6 @@ func TestObserve(t *testing.T) {
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
-						},
 					},
 				},
 			}},
@@ -787,7 +783,7 @@ func TestObserve(t *testing.T) {
 		// archived, not for reading, so they are read for the mirror and compared
 		// with nothing.
 		"ArchivedUpToDate": {
-			fields: fields{github: clientFor(archivedRepositories())},
+			fields: fields{github: clientFor(archivedRepositories(), upToDateRulesets())},
 			args: args{
 				mg: repository(withArchived(true)),
 			},
@@ -912,13 +908,15 @@ func TestUpdate(t *testing.T) {
 					frozenWrite = "UpdateBranchProtection"
 					return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 				},
-				MockCreateRuleset: func(ctx context.Context, owner, r string, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
-					frozenWrite = "CreateRuleset"
-					return &rs, fake.GenerateEmptyResponse(), nil
-				},
 				MockCreateHook: func(ctx context.Context, owner, r string, hook *github.Hook) (*github.Hook, *github.Response, error) {
 					frozenWrite = "CreateHook"
 					return hook, fake.GenerateEmptyResponse(), nil
+				},
+			}
+			rulesetsClient := &fake.MockRulesetsClient{
+				MockCreateRuleset: func(ctx context.Context, owner, r string, rs rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+					frozenWrite = "CreateRuleset"
+					return &rs, fake.GenerateEmptyResponse(), nil
 				},
 			}
 			teamsClient := &fake.MockTeamsClient{
@@ -930,7 +928,7 @@ func TestUpdate(t *testing.T) {
 					return fake.GenerateEmptyResponse(), nil
 				},
 			}
-			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient, Teams: teamsClient}}}
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient, Rulesets: rulesetsClient, Teams: teamsClient}}}
 			_, err := e.Update(context.Background(), tc.cr)
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("\n%s\nUpdate(): -want error, +got error:\n%s", tc.reason, diff)
@@ -1118,6 +1116,7 @@ func TestObserveMainSettingsDrift(t *testing.T) {
 	upToDateClient := func() *ghclient.Client {
 		return &ghclient.Client{
 			Services: &ghclient.Services{
+				Rulesets: upToDateRulesets(),
 				Repositories: &fake.MockRepositoriesClient{
 					MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 						return githubRepository(), nil, nil
@@ -1136,12 +1135,6 @@ func TestObserveMainSettingsDrift(t *testing.T) {
 					},
 					MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 						return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
-					},
-					MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-						return githubRuleset(), fake.GenerateEmptyResponse(), nil
-					},
-					MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-						return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 					},
 				},
 			},
@@ -1812,6 +1805,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			teamProbes := 0
 			gh := &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -1849,12 +1843,6 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 								permission = p
 							}
 							return &github.RepositoryPermissionLevel{Permission: github.Ptr(permission)}, fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 					Teams: &fake.MockTeamsClient{
@@ -2192,6 +2180,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			}
 			gh := &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -2213,12 +2202,6 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 						},
 						MockGetPermissionLevel: func(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
 							return &github.RepositoryPermissionLevel{Permission: github.Ptr(tc.userPermission)}, fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -2272,6 +2255,7 @@ func TestObserveBranchProtectionPartialClears(t *testing.T) {
 			stored := githubProtectedBranch()
 			gh := &ghclient.Client{
 				Services: &ghclient.Services{
+					Rulesets: upToDateRulesets(),
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -2290,12 +2274,6 @@ func TestObserveBranchProtectionPartialClears(t *testing.T) {
 						},
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return stored, fake.GenerateEmptyResponse(), nil
-						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset(), fake.GenerateEmptyResponse(), nil
-						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -2483,17 +2461,23 @@ func upToDateRepositories(invitations []*github.RepositoryInvitation) *fake.Mock
 		MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 			return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 		},
-		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+	}
+}
+
+// upToDateRulesets fakes GitHub holding the fixture repository's ruleset in its declared state.
+func upToDateRulesets() *fake.MockRulesetsClient {
+	return &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
 			return githubRuleset(), fake.GenerateEmptyResponse(), nil
 		},
-		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
 			return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 		},
 	}
 }
 
-func clientFor(repos *fake.MockRepositoriesClient) *ghclient.Client {
-	return &ghclient.Client{Services: &ghclient.Services{Repositories: repos}}
+func clientFor(repos *fake.MockRepositoriesClient, rs *fake.MockRulesetsClient) *ghclient.Client {
+	return &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Rulesets: rs}}
 }
 
 // Observe publishes the collaborators gauge from the CollaboratorPartial condition: 1 while an invitee is pending, 0 once none is.
@@ -2504,7 +2488,7 @@ func TestObservePublishesCollaboratorsUnreconcilable(t *testing.T) {
 	pending := repository(withExtraUser("pending-user", "pull"))
 	pending.Spec.ForProvider.Org = "acme"
 	invitations := []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.Ptr("pending-user")}}}
-	e := external{github: clientFor(upToDateRepositories(invitations)), metrics: metrics}
+	e := external{github: clientFor(upToDateRepositories(invitations), upToDateRulesets()), metrics: metrics}
 	if _, err := e.Observe(context.Background(), pending); err != nil {
 		t.Fatalf("Observe(pending): %v", err)
 	}
@@ -2514,7 +2498,7 @@ func TestObservePublishesCollaboratorsUnreconcilable(t *testing.T) {
 
 	clean := repository()
 	clean.Spec.ForProvider.Org = "acme"
-	e = external{github: clientFor(upToDateRepositories(nil)), metrics: metrics}
+	e = external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}
 	if _, err := e.Observe(context.Background(), clean); err != nil {
 		t.Fatalf("Observe(clean): %v", err)
 	}
@@ -2566,7 +2550,7 @@ func TestObservePublishesBranchProtectionUnreconcilable(t *testing.T) {
 	cr := repository()
 	cr.Spec.ForProvider.Org = "acme"
 
-	e := external{github: clientFor(repos), metrics: metrics}
+	e := external{github: clientFor(repos, upToDateRulesets()), metrics: metrics}
 	if _, err := e.Observe(context.Background(), cr); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -2595,7 +2579,7 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	cr.SetConditions(xpv2.Condition{Type: typeSettingsPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
 	cr.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}}
 
-	e := external{github: clientFor(repos), metrics: metrics}
+	e := external{github: clientFor(repos, upToDateRulesets()), metrics: metrics}
 	if _, err := e.Observe(context.Background(), cr); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -2644,7 +2628,7 @@ func TestObserveMissingRepositoryForgetsUnreconcilable(t *testing.T) {
 	cr := repository()
 	cr.Spec.ForProvider.Org = "acme"
 
-	e := external{github: clientFor(repos), metrics: metrics}
+	e := external{github: clientFor(repos, upToDateRulesets()), metrics: metrics}
 	if _, err := e.Observe(context.Background(), cr); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -2825,7 +2809,7 @@ func TestObserveRememberedUnappliedSettings(t *testing.T) {
 			cr.Spec.ForProvider.Org = "acme"
 			cr.Status.AtProvider.UnappliedSettings = tc.records
 
-			e := external{github: clientFor(upToDateRepositories(nil)), metrics: metrics}
+			e := external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}
 			got, err := e.Observe(context.Background(), cr)
 			if err != nil {
 				t.Fatalf("Observe: %v", err)
@@ -3027,7 +3011,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		return topics, fake.GenerateEmptyResponse(), nil
 	}
 	cr := settingsOnlyRepository()
-	e := external{github: clientFor(repos)}
+	e := external{github: clientFor(repos, upToDateRulesets())}
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -3092,7 +3076,7 @@ func TestUpdateRecordsOnlyTheRefusedSetting(t *testing.T) {
 				return topics, fake.GenerateEmptyResponse(), nil
 			}
 			cr := settingsOnlyRepository()
-			e := external{github: clientFor(repos)}
+			e := external{github: clientFor(repos, upToDateRulesets())}
 
 			if _, err := e.Update(context.Background(), cr); err != nil {
 				t.Fatalf("Update: %v", err)
@@ -3148,33 +3132,84 @@ func TestEditRequestSettings(t *testing.T) {
 	}
 }
 
-// Observe compares the CR against the rulesets GitHub lists with includes_parents=true;
-// a listing without inherited rulesets changes which rulesets the controller sees as present.
-func TestObserveListsRulesetsIncludingParents(t *testing.T) {
+// Observe lists the repository's own rulesets, with includes_parents=false.
+func TestObserveListsOnlyOwnRulesets(t *testing.T) {
 	var got *github.RepositoryListRulesetsOptions
-	repos := upToDateRepositories(nil)
-	repos.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
 		got = opts
 		return githubRuleset(), fake.GenerateEmptyResponse(), nil
 	}
+	var getIncludesParents bool
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		getIncludesParents = getIncludesParents || includesParents
+		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+	}
 
-	if _, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository()); err != nil {
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository()); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if !got.GetIncludesParents() {
-		t.Errorf("GetAllRulesets IncludesParents = %v, want true", got.GetIncludesParents())
+	if got.IncludesParents == nil || *got.IncludesParents {
+		t.Errorf("GetAllRulesets IncludesParents = %v, want false sent explicitly", got.IncludesParents)
+	}
+	if getIncludesParents {
+		t.Errorf("GetRuleset includesParents = true, want false like the list")
 	}
 }
 
-// The ruleset sent on create and update carries every declared rule, and leaves "rules"
-// and "bypass_actors" out when none are declared: on an update (PUT) an explicit empty
-// list replaces what GitHub holds, while an omitted key leaves it alone.
+// Rulesets are listed across all pages, each request with includes_parents=false.
+func TestGetRepositoryRulesListsAllPages(t *testing.T) {
+	pages := [][]*rulesets.Ruleset{
+		{{Name: "a"}, {Name: "b"}},
+		{{Name: "c"}},
+		{{Name: "d"}, {Name: "e"}},
+	}
+	var requested []int
+	rs := &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			requested = append(requested, opts.Page)
+			if len(requested) > len(pages) {
+				t.Errorf("GetAllRulesets called %d times, want %d", len(requested), len(pages))
+				return nil, fake.GenerateEmptyResponse(), errors.New("too many calls")
+			}
+			if opts.IncludesParents == nil || *opts.IncludesParents || opts.PerPage != 100 {
+				t.Errorf("GetAllRulesets page %d: IncludesParents = %v, PerPage = %d; want false, 100", opts.Page, opts.IncludesParents, opts.PerPage)
+			}
+			i := max(opts.Page, 1) - 1
+			resp := fake.GenerateEmptyResponse()
+			if i+1 < len(pages) {
+				resp.NextPage = i + 2
+			}
+			return pages[i], resp, nil
+		},
+	}
+
+	got, err := getRepositoryRules(context.Background(), clientFor(nil, rs), "org", "repo")
+	if err != nil {
+		t.Fatalf("getRepositoryRules: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, r := range got {
+		names = append(names, r.Name)
+	}
+	if diff := cmp.Diff([]string{"a", "b", "c", "d", "e"}, names); diff != "" {
+		t.Errorf("getRepositoryRules names: -want, +got:\n%s", diff)
+	}
+	if diff := cmp.Diff([]int{0, 2, 3}, requested); diff != "" {
+		t.Errorf("GetAllRulesets pages requested: -want, +got:\n%s", diff)
+	}
+}
+
+// The ruleset sent on create and update holds every declared rule. "rules" and
+// "bypass_actors" are always sent, as [] when empty, so an update can clear them.
+// A push ruleset is sent "conditions": {}.
 func TestCrRepoRulesToRulesConfig(t *testing.T) {
 	ruleset := func(m ...func(*v1alpha1.RepositoryRuleset)) v1alpha1.RepositoryRuleset {
 		r := v1alpha1.RepositoryRuleset{
 			Name:        rr1name,
 			Target:      github.Ptr(rr1target),
 			Enforcement: github.Ptr(rr1enforcement),
+			Conditions:  &v1alpha1.RulesetConditions{RefName: &v1alpha1.RulesetRefName{Include: []string{"refs/heads/main"}, Exclude: []string{}}},
 			Rules: &v1alpha1.Rules{
 				Creation:              github.Ptr(false),
 				Deletion:              github.Ptr(false),
@@ -3213,36 +3248,66 @@ func TestCrRepoRulesToRulesConfig(t *testing.T) {
 		}
 	}
 
+	const mainOnly = `{"ref_name":{"include":["refs/heads/main"],"exclude":[]}}`
 	cases := map[string]struct {
-		reason        string
-		rule          v1alpha1.RepositoryRuleset
-		wantRuleTypes []string // nil: the "rules" key is omitted
-		wantBypass    bool
+		reason         string
+		rule           v1alpha1.RepositoryRuleset
+		wantRuleTypes  []string
+		wantBypass     int
+		wantConditions string // exact JSON of the "conditions" key; "": omitted
 	}{
 		"NoRuleEnabled": {
-			reason: "a ruleset with every rule off and nil bypass actors must omit both, not send empty lists",
-			rule:   ruleset(),
+			reason:         "a ruleset with every rule off and nil bypass actors must send both as [], so an update clears them",
+			rule:           ruleset(),
+			wantRuleTypes:  []string{},
+			wantConditions: mainOnly,
+		},
+		"NoRulesBlock": {
+			reason:         "a ruleset declaring no rules at all is one with every rule off",
+			rule:           ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Rules = nil }),
+			wantRuleTypes:  []string{},
+			wantConditions: mainOnly,
 		},
 		"EmptyBypassActors": {
-			reason: "an empty bypass actor list must be omitted, not sent as []",
-			rule:   ruleset(func(r *v1alpha1.RepositoryRuleset) { r.BypassActors = []*v1alpha1.RulesetByPassActors{} }),
+			reason:         "an empty bypass actor list must be sent as [], so an update clears the actors",
+			rule:           ruleset(func(r *v1alpha1.RepositoryRuleset) { r.BypassActors = []*v1alpha1.RulesetByPassActors{} }),
+			wantRuleTypes:  []string{},
+			wantConditions: mainOnly,
 		},
 		"UpdateOnly": {
-			reason:        "an update rule on its own must be sent",
-			rule:          ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Rules.Update = github.Ptr(true) }),
-			wantRuleTypes: []string{"update"},
+			reason:         "an update rule on its own must be sent",
+			rule:           ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Rules.Update = github.Ptr(true) }),
+			wantRuleTypes:  []string{"update"},
+			wantConditions: mainOnly,
 		},
 		"AllRules": {
-			reason:        "every modelled rule and the bypass actors must be sent",
-			rule:          ruleset(allRules),
-			wantRuleTypes: []string{"creation", "deletion", "non_fast_forward", "pull_request", "required_deployments", "required_linear_history", "required_signatures", "required_status_checks", "update"},
-			wantBypass:    true,
+			reason:         "every modelled rule and the bypass actors must be sent",
+			rule:           ruleset(allRules),
+			wantRuleTypes:  []string{"creation", "deletion", "non_fast_forward", "pull_request", "required_deployments", "required_linear_history", "required_signatures", "required_status_checks", "update"},
+			wantBypass:     1,
+			wantConditions: mainOnly,
+		},
+		"Push": {
+			reason:         "a push ruleset must be sent with empty conditions, never a ref_name, even when the CR declares a refName",
+			rule:           ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Target = github.Ptr("push") }),
+			wantRuleTypes:  []string{},
+			wantConditions: `{}`,
+		},
+		"ConditionsWithoutRefName": {
+			reason:         "conditions without a refName must not panic and send empty include and exclude lists, which GitHub requires",
+			rule:           ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Conditions = &v1alpha1.RulesetConditions{} }),
+			wantRuleTypes:  []string{},
+			wantConditions: `{"ref_name":{"include":[],"exclude":[]}}`,
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			body, err := json.Marshal(crRepoRulesToRulesConfig(tc.rule))
+			rs, err := crRepoRulesToRulesConfig(crRulesets(t, []v1alpha1.RepositoryRuleset{tc.rule})[tc.rule.Name])
+			if err != nil {
+				t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+			}
+			body, err := json.Marshal(rs)
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
@@ -3251,22 +3316,29 @@ func TestCrRepoRulesToRulesConfig(t *testing.T) {
 				t.Fatalf("unmarshal: %v", err)
 			}
 
-			if _, ok := fields["bypass_actors"]; ok != tc.wantBypass {
-				t.Errorf("%s\nbypass_actors present = %v, want %v; body %s", tc.reason, ok, tc.wantBypass, body)
+			var actors []json.RawMessage
+			raw, ok := fields["bypass_actors"]
+			if !ok {
+				t.Errorf("%s\nbypass_actors omitted, want it sent; body %s", tc.reason, body)
+			} else if err := json.Unmarshal(raw, &actors); err != nil || actors == nil || len(actors) != tc.wantBypass {
+				t.Errorf("%s\nbypass_actors = %s, want a list of %d", tc.reason, raw, tc.wantBypass)
 			}
 
-			raw, ok := fields["rules"]
-			if tc.wantRuleTypes == nil {
-				if ok {
-					t.Errorf("%s\nrules present, want omitted; body %s", tc.reason, body)
-				}
-				return
+			if raw, ok := fields["conditions"]; ok != (tc.wantConditions != "") {
+				t.Errorf("%s\nconditions present = %v, want %v; body %s", tc.reason, ok, tc.wantConditions != "", body)
+			} else if ok && string(raw) != tc.wantConditions {
+				t.Errorf("%s\nconditions = %s, want %s", tc.reason, raw, tc.wantConditions)
+			}
+
+			raw, ok = fields["rules"]
+			if !ok {
+				t.Fatalf("%s\nrules omitted, want it sent; body %s", tc.reason, body)
 			}
 			var rules []struct {
 				Type string `json:"type"`
 			}
-			if err := json.Unmarshal(raw, &rules); err != nil {
-				t.Fatalf("unmarshal rules %s: %v", raw, err)
+			if err := json.Unmarshal(raw, &rules); err != nil || rules == nil {
+				t.Fatalf("%s\nrules = %s, want a list", tc.reason, raw)
 			}
 			got := make([]string, 0, len(rules))
 			for _, r := range rules {
@@ -3279,14 +3351,70 @@ func TestCrRepoRulesToRulesConfig(t *testing.T) {
 	}
 }
 
-// An update sends only the rules the provider models, so GitHub drops every other rule
-// in the ruleset. unmanagedRuleTypes names those rules so Observe can stop first. It
-// leaves out merge_queue, workflows and the *_pattern rules: rulesets holding them are
-// reconciled, and reporting them would stop that.
+// A ruleset as declared, with unset pointers and no conditions, is sent exactly as the
+// same ruleset after getRepositoryRulesMapFromCr, so any caller of crRepoRulesToRulesConfig
+// sends the same request and none can panic on an unset field. The declared ruleset stays
+// as it is, since it is the live CR's spec.
+func TestCrRepoRulesToRulesConfigNormalises(t *testing.T) {
+	send := func(t *testing.T, r v1alpha1.RepositoryRuleset) string {
+		t.Helper()
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("crRepoRulesToRulesConfig panicked: %v", p)
+			}
+		}()
+		rs, err := crRepoRulesToRulesConfig(r)
+		if err != nil {
+			t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+		}
+		body, err := json.Marshal(rs)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(body)
+	}
+	cases := map[string]v1alpha1.RepositoryRuleset{
+		"NameOnly": {Name: "raw"},
+		"Push":     {Name: "raw", Target: github.Ptr("push")},
+		"EveryRuleUnset": {
+			Name:         "raw",
+			BypassActors: []*v1alpha1.RulesetByPassActors{{ActorID: github.Ptr(int64(9)), ActorType: github.Ptr("Team")}, {ActorType: github.Ptr("OrganizationAdmin")}},
+			Rules: &v1alpha1.Rules{
+				Update:                               github.Ptr(true),
+				RequiredDeployments:                  &v1alpha1.RulesRequiredDeployments{},
+				PullRequest:                          &v1alpha1.RulesPullRequest{},
+				RequiredStatusChecks:                 &v1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "b"}, {Context: "a"}}},
+				CommitMessagePattern:                 &v1alpha1.RulesPattern{Operator: "contains", Pattern: "fix"},
+				CodeScanning:                         &v1alpha1.RulesCodeScanning{CodeScanningTools: []*v1alpha1.RulesCodeScanningTool{{Tool: "ZAP", AlertsThreshold: "all", SecurityAlertsThreshold: "all"}, {Tool: "CodeQL", AlertsThreshold: "all", SecurityAlertsThreshold: "all"}}},
+				CodeCoverage:                         &v1alpha1.RulesCodeCoverage{MinimumCoverage: github.Ptr("80.0")},
+				RequireSecretScanningAlertResolution: &v1alpha1.RulesSecretScanningAlertResolution{},
+				CopilotCodeReview:                    &v1alpha1.RulesCopilotCodeReview{},
+				FileExtensionRestriction:             &v1alpha1.RulesFileExtensionRestriction{RestrictedFileExtensions: []string{"*.exe", "*.bin"}},
+				FilePathRestriction:                  &v1alpha1.RulesFilePathRestriction{RestrictedFilePaths: []string{"secrets/", "keys/"}},
+				MaxFileSize:                          &v1alpha1.RulesMaxFileSize{MaxFileSize: 10},
+			},
+		},
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			declared := raw.DeepCopy()
+			want := send(t, crRulesets(t, []v1alpha1.RepositoryRuleset{raw})[raw.Name])
+
+			if got := send(t, raw); got != want {
+				t.Errorf("request from the declared ruleset:\n got %s\nwant %s", got, want)
+			}
+			if diff := cmp.Diff(declared, &raw); diff != "" {
+				t.Errorf("declared ruleset changed: -before, +after:\n%s", diff)
+			}
+		})
+	}
+}
+
+// unmanagedRuleTypes names exactly the unmodelled rule types, including types GitHub adds later.
 func TestUnmanagedRuleTypes(t *testing.T) {
 	// decode builds the rules from GitHub's wire format, so each case also pins that the
 	// type name GitHub sends reaches the field the guard checks.
-	decode := func(types ...string) *github.RepositoryRulesetRules {
+	decode := func(types ...string) []*rulesets.Rule {
 		wire := make([]map[string]string, len(types))
 		for i, typ := range types {
 			wire[i] = map[string]string{"type": typ}
@@ -3295,8 +3423,8 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		rules := &github.RepositoryRulesetRules{}
-		if err := json.Unmarshal(body, rules); err != nil {
+		var rules []*rulesets.Rule
+		if err := json.Unmarshal(body, &rules); err != nil {
 			t.Fatalf("unmarshal %s: %v", body, err)
 		}
 		return rules
@@ -3304,7 +3432,7 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 
 	type testCase struct {
 		reason string
-		rules  *github.RepositoryRulesetRules
+		rules  []*rulesets.Rule
 		want   []string
 	}
 	cases := map[string]testCase{
@@ -3313,22 +3441,20 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 		},
 		"ModelledOnly": {
 			reason: "rules the provider models survive an update",
-			rules:  decode("creation", "update", "deletion", "required_linear_history", "required_deployments", "required_signatures", "pull_request", "required_status_checks", "non_fast_forward"),
-		},
-		"ReconciledUnmodelled": {
-			reason: "rulesets holding these are reconciled; reporting them would stop that",
-			rules:  decode("merge_queue", "workflows", "commit_message_pattern", "commit_author_email_pattern", "committer_email_pattern", "branch_name_pattern", "tag_name_pattern"),
+			rules: decode("creation", "update", "deletion", "required_linear_history", "required_deployments", "required_signatures", "pull_request", "required_status_checks", "non_fast_forward",
+				"merge_queue", "commit_message_pattern", "commit_author_email_pattern", "committer_email_pattern", "branch_name_pattern", "tag_name_pattern",
+				"code_scanning", "code_quality", "code_coverage", "copilot_code_review", "file_extension_restriction", "file_path_restriction", "max_file_path_length", "max_file_size",
+				"license_compliance_scanning", "require_secret_scanning_alert_resolution"),
 		},
 		"SortedWithModelled": {
-			reason: "the error lists the unmanaged types sorted, whatever order GitHub sends them in",
-			rules:  decode("max_file_size", "creation", "code_scanning"),
-			want:   []string{"code_scanning", "max_file_size"},
+			reason: "the condition lists the unmanaged types sorted, whatever order GitHub sends them in",
+			rules:  decode("repository_transfer", "creation", "repository_create"),
+			want:   []string{"repository_create", "repository_transfer"},
 		},
 	}
 	for _, typ := range []string{
-		"code_scanning", "copilot_code_review", "file_extension_restriction", "file_path_restriction",
-		"max_file_path_length", "max_file_size", "repository_create", "repository_delete",
-		"repository_name", "repository_transfer", "repository_visibility",
+		"repository_create", "repository_delete", "repository_name", "repository_transfer", "repository_visibility",
+		"workflows",
 	} {
 		cases[typ] = testCase{
 			reason: "an update would drop this rule",
@@ -3346,33 +3472,266 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 	}
 }
 
-// Observe fails on a ruleset holding a rule the provider does not model, and nothing is
-// written: an update would send the ruleset without that rule and GitHub would drop it.
-func TestObserveRulesetWithUnmanagedRuleFails(t *testing.T) {
+const secondRulesetID int64 = 789
+
+// withSecondRuleset declares a second ruleset, test-ruleset-2, identical to the first.
+func withSecondRuleset() repositoryModifier {
+	return func(cr *v1alpha1.Repository) {
+		second := (*cr.Spec.ForProvider.RepositoryRules)[0]
+		second.Name = "test-ruleset-2"
+		*cr.Spec.ForProvider.RepositoryRules = append(*cr.Spec.ForProvider.RepositoryRules, second)
+	}
+}
+
+// twoRulesets fakes GitHub holding test-ruleset-1 and test-ruleset-2 as declared by
+// withSecondRuleset, each with its change applied.
+func twoRulesets(first, second func(*rulesets.Ruleset)) *fake.MockRulesetsClient {
+	held := func(id int64) *rulesets.Ruleset {
+		r := githubRuleset()[0]
+		if id == secondRulesetID {
+			r.ID = github.Ptr(secondRulesetID)
+			r.Name = "test-ruleset-2"
+			second(r)
+		} else {
+			first(r)
+		}
+		return r
+	}
+	return &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return []*rulesets.Ruleset{held(rr1Id), held(secondRulesetID)}, fake.GenerateEmptyResponse(), nil
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+			return held(rulesetID), fake.GenerateEmptyResponse(), nil
+		},
+	}
+}
+
+// withRuleTypes adds rules of the given types to a ruleset.
+func withRuleTypes(types ...string) func(*rulesets.Ruleset) {
+	return func(r *rulesets.Ruleset) {
+		for _, typ := range types {
+			r.Rules = append(r.Rules, &rulesets.Rule{Type: typ})
+		}
+	}
+}
+
+// withoutCreation drops the creation rule the CR declares, so the ruleset drifts.
+func withoutCreation(r *rulesets.Ruleset) {
+	r.Rules = slices.DeleteFunc(r.Rules, func(rule *rulesets.Rule) bool { return rule.Type == "creation" })
+}
+
+// An update would drop rules of a type the provider does not model, including types
+// GitHub adds later, so a managed ruleset holding one is left as it is and reported on
+// RulesetsPartial and the ruleset_parameters gauge. The other rulesets still decide
+// ResourceUpToDate: one ruleset edited in the GitHub UI must not freeze the repository.
+func TestObserveRulesetWithUnmanagedRuleTypesIsLeftAsItIs(t *testing.T) {
+	cases := map[string]struct {
+		types    []string
+		second   func(*rulesets.Ruleset)
+		upToDate bool
+		want     string
+	}{
+		"RepositoryTarget": {
+			types:    []string{"repository_create"},
+			second:   func(*rulesets.Ruleset) {},
+			upToDate: true,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider",
+		},
+		"OrganizationLevel": {
+			types:    []string{"workflows", "repository_name"},
+			second:   func(*rulesets.Ruleset) {},
+			upToDate: true,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_name, workflows); it is left as it is until they are removed on GitHub or modelled by the provider",
+		},
+		"OtherRulesetDrifts": {
+			types:    []string{"repository_create"},
+			second:   withoutCreation,
+			upToDate: false,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			gauge := metrics.RepositoryUnreconcilableForTest()
+			cr := repository(withSecondRuleset())
+			cr.Spec.ForProvider.Org = "acme"
+			e := external{github: clientFor(upToDateRepositories(nil), twoRulesets(withRuleTypes(tc.types...), tc.second)), metrics: metrics}
+
+			got, err := e.Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v: test-ruleset-2 alone decides it", got.ResourceUpToDate, tc.upToDate)
+			}
+			condition := cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedRuleTypes || condition.Message != tc.want {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonUnmanagedRuleTypes, tc.want)
+			}
+			for dimension, want := range map[string]float64{
+				telemetry.DimensionRulesetParameters: 1,
+				telemetry.DimensionRulesetsForbidden: 0,
+				telemetry.DimensionRulesetSpec:       0,
+			} {
+				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != want {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want %v", dimension, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Update leaves a ruleset holding an unmodelled rule type as it is and still writes the
+// rest: the drifting ruleset is updated and the topics are replaced.
+func TestUpdateLeavesRulesetWithUnmanagedRuleTypes(t *testing.T) {
+	rs := twoRulesets(withRuleTypes("repository_create"), withoutCreation)
+	var updated []int64
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		updated = append(updated, rulesetID)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called for %q; both declared rulesets exist on GitHub", r.Name)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		t.Errorf("DeleteRuleset called for %d; both rulesets are declared", rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
 	repos := upToDateRepositories(nil)
-	repos.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-		rs := githubRuleset()[0]
-		rs.Rules.FilePathRestriction = &github.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/"}}
-		return rs, fake.GenerateEmptyResponse(), nil
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
 	}
-	repos.MockCreateRuleset = func(ctx context.Context, owner, repo string, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
-		t.Errorf("CreateRuleset called; a ruleset with unmanaged rules must not be written")
-		return nil, nil, nil
+	topicWrites := 0
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		topicWrites++
+		return topics, fake.GenerateEmptyResponse(), nil
 	}
-	repos.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
-		t.Errorf("UpdateRuleset called; it would drop the file_path_restriction rule")
-		return nil, nil, nil
+	cr := settingsOnlyRepository()
+	cr.Spec.ForProvider.RepositoryRules = repository(withSecondRuleset()).Spec.ForProvider.RepositoryRules
+
+	if _, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
-	repos.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
-		t.Errorf("DeleteRuleset called; a ruleset with unmanaged rules must not be written")
-		return nil, nil
+	if diff := cmp.Diff([]int64{secondRulesetID}, updated); diff != "" {
+		t.Errorf("UpdateRuleset IDs: -want, +got:\n%s", diff)
+	}
+	if topicWrites != 1 {
+		t.Errorf("ReplaceAllTopics calls = %d, want 1", topicWrites)
+	}
+}
+
+// Reading the rulesets leaves the caller's CR map as it is: the names of the rulesets
+// left as they are come back in report.skipped, and Observe and Update drop them from
+// the compare and the diff themselves.
+func TestGetRepositoryRulesWithConfigReportsSkippedRulesets(t *testing.T) {
+	rules := *repository(withSecondRuleset()).Spec.ForProvider.RepositoryRules
+	crMap, err := getRepositoryRulesMapFromCr(rules)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesMapFromCr: %v", err)
+	}
+	want, _ := getRepositoryRulesMapFromCr(rules)
+	gh := clientFor(upToDateRepositories(nil), twoRulesets(func(*rulesets.Ruleset) {}, withRuleTypes("repository_create")))
+	ghRulesets, err := getRepositoryRules(context.Background(), gh, "acme", repo)
+	if err != nil {
+		t.Fatalf("getRepositoryRules: %v", err)
 	}
 
-	_, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository())
+	ghMap, report, err := getRepositoryRulesWithConfig(context.Background(), gh, "acme", repo, ghRulesets, crMap)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesWithConfig: %v", err)
+	}
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets after the call: -want, +got:\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"test-ruleset-2"}, report.skipped); diff != "" {
+		t.Errorf("report.skipped: -want, +got:\n%s", diff)
+	}
+	if _, ok := ghMap["test-ruleset-2"]; ok {
+		t.Errorf("returned map holds test-ruleset-2; a skipped ruleset is left out of it")
+	}
+}
 
-	want := errors.New("ruleset test-ruleset-1 has rule types this provider does not manage (file_path_restriction); remove them on GitHub or stop managing repositoryRules for this repository")
-	if diff := cmp.Diff(want, err, test.EquateErrors()); diff != "" {
-		t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
+// Reading the rulesets leaves the caller's CR map as it is when GitHub returns
+// requireExtraApprovalForUnattributedChanges for a ruleset whose CR leaves it unset: the
+// ruleset is named in report.extraApprovalReturned, and Observe and Update set the
+// desired true themselves.
+func TestGetRepositoryRulesWithConfigReportsExtraApprovalReturned(t *testing.T) {
+	rules := *repository(withPullRequestRule(1)).Spec.ForProvider.RepositoryRules
+	crMap := crRulesets(t, rules)
+	want := crRulesets(t, rules)
+	rs := upToDateRulesets()
+	rulesetHolding(t, rs, func(m *rulesets.ModelledRules) {
+		m.PullRequest = &rulesets.PullRequestRuleParameters{RequireExtraApprovalForUnattributedChanges: github.Ptr(false)}
+	})
+	gh := clientFor(upToDateRepositories(nil), rs)
+	ghRulesets, err := getRepositoryRules(context.Background(), gh, "acme", repo)
+	if err != nil {
+		t.Fatalf("getRepositoryRules: %v", err)
+	}
+
+	_, report, err := getRepositoryRulesWithConfig(context.Background(), gh, "acme", repo, ghRulesets, crMap)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesWithConfig: %v", err)
+	}
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets after the call: -want, +got:\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{rr1name}, report.extraApprovalReturned); diff != "" {
+		t.Errorf("report.extraApprovalReturned: -want, +got:\n%s", diff)
+	}
+}
+
+// applyRulesetReport turns the CR's rulesets into the desired state: a ruleset left as it
+// is drops out of the compare and the diff, and a ruleset whose CR leaves
+// requireExtraApprovalForUnattributedChanges unset while GitHub returns it wants GitHub's
+// default, true, so a false on GitHub is drift. A ruleset the report does not name keeps
+// the field unset, and the update omits it.
+func TestApplyRulesetReport(t *testing.T) {
+	pullRequest := func(v *bool) *v1alpha1.Rules {
+		return &v1alpha1.Rules{PullRequest: &v1alpha1.RulesPullRequest{RequireExtraApprovalForUnattributedChanges: v}}
+	}
+	crMap := map[string]v1alpha1.RepositoryRuleset{
+		"skipped":  {Name: "skipped", Rules: pullRequest(nil)},
+		"returned": {Name: "returned", Rules: pullRequest(nil)},
+		"absent":   {Name: "absent", Rules: pullRequest(nil)},
+	}
+	want := map[string]v1alpha1.RepositoryRuleset{
+		"returned": {Name: "returned", Rules: pullRequest(github.Ptr(true))},
+		"absent":   {Name: "absent", Rules: pullRequest(nil)},
+	}
+
+	applyRulesetReport(crMap, rulesetReport{skipped: []string{"skipped"}, extraApprovalReturned: []string{"returned"}})
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets: -want, +got:\n%s", diff)
+	}
+}
+
+// Unmanaged rule types and unmanaged parameters on different rulesets are both named:
+// the reason is UnmanagedRuleTypes, the rule-type sentences come first, and the
+// ruleset_parameters gauge is 1.
+func TestObserveUnmanagedRuleTypesAndParametersShareRulesetsPartial(t *testing.T) {
+	withUnmanagedParameter := func(r *rulesets.Ruleset) {
+		r.Rules = append(r.Rules, &rulesets.Rule{Type: "merge_queue", Parameters: json.RawMessage(`{"actor_controlled_merging":true}`)})
+	}
+	metrics := telemetry.NewForTest()
+	cr := repository(withSecondRuleset())
+	cr.Spec.ForProvider.Org = "acme"
+	e := external{github: clientFor(upToDateRepositories(nil), twoRulesets(withUnmanagedParameter, withRuleTypes("repository_create"))), metrics: metrics}
+	want := "ruleset test-ruleset-2 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider; " +
+		"ruleset test-ruleset-1: rule merge_queue has parameter actor_controlled_merging that this provider does not manage; GitHub resets it when the ruleset is next updated"
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	condition := cr.GetCondition(typeRulesetsPartial)
+	if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedRuleTypes || condition.Message != want {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonUnmanagedRuleTypes, want)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 1 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 1", got)
 	}
 }
 
@@ -3380,21 +3739,19 @@ const githubOnlyRulesetID int64 = 456
 
 // withGitHubOnlyRuleset adds a ruleset that exists on GitHub but is not named in the CR,
 // holding a rule the provider does not model.
-func withGitHubOnlyRuleset(repos *fake.MockRepositoriesClient) {
-	githubOnly := func() *github.RepositoryRuleset {
-		return &github.RepositoryRuleset{
+func withGitHubOnlyRuleset(rs *fake.MockRulesetsClient) {
+	githubOnly := func() *rulesets.Ruleset {
+		return &rulesets.Ruleset{
 			ID:          github.Ptr(githubOnlyRulesetID),
 			Name:        "github-only",
-			Enforcement: github.RulesetEnforcement(rr1enforcement),
-			Rules: &github.RepositoryRulesetRules{
-				FilePathRestriction: &github.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/"}},
-			},
+			Enforcement: rr1enforcement,
+			Rules:       []*rulesets.Rule{{Type: "repository_create"}},
 		}
 	}
-	repos.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
 		return append(githubRuleset(), githubOnly()), fake.GenerateEmptyResponse(), nil
 	}
-	repos.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
 		if rulesetID == githubOnlyRulesetID {
 			return githubOnly(), fake.GenerateEmptyResponse(), nil
 		}
@@ -3403,13 +3760,13 @@ func withGitHubOnlyRuleset(repos *fake.MockRepositoriesClient) {
 }
 
 // The unmanaged-rule guard covers only rulesets named in the CR. A ruleset not named there
-// is deleted, never updated, so no rule of it can be dropped; failing on it would block
-// the reconcile that removes it.
+// is deleted, never updated, so no rule of it can be dropped; leaving it as it is would
+// keep a ruleset the CR leaves out.
 func TestObserveGitHubOnlyRulesetWithUnmanagedRuleIsSurplus(t *testing.T) {
-	repos := upToDateRepositories(nil)
-	withGitHubOnlyRuleset(repos)
+	rs := upToDateRulesets()
+	withGitHubOnlyRuleset(rs)
 
-	got, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository())
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -3421,24 +3778,2615 @@ func TestObserveGitHubOnlyRulesetWithUnmanagedRuleIsSurplus(t *testing.T) {
 // Update deletes a ruleset that is not named in the CR even when it holds a rule the
 // provider does not model, and never updates it: an update would drop that rule.
 func TestUpdateRepositoryRulesDeletesGitHubOnlyRuleset(t *testing.T) {
-	repos := upToDateRepositories(nil)
-	withGitHubOnlyRuleset(repos)
+	rs := upToDateRulesets()
+	withGitHubOnlyRuleset(rs)
 	var deleted []int64
-	repos.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
 		deleted = append(deleted, rulesetID)
 		return fake.GenerateEmptyResponse(), nil
 	}
-	repos.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
 		if rulesetID == githubOnlyRulesetID {
-			t.Errorf("UpdateRuleset called for the GitHub-only ruleset; it would drop the file_path_restriction rule")
+			t.Errorf("UpdateRuleset called for the GitHub-only ruleset; it would drop the repository_create rule")
 		}
-		return &rs, fake.GenerateEmptyResponse(), nil
+		return &r, fake.GenerateEmptyResponse(), nil
 	}
 
-	if err := updateRepositoryRules(context.Background(), repository(), clientFor(repos), repo); err != nil {
+	if err := updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
 		t.Fatalf("updateRepositoryRules: %v", err)
 	}
 	if diff := cmp.Diff([]int64{githubOnlyRulesetID}, deleted); diff != "" {
 		t.Errorf("DeleteRuleset IDs: -want, +got:\n%s", diff)
+	}
+}
+
+const renamedRulesetID int64 = 790
+
+// renamedRulesets fakes GitHub holding the fixture's ruleset under the name old-name,
+// followed by kept copies named kept-0, kept-1, ... as declared by withKeptRulesets.
+// It logs every ruleset write in the order it is sent; createErr answers CreateRuleset.
+func renamedRulesets(kept int, createErr error) (*fake.MockRulesetsClient, *[]string) {
+	held := githubRuleset()
+	held[0].ID = github.Ptr(renamedRulesetID)
+	held[0].Name = "old-name"
+	for i := range kept {
+		r := githubRuleset()[0]
+		r.ID = github.Ptr(int64(1000 + i))
+		r.Name = fmt.Sprintf("kept-%d", i)
+		held = append(held, r)
+	}
+	var writes []string
+	rs := &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return held, fake.GenerateEmptyResponse(), nil
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+			for _, r := range held {
+				if *r.ID == rulesetID {
+					return r, fake.GenerateEmptyResponse(), nil
+				}
+			}
+			return nil, nil, fmt.Errorf("ruleset %d not held", rulesetID)
+		},
+		MockCreateRuleset: func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			writes = append(writes, "create "+r.Name)
+			if createErr != nil {
+				return nil, nil, createErr
+			}
+			return &r, fake.GenerateEmptyResponse(), nil
+		},
+		MockUpdateRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			writes = append(writes, fmt.Sprintf("update %d", rulesetID))
+			return &r, fake.GenerateEmptyResponse(), nil
+		},
+		MockDeleteRuleset: func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+			writes = append(writes, fmt.Sprintf("delete %d", rulesetID))
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+	return rs, &writes
+}
+
+// withKeptRulesets declares kept-0, kept-1, ... identical to the fixture's ruleset.
+func withKeptRulesets(kept int) repositoryModifier {
+	return func(cr *v1alpha1.Repository) {
+		first := (*cr.Spec.ForProvider.RepositoryRules)[0]
+		for i := range kept {
+			r := first
+			r.Name = fmt.Sprintf("kept-%d", i)
+			*cr.Spec.ForProvider.RepositoryRules = append(*cr.Spec.ForProvider.RepositoryRules, r)
+		}
+	}
+}
+
+// A renamed ruleset is created before the old one is deleted, so the branch stays
+// protected while the create is in flight. Only when the creates would take the
+// repository over GitHub's cap of 75 rulesets do the surplus ones go first.
+func TestUpdateRepositoryRulesCreatesBeforeDeleting(t *testing.T) {
+	createNew := "create " + rr1name
+	deleteOld := fmt.Sprintf("delete %d", renamedRulesetID)
+	cases := map[string]struct {
+		kept int
+		want []string
+	}{
+		"Rename":         {kept: 0, want: []string{createNew, deleteOld}},
+		"ReachesCap":     {kept: 73, want: []string{createNew, deleteOld}},
+		"WouldExceedCap": {kept: 74, want: []string{deleteOld, createNew}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs, writes := renamedRulesets(tc.kept, nil)
+			cr := repository(withKeptRulesets(tc.kept))
+			if err := updateRepositoryRules(context.Background(), cr, clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+				t.Fatalf("updateRepositoryRules: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, *writes); diff != "" {
+				t.Errorf("ruleset writes: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// When GitHub refuses the renamed ruleset (422, e.g. a rule the plan does not allow),
+// the old ruleset stays on GitHub and keeps protecting the branch until the spec is fixed.
+func TestUpdateRepositoryRulesFailedCreateKeepsOldRuleset(t *testing.T) {
+	refused := &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusUnprocessableEntity}, Message: "Validation Failed"}
+	rs, writes := renamedRulesets(0, refused)
+
+	err := updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo)
+	if !errors.Is(err, refused) {
+		t.Errorf("updateRepositoryRules error = %v, want the 422 from CreateRuleset", err)
+	}
+	if diff := cmp.Diff([]string{"create " + rr1name}, *writes); diff != "" {
+		t.Errorf("ruleset writes: -want, +got:\n%s", diff)
+	}
+}
+
+// An empty repositoryRules list survives the provider's write-back as [], so the
+// rulesets on GitHub still get deleted.
+func TestRepositoryRulesEmptyListSurvivesWriteBack(t *testing.T) {
+	encode := func(cr *v1alpha1.Repository) string {
+		b, err := json.Marshal(cr)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return string(b)
+	}
+
+	set := &v1alpha1.Repository{}
+	set.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{}
+	if got := encode(set); !strings.Contains(got, `"repositoryRules":[]`) {
+		t.Errorf("set and empty: %s, want \"repositoryRules\":[]", got)
+	}
+	if got := encode(&v1alpha1.Repository{}); strings.Contains(got, `"repositoryRules"`) {
+		t.Errorf("unset: %s, want no repositoryRules key", got)
+	}
+
+	// stored is the object as the API server holds it. The cache hands out deep copies.
+	var stored v1alpha1.Repository
+	if err := json.Unmarshal([]byte(`{"spec":{"forProvider":{"repositoryRules":[]}}}`), &stored); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got := encode(stored.DeepCopy()); !strings.Contains(got, `"repositoryRules":[]`) {
+		t.Errorf("written back: %s, want \"repositoryRules\":[]", got)
+	}
+}
+
+// An empty repositoryRules list deletes every ruleset on GitHub.
+func TestEmptyRepositoryRulesDeletesEveryRuleset(t *testing.T) {
+	rs := upToDateRulesets()
+	withGitHubOnlyRuleset(rs)
+	var deleted []int64
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		deleted = append(deleted, rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called for %q; the CR declares no rulesets", r.Name)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("UpdateRuleset called for %d; the CR declares no rulesets", rulesetID)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+
+	cr := repository()
+	cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{}
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = true, want false: both rulesets on GitHub must be deleted")
+	}
+
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr = settingsOnlyRepository()
+	cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{}
+	if _, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if diff := cmp.Diff([]int64{rr1Id, githubOnlyRulesetID}, deleted, cmpopts.SortSlices(func(a, b int64) bool { return a < b })); diff != "" {
+		t.Errorf("DeleteRuleset IDs: -want, +got:\n%s", diff)
+	}
+}
+
+// With repositoryRules unset, Observe and Update make no ruleset call.
+func TestUnsetRepositoryRulesMakesNoRulesetCall(t *testing.T) {
+	unexpected := errors.New("unexpected ruleset call")
+	rs := &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			t.Errorf("GetAllRulesets called")
+			return nil, nil, unexpected
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+			t.Errorf("GetRuleset called")
+			return nil, nil, unexpected
+		},
+		MockCreateRuleset: func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			t.Errorf("CreateRuleset called")
+			return nil, nil, unexpected
+		},
+		MockUpdateRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			t.Errorf("UpdateRuleset called")
+			return nil, nil, unexpected
+		},
+		MockDeleteRuleset: func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+			t.Errorf("DeleteRuleset called")
+			return nil, unexpected
+		},
+	}
+
+	cr := repository()
+	cr.Spec.ForProvider.RepositoryRules = nil
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: everything else matches GitHub")
+	}
+
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr = settingsOnlyRepository()
+	if _, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+}
+
+// modelledRuleCase describes one modelled rule.
+type modelledRuleCase struct {
+	// cr declares the rule, with only its required fields unless the case name says otherwise.
+	cr func(*v1alpha1.Rules)
+	// sent is the rule as the request carries it, with defaults filled in.
+	sent func(*rulesets.ModelledRules)
+	// sentNew, when set, is the rule as the request carries it while GitHub does not hold
+	// the rule yet; sent applies otherwise.
+	sentNew func(*rulesets.ModelledRules)
+	// onGitHub lists forms GitHub may return for the declared rule.
+	onGitHub []func(*rulesets.ModelledRules)
+	// differs holds, per field, a change to onGitHub[0] that is real drift.
+	differs map[string]func(*rulesets.ModelledRules)
+}
+
+func modelledRuleCases() map[string]modelledRuleCase {
+	mergeQueue := func() *rulesets.MergeQueueRuleParameters {
+		return &rulesets.MergeQueueRuleParameters{
+			CheckResponseTimeoutMinutes:  60,
+			GroupingStrategy:             "ALLGREEN",
+			MaxEntriesToBuild:            8,
+			MaxEntriesToMerge:            4,
+			MergeMethod:                  "SQUASH",
+			MinEntriesToMerge:            2,
+			MinEntriesToMergeWaitMinutes: 5,
+		}
+	}
+	codeQL := func() *rulesets.CodeScanningTool {
+		return &rulesets.CodeScanningTool{Tool: "CodeQL", AlertsThreshold: "all", SecurityAlertsThreshold: "critical"}
+	}
+	zap := func() *rulesets.CodeScanningTool {
+		return &rulesets.CodeScanningTool{Tool: "zap", AlertsThreshold: "errors", SecurityAlertsThreshold: "high_or_higher"}
+	}
+
+	// pullRequestDefaults is the pull_request rule GitHub returns when only required parameters are set.
+	pullRequestDefaults := func() *rulesets.PullRequestRuleParameters {
+		return &rulesets.PullRequestRuleParameters{
+			AllowedMergeMethods:  []string{"merge", "squash", "rebase"},
+			DismissalRestriction: &rulesets.DismissalRestriction{AllowedActors: []*rulesets.Actor{}},
+			RequiredReviewers:    []*rulesets.RequiredReviewer{},
+
+			RequireExtraApprovalForUnattributedChanges: github.Ptr(true),
+		}
+	}
+	// pullRequestSent is pullRequestDefaults as the provider sends it, merge methods sorted.
+	pullRequestSent := func() *rulesets.PullRequestRuleParameters {
+		p := pullRequestDefaults()
+		p.AllowedMergeMethods = []string{"merge", "rebase", "squash"}
+		return p
+	}
+	reviewer := func(id int64, approvals int, patterns ...string) *rulesets.RequiredReviewer {
+		return &rulesets.RequiredReviewer{FilePatterns: patterns, MinimumApprovals: approvals, Reviewer: rulesets.Actor{ID: json.Number(strconv.FormatInt(id, 10)), Type: "Team"}}
+	}
+	// pullRequestLists is the rule of the "pull_request with lists" case, lists in sent order.
+	pullRequestLists := func() *rulesets.PullRequestRuleParameters {
+		return &rulesets.PullRequestRuleParameters{
+			AllowedMergeMethods: []string{"merge", "squash"},
+			DismissalRestriction: &rulesets.DismissalRestriction{Enabled: true, AllowedActors: []*rulesets.Actor{
+				{ID: "2", Type: "Team"}, {ID: "9", Type: "Team"}, {ID: "3", Type: "User"},
+			}},
+			RequiredReviewers: []*rulesets.RequiredReviewer{reviewer(4, 2, "*"), reviewer(7, 1, "b/**", "!b/x/**", "a/**")},
+
+			RequireExtraApprovalForUnattributedChanges: github.Ptr(false),
+		}
+	}
+	statusChecks := func() *rulesets.RequiredStatusChecksRuleParameters {
+		return &rulesets.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*rulesets.StatusCheck{{Context: "ci"}}}
+	}
+	coverage := func(minimum, drop float64) *rulesets.CodeCoverageRuleParameters {
+		return &rulesets.CodeCoverageRuleParameters{MinimumCoverage: &minimum, MaxCoverageDrop: &drop}
+	}
+
+	cases := map[string]modelledRuleCase{
+		"pull_request": {
+			cr:   func(r *v1alpha1.Rules) { r.PullRequest = &v1alpha1.RulesPullRequest{} },
+			sent: func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestSent() },
+			sentNew: func(r *rulesets.ModelledRules) {
+				r.PullRequest = pullRequestSent()
+				r.PullRequest.RequireExtraApprovalForUnattributedChanges = nil
+			},
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestDefaults() }},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"allowedMergeMethods":  func(r *rulesets.ModelledRules) { r.PullRequest.AllowedMergeMethods = []string{"squash"} },
+				"dismissalRestriction": func(r *rulesets.ModelledRules) { r.PullRequest.DismissalRestriction.Enabled = true },
+				"dismissalRestriction.allowedActors": func(r *rulesets.ModelledRules) {
+					r.PullRequest.DismissalRestriction.AllowedActors = []*rulesets.Actor{{ID: "3", Type: "User"}}
+				},
+				"requireExtraApprovalForUnattributedChanges": func(r *rulesets.ModelledRules) {
+					r.PullRequest.RequireExtraApprovalForUnattributedChanges = github.Ptr(false)
+				},
+				"requiredReviewers": func(r *rulesets.ModelledRules) {
+					r.PullRequest.RequiredReviewers = []*rulesets.RequiredReviewer{reviewer(4, 1, "*")}
+				},
+				"dismissStaleReviewsOnPush":      func(r *rulesets.ModelledRules) { r.PullRequest.DismissStaleReviewsOnPush = true },
+				"requireCodeOwnerReview":         func(r *rulesets.ModelledRules) { r.PullRequest.RequireCodeOwnerReview = true },
+				"requireLastPushApproval":        func(r *rulesets.ModelledRules) { r.PullRequest.RequireLastPushApproval = true },
+				"requiredApprovingReviewCount":   func(r *rulesets.ModelledRules) { r.PullRequest.RequiredApprovingReviewCount = 1 },
+				"requiredReviewThreadResolution": func(r *rulesets.ModelledRules) { r.PullRequest.RequiredReviewThreadResolution = true },
+			},
+		},
+		"pull_request with lists": {
+			cr: func(r *v1alpha1.Rules) {
+				r.PullRequest = &v1alpha1.RulesPullRequest{
+					AllowedMergeMethods: []v1alpha1.RulesMergeMethod{"squash", "merge"},
+					DismissalRestriction: &v1alpha1.RulesDismissalRestriction{Enabled: true, AllowedActors: []*v1alpha1.RulesDismissalActor{
+						{ID: 3, Type: "User"}, {ID: 9, Type: "Team"}, {ID: 2, Type: "Team"},
+					}},
+					RequireExtraApprovalForUnattributedChanges: github.Ptr(false),
+					RequiredReviewers: []*v1alpha1.RulesRequiredReviewer{
+						{FilePatterns: []string{"b/**", "!b/x/**", "a/**"}, MinimumApprovals: 1, Reviewer: v1alpha1.RulesReviewer{ID: 7, Type: "Team"}},
+						{FilePatterns: []string{"*"}, MinimumApprovals: 2, Reviewer: v1alpha1.RulesReviewer{ID: 4, Type: "Team"}},
+					},
+				}
+			},
+			sent: func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestLists() },
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestLists() },
+				func(r *rulesets.ModelledRules) {
+					p := pullRequestLists()
+					p.AllowedMergeMethods = []string{"squash", "merge"}
+					p.DismissalRestriction.AllowedActors = []*rulesets.Actor{{ID: "3", Type: "User"}, {ID: "9", Type: "Team"}, {ID: "2", Type: "Team"}}
+					p.RequiredReviewers = []*rulesets.RequiredReviewer{reviewer(7, 1, "b/**", "!b/x/**", "a/**"), reviewer(4, 2, "*")}
+					r.PullRequest = p
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"allowed actor id": func(r *rulesets.ModelledRules) { r.PullRequest.DismissalRestriction.AllowedActors[0].ID = "10" },
+				"allowed actor type": func(r *rulesets.ModelledRules) {
+					r.PullRequest.DismissalRestriction.AllowedActors[1].Type = "RepositoryRole"
+				},
+				"reviewer id":        func(r *rulesets.ModelledRules) { r.PullRequest.RequiredReviewers[0].Reviewer.ID = "5" },
+				"reviewer approvals": func(r *rulesets.ModelledRules) { r.PullRequest.RequiredReviewers[0].MinimumApprovals = 1 },
+				"reviewer patterns":  func(r *rulesets.ModelledRules) { r.PullRequest.RequiredReviewers[1].FilePatterns = []string{"a/**"} },
+				"reviewer pattern order": func(r *rulesets.ModelledRules) {
+					r.PullRequest.RequiredReviewers[1].FilePatterns = []string{"a/**", "b/**", "!b/x/**"}
+				},
+				"reviewer pattern duplicated": func(r *rulesets.ModelledRules) {
+					r.PullRequest.RequiredReviewers[1].FilePatterns = []string{"b/**", "!b/x/**", "a/**", "a/**"}
+				},
+				"extra merge method": func(r *rulesets.ModelledRules) {
+					r.PullRequest.AllowedMergeMethods = []string{"merge", "rebase", "squash"}
+				},
+				"extra allowed actor": func(r *rulesets.ModelledRules) {
+					r.PullRequest.DismissalRestriction.AllowedActors = append(r.PullRequest.DismissalRestriction.AllowedActors, &rulesets.Actor{ID: "1", Type: "User"})
+				},
+				"no required reviewer": func(r *rulesets.ModelledRules) { r.PullRequest.RequiredReviewers = []*rulesets.RequiredReviewer{} },
+			},
+		},
+		"required_status_checks": {
+			cr: func(r *v1alpha1.Rules) {
+				r.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "ci"}}}
+			},
+			sent:     func(r *rulesets.ModelledRules) { r.RequiredStatusChecks = statusChecks() },
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.RequiredStatusChecks = statusChecks() }},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"doNotEnforceOnCreate":             func(r *rulesets.ModelledRules) { r.RequiredStatusChecks.DoNotEnforceOnCreate = true },
+				"strictRequiredStatusChecksPolicy": func(r *rulesets.ModelledRules) { r.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = true },
+				"context":                          func(r *rulesets.ModelledRules) { r.RequiredStatusChecks.RequiredStatusChecks[0].Context = "lint" },
+			},
+		},
+		"required_status_checks with doNotEnforceOnCreate": {
+			cr: func(r *v1alpha1.Rules) {
+				r.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
+					DoNotEnforceOnCreate: github.Ptr(true),
+					RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "ci"}},
+				}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.RequiredStatusChecks = statusChecks()
+				r.RequiredStatusChecks.DoNotEnforceOnCreate = true
+			},
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) {
+				r.RequiredStatusChecks = statusChecks()
+				r.RequiredStatusChecks.DoNotEnforceOnCreate = true
+			}},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"doNotEnforceOnCreate": func(r *rulesets.ModelledRules) { r.RequiredStatusChecks.DoNotEnforceOnCreate = false },
+			},
+		},
+		"required_deployments": {
+			cr: func(r *v1alpha1.Rules) { r.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{} },
+			sent: func(r *rulesets.ModelledRules) {
+				r.RequiredDeployments = &rulesets.RequiredDeploymentsRuleParameters{RequiredDeploymentEnvironments: []string{}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.RequiredDeployments = &rulesets.RequiredDeploymentsRuleParameters{RequiredDeploymentEnvironments: []string{}}
+				},
+				func(r *rulesets.ModelledRules) { r.RequiredDeployments = &rulesets.RequiredDeploymentsRuleParameters{} },
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"environments": func(r *rulesets.ModelledRules) {
+					r.RequiredDeployments.RequiredDeploymentEnvironments = []string{"prod"}
+				},
+			},
+		},
+		"code_quality": {
+			cr: func(r *v1alpha1.Rules) { r.CodeQuality = &v1alpha1.RulesCodeQuality{Severity: "errors"} },
+			sent: func(r *rulesets.ModelledRules) {
+				r.CodeQuality = &rulesets.CodeQualityRuleParameters{Severity: "errors"}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) {
+				r.CodeQuality = &rulesets.CodeQualityRuleParameters{Severity: "errors"}
+			}},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"severity": func(r *rulesets.ModelledRules) { r.CodeQuality.Severity = "all" },
+			},
+		},
+		"code_coverage": {
+			cr: func(r *v1alpha1.Rules) {
+				r.CodeCoverage = &v1alpha1.RulesCodeCoverage{MinimumCoverage: github.Ptr("80.0"), MaxCoverageDrop: github.Ptr("2.5")}
+			},
+			sent:     func(r *rulesets.ModelledRules) { r.CodeCoverage = coverage(80, 2.5) },
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.CodeCoverage = coverage(80, 2.5) }},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"minimumCoverage":       func(r *rulesets.ModelledRules) { r.CodeCoverage.MinimumCoverage = github.Ptr(79.5) },
+				"maxCoverageDrop":       func(r *rulesets.ModelledRules) { r.CodeCoverage.MaxCoverageDrop = github.Ptr(3.0) },
+				"maxCoverageDrop unset": func(r *rulesets.ModelledRules) { r.CodeCoverage.MaxCoverageDrop = nil },
+			},
+		},
+		"code_coverage without parameters": {
+			cr:       func(r *v1alpha1.Rules) { r.CodeCoverage = &v1alpha1.RulesCodeCoverage{} },
+			sent:     func(r *rulesets.ModelledRules) { r.CodeCoverage = &rulesets.CodeCoverageRuleParameters{} },
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.CodeCoverage = &rulesets.CodeCoverageRuleParameters{} }},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"minimumCoverage": func(r *rulesets.ModelledRules) { r.CodeCoverage.MinimumCoverage = github.Ptr(50.0) },
+			},
+		},
+		"license_compliance_scanning": {
+			cr:       func(r *v1alpha1.Rules) { r.LicenseComplianceScanning = github.Ptr(true) },
+			sent:     func(r *rulesets.ModelledRules) { r.LicenseComplianceScanning = &rulesets.EmptyRuleParameters{} },
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.LicenseComplianceScanning = &rulesets.EmptyRuleParameters{} }},
+		},
+		"require_secret_scanning_alert_resolution": {
+			cr: func(r *v1alpha1.Rules) {
+				r.RequireSecretScanningAlertResolution = &v1alpha1.RulesSecretScanningAlertResolution{}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.RequireSecretScanningAlertResolution = &rulesets.RequireSecretScanningAlertResolutionRuleParameters{SecretTypes: []string{"provider_patterns"}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.RequireSecretScanningAlertResolution = &rulesets.RequireSecretScanningAlertResolutionRuleParameters{SecretTypes: []string{"provider_patterns"}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.RequireSecretScanningAlertResolution = &rulesets.RequireSecretScanningAlertResolutionRuleParameters{}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"secretTypes": func(r *rulesets.ModelledRules) {
+					r.RequireSecretScanningAlertResolution.SecretTypes = []string{"generic_patterns", "custom_patterns"}
+				},
+			},
+		},
+		"merge_queue": {
+			cr: func(r *v1alpha1.Rules) {
+				r.MergeQueue = &v1alpha1.RulesMergeQueue{
+					CheckResponseTimeoutMinutes:  60,
+					GroupingStrategy:             "ALLGREEN",
+					MaxEntriesToBuild:            8,
+					MaxEntriesToMerge:            4,
+					MergeMethod:                  "SQUASH",
+					MinEntriesToMerge:            2,
+					MinEntriesToMergeWaitMinutes: 5,
+				}
+			},
+			sent:     func(r *rulesets.ModelledRules) { r.MergeQueue = mergeQueue() },
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.MergeQueue = mergeQueue() }},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"checkResponseTimeoutMinutes":  func(r *rulesets.ModelledRules) { r.MergeQueue.CheckResponseTimeoutMinutes = 61 },
+				"groupingStrategy":             func(r *rulesets.ModelledRules) { r.MergeQueue.GroupingStrategy = "HEADGREEN" },
+				"maxEntriesToBuild":            func(r *rulesets.ModelledRules) { r.MergeQueue.MaxEntriesToBuild = 9 },
+				"maxEntriesToMerge":            func(r *rulesets.ModelledRules) { r.MergeQueue.MaxEntriesToMerge = 3 },
+				"mergeMethod":                  func(r *rulesets.ModelledRules) { r.MergeQueue.MergeMethod = "REBASE" },
+				"minEntriesToMerge":            func(r *rulesets.ModelledRules) { r.MergeQueue.MinEntriesToMerge = 1 },
+				"minEntriesToMergeWaitMinutes": func(r *rulesets.ModelledRules) { r.MergeQueue.MinEntriesToMergeWaitMinutes = 6 },
+			},
+		},
+		"code_scanning": {
+			cr: func(r *v1alpha1.Rules) {
+				r.CodeScanning = &v1alpha1.RulesCodeScanning{CodeScanningTools: []*v1alpha1.RulesCodeScanningTool{
+					{Tool: "zap", AlertsThreshold: "errors", SecurityAlertsThreshold: "high_or_higher"},
+					{Tool: "CodeQL", AlertsThreshold: "all", SecurityAlertsThreshold: "critical"},
+				}}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.CodeScanning = &rulesets.CodeScanningRuleParameters{CodeScanningTools: []*rulesets.CodeScanningTool{codeQL(), zap()}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.CodeScanning = &rulesets.CodeScanningRuleParameters{CodeScanningTools: []*rulesets.CodeScanningTool{codeQL(), zap()}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.CodeScanning = &rulesets.CodeScanningRuleParameters{CodeScanningTools: []*rulesets.CodeScanningTool{zap(), codeQL()}}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"tool":                    func(r *rulesets.ModelledRules) { r.CodeScanning.CodeScanningTools[0].Tool = "Semgrep" },
+				"alertsThreshold":         func(r *rulesets.ModelledRules) { r.CodeScanning.CodeScanningTools[0].AlertsThreshold = "none" },
+				"securityAlertsThreshold": func(r *rulesets.ModelledRules) { r.CodeScanning.CodeScanningTools[0].SecurityAlertsThreshold = "none" },
+			},
+		},
+		"copilot_code_review": {
+			cr: func(r *v1alpha1.Rules) { r.CopilotCodeReview = &v1alpha1.RulesCopilotCodeReview{} },
+			sent: func(r *rulesets.ModelledRules) {
+				r.CopilotCodeReview = &rulesets.CopilotCodeReviewRuleParameters{}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) {
+				r.CopilotCodeReview = &rulesets.CopilotCodeReviewRuleParameters{}
+			}},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"reviewOnPush":            func(r *rulesets.ModelledRules) { r.CopilotCodeReview.ReviewOnPush = true },
+				"reviewDraftPullRequests": func(r *rulesets.ModelledRules) { r.CopilotCodeReview.ReviewDraftPullRequests = true },
+			},
+		},
+		"file_extension_restriction": {
+			cr: func(r *v1alpha1.Rules) {
+				r.FileExtensionRestriction = &v1alpha1.RulesFileExtensionRestriction{RestrictedFileExtensions: []string{"*.zip", "*.exe"}}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.FileExtensionRestriction = &rulesets.FileExtensionRestrictionRuleParameters{RestrictedFileExtensions: []string{"*.exe", "*.zip"}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.FileExtensionRestriction = &rulesets.FileExtensionRestrictionRuleParameters{RestrictedFileExtensions: []string{"*.exe", "*.zip"}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.FileExtensionRestriction = &rulesets.FileExtensionRestrictionRuleParameters{RestrictedFileExtensions: []string{"*.zip", "*.exe"}}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"restrictedFileExtensions": func(r *rulesets.ModelledRules) {
+					r.FileExtensionRestriction.RestrictedFileExtensions = []string{"*.exe"}
+				},
+			},
+		},
+		"file_path_restriction": {
+			cr: func(r *v1alpha1.Rules) {
+				r.FilePathRestriction = &v1alpha1.RulesFilePathRestriction{RestrictedFilePaths: []string{"secrets/", "keys/"}}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"keys/", "secrets/"}, IgnoredFilePaths: []string{}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"keys/", "secrets/"}, IgnoredFilePaths: []string{}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/", "keys/"}}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"restrictedFilePaths": func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction.RestrictedFilePaths = []string{"keys/", "secrets/", "tokens/"}
+				},
+				"ignoredFilePaths": func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction.IgnoredFilePaths = []string{"keys/public/"}
+				},
+			},
+		},
+		"file_path_restriction with ignoredFilePaths": {
+			cr: func(r *v1alpha1.Rules) {
+				r.FilePathRestriction = &v1alpha1.RulesFilePathRestriction{RestrictedFilePaths: []string{"keys/"}, IgnoredFilePaths: []string{"keys/b/", "keys/a/"}}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"keys/"}, IgnoredFilePaths: []string{"keys/a/", "keys/b/"}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"keys/"}, IgnoredFilePaths: []string{"keys/a/", "keys/b/"}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"keys/"}, IgnoredFilePaths: []string{"keys/b/", "keys/a/"}}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"ignoredFilePaths":       func(r *rulesets.ModelledRules) { r.FilePathRestriction.IgnoredFilePaths = []string{"keys/a/"} },
+				"ignoredFilePaths empty": func(r *rulesets.ModelledRules) { r.FilePathRestriction.IgnoredFilePaths = []string{} },
+			},
+		},
+		"max_file_path_length": {
+			cr: func(r *v1alpha1.Rules) {
+				r.MaxFilePathLength = &v1alpha1.RulesMaxFilePathLength{MaxFilePathLength: 255}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.MaxFilePathLength = &rulesets.MaxFilePathLengthRuleParameters{MaxFilePathLength: 255}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) {
+				r.MaxFilePathLength = &rulesets.MaxFilePathLengthRuleParameters{MaxFilePathLength: 255}
+			}},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"maxFilePathLength": func(r *rulesets.ModelledRules) { r.MaxFilePathLength.MaxFilePathLength = 256 },
+			},
+		},
+		"max_file_size": {
+			cr: func(r *v1alpha1.Rules) { r.MaxFileSize = &v1alpha1.RulesMaxFileSize{MaxFileSize: 100} },
+			sent: func(r *rulesets.ModelledRules) {
+				r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100, IgnoredFilePaths: []string{}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100, IgnoredFilePaths: []string{}}
+				},
+				func(r *rulesets.ModelledRules) { r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100} },
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"maxFileSize":      func(r *rulesets.ModelledRules) { r.MaxFileSize.MaxFileSize = 50 },
+				"ignoredFilePaths": func(r *rulesets.ModelledRules) { r.MaxFileSize.IgnoredFilePaths = []string{"assets/"} },
+			},
+		},
+		"max_file_size with ignoredFilePaths": {
+			cr: func(r *v1alpha1.Rules) {
+				r.MaxFileSize = &v1alpha1.RulesMaxFileSize{MaxFileSize: 100, IgnoredFilePaths: []string{"media/", "assets/"}}
+			},
+			sent: func(r *rulesets.ModelledRules) {
+				r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100, IgnoredFilePaths: []string{"assets/", "media/"}}
+			},
+			onGitHub: []func(*rulesets.ModelledRules){
+				func(r *rulesets.ModelledRules) {
+					r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100, IgnoredFilePaths: []string{"assets/", "media/"}}
+				},
+				func(r *rulesets.ModelledRules) {
+					r.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{MaxFileSize: 100, IgnoredFilePaths: []string{"media/", "assets/"}}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"ignoredFilePaths": func(r *rulesets.ModelledRules) { r.MaxFileSize.IgnoredFilePaths = []string{"media/"} },
+			},
+		},
+	}
+
+	// The five pattern rules share one shape; each is reached through its own field.
+	patterns := map[string]struct {
+		cr func(*v1alpha1.Rules) **v1alpha1.RulesPattern
+		gh func(*rulesets.ModelledRules) **rulesets.PatternRuleParameters
+	}{
+		"commit_message_pattern": {
+			cr: func(r *v1alpha1.Rules) **v1alpha1.RulesPattern { return &r.CommitMessagePattern },
+			gh: func(r *rulesets.ModelledRules) **rulesets.PatternRuleParameters { return &r.CommitMessagePattern },
+		},
+		"commit_author_email_pattern": {
+			cr: func(r *v1alpha1.Rules) **v1alpha1.RulesPattern { return &r.CommitAuthorEmailPattern },
+			gh: func(r *rulesets.ModelledRules) **rulesets.PatternRuleParameters {
+				return &r.CommitAuthorEmailPattern
+			},
+		},
+		"committer_email_pattern": {
+			cr: func(r *v1alpha1.Rules) **v1alpha1.RulesPattern { return &r.CommitterEmailPattern },
+			gh: func(r *rulesets.ModelledRules) **rulesets.PatternRuleParameters { return &r.CommitterEmailPattern },
+		},
+		"branch_name_pattern": {
+			cr: func(r *v1alpha1.Rules) **v1alpha1.RulesPattern { return &r.BranchNamePattern },
+			gh: func(r *rulesets.ModelledRules) **rulesets.PatternRuleParameters { return &r.BranchNamePattern },
+		},
+		"tag_name_pattern": {
+			cr: func(r *v1alpha1.Rules) **v1alpha1.RulesPattern { return &r.TagNamePattern },
+			gh: func(r *rulesets.ModelledRules) **rulesets.PatternRuleParameters { return &r.TagNamePattern },
+		},
+	}
+	for typ, p := range patterns {
+		withDefaults := func(r *rulesets.ModelledRules) {
+			*p.gh(r) = &rulesets.PatternRuleParameters{Name: github.Ptr(""), Negate: github.Ptr(false), Operator: "starts_with", Pattern: "feat"}
+		}
+		cases[typ] = modelledRuleCase{
+			cr: func(r *v1alpha1.Rules) {
+				*p.cr(r) = &v1alpha1.RulesPattern{Operator: "starts_with", Pattern: "feat"}
+			},
+			sent: withDefaults,
+			onGitHub: []func(*rulesets.ModelledRules){
+				withDefaults,
+				func(r *rulesets.ModelledRules) {
+					*p.gh(r) = &rulesets.PatternRuleParameters{Operator: "starts_with", Pattern: "feat"}
+				},
+			},
+			differs: map[string]func(*rulesets.ModelledRules){
+				"name":     func(r *rulesets.ModelledRules) { (*p.gh(r)).Name = github.Ptr("conventional") },
+				"negate":   func(r *rulesets.ModelledRules) { (*p.gh(r)).Negate = github.Ptr(true) },
+				"operator": func(r *rulesets.ModelledRules) { (*p.gh(r)).Operator = "ends_with" },
+				"pattern":  func(r *rulesets.ModelledRules) { (*p.gh(r)).Pattern = "fix" },
+			},
+		}
+	}
+	return cases
+}
+
+func withRules(f func(*v1alpha1.Rules)) repositoryModifier {
+	return func(cr *v1alpha1.Repository) { f((*cr.Spec.ForProvider.RepositoryRules)[0].Rules) }
+}
+
+// rulesetHolding makes GitHub return the CR's ruleset with the given rule changes applied.
+func rulesetHolding(t *testing.T, rs *fake.MockRulesetsClient, changes ...func(*rulesets.ModelledRules)) {
+	t.Helper()
+	rules := githubRules()
+	for _, change := range changes {
+		change(rules)
+	}
+	encoded, err := rules.Encode()
+	if err != nil {
+		t.Fatalf("encode rules: %v", err)
+	}
+	rulesetWithRules(rs, encoded)
+}
+
+// rulesetWithRules makes GitHub return the CR's ruleset holding exactly the given rules.
+func rulesetWithRules(rs *fake.MockRulesetsClient, rules []*rulesets.Rule) {
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		r := githubRuleset()[0]
+		r.Rules = rules
+		return r, fake.GenerateEmptyResponse(), nil
+	}
+}
+
+// sentRules runs updateRepositoryRules and returns the rules of its one UpdateRuleset call.
+func sentRules(t *testing.T, rs *fake.MockRulesetsClient, cr *v1alpha1.Repository) []*rulesets.Rule {
+	t.Helper()
+	var sent [][]*rulesets.Rule
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		sent = append(sent, r.Rules)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	if err := updateRepositoryRules(context.Background(), cr, clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("UpdateRuleset called %d times, want 1", len(sent))
+	}
+	return sent[0]
+}
+
+// sentParameters returns the parameters of the rule of type typ in rules.
+func sentParameters(t *testing.T, rules []*rulesets.Rule, typ string) string {
+	t.Helper()
+	types := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.Type == typ {
+			return string(r.Parameters)
+		}
+		types = append(types, r.Type)
+	}
+	t.Fatalf("no %s rule sent, only %v", typ, types)
+	return ""
+}
+
+// crRulesets is getRepositoryRulesMapFromCr for rulesets that must convert without error.
+func crRulesets(t *testing.T, rules []v1alpha1.RepositoryRuleset) map[string]v1alpha1.RepositoryRuleset {
+	t.Helper()
+	m, err := getRepositoryRulesMapFromCr(rules)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesMapFromCr: %v", err)
+	}
+	return m
+}
+
+// rulesetsWithoutWrites fails the test on any ruleset write and reports the ruleset as on GitHub.
+func rulesetsWithoutWrites(t *testing.T) *fake.MockRulesetsClient {
+	rs := upToDateRulesets()
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called")
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, id int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("UpdateRuleset called")
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, id int64) (*github.Response, error) {
+		t.Errorf("DeleteRuleset called")
+		return fake.GenerateEmptyResponse(), nil
+	}
+	return rs
+}
+
+// updatedRules is sentRules decoded into the rules the provider models.
+func updatedRules(t *testing.T, rs *fake.MockRulesetsClient, cr *v1alpha1.Repository) *rulesets.ModelledRules {
+	t.Helper()
+	got, err := rulesets.Decode(sentRules(t, rs, cr))
+	if err != nil {
+		t.Fatalf("decode sent rules: %v", err)
+	}
+	return got
+}
+
+// A declared rule is sent with every field, defaults filled in and sets sorted,
+// alongside the rules already on the ruleset.
+func TestUpdateSendsModelledRules(t *testing.T) {
+	for typ, tc := range modelledRuleCases() {
+		t.Run(typ, func(t *testing.T) {
+			got := updatedRules(t, upToDateRulesets(), repository(withRules(tc.cr)))
+
+			want := githubRules()
+			if tc.sentNew != nil {
+				tc.sentNew(want)
+			} else {
+				tc.sent(want)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("UpdateRuleset rules: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// A CR setting only required fields is up to date against GitHub's defaults in any list
+// order. A real difference is drift, and the update sends the CR's values.
+func TestObserveModelledRules(t *testing.T) {
+	for typ, tc := range modelledRuleCases() {
+		t.Run(typ, func(t *testing.T) {
+			cr := repository(withRules(tc.cr))
+			for i, onGitHub := range tc.onGitHub {
+				rs := upToDateRulesets()
+				rulesetHolding(t, rs, onGitHub)
+				got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+				if err != nil {
+					t.Fatalf("Observe: %v", err)
+				}
+				if !got.ResourceUpToDate {
+					t.Errorf("GitHub form %d: ResourceUpToDate = false, want true: GitHub holds what the CR declares", i)
+				}
+			}
+			for field, change := range tc.differs {
+				rs := upToDateRulesets()
+				rulesetHolding(t, rs, tc.onGitHub[0], change)
+				got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+				if err != nil {
+					t.Fatalf("Observe: %v", err)
+				}
+				if got.ResourceUpToDate {
+					t.Errorf("%s differs on GitHub: ResourceUpToDate = true, want false", field)
+				}
+				want := githubRules()
+				tc.sent(want)
+				if diff := cmp.Diff(want, updatedRules(t, rs, cr.DeepCopy())); diff != "" {
+					t.Errorf("%s differs on GitHub: UpdateRuleset rules: -want, +got:\n%s", field, diff)
+				}
+			}
+		})
+	}
+}
+
+// A modelled rule held only on GitHub is drift, and the update removes it.
+func TestModelledRuleOnlyOnGitHubIsRemoved(t *testing.T) {
+	for typ, tc := range modelledRuleCases() {
+		t.Run(typ, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rulesetHolding(t, rs, tc.onGitHub[0])
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = true, want false: GitHub holds %s, which the CR does not declare", typ)
+			}
+
+			sent := updatedRules(t, rs, repository())
+			if diff := cmp.Diff(githubRules(), sent); diff != "" {
+				t.Errorf("UpdateRuleset rules: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// pullRequestOnGitHub is the CR's ruleset as GitHub returns it with a pull_request rule
+// (approval count 2) and a merge_queue rule, each holding an unmodelled parameter.
+func pullRequestOnGitHub() []*rulesets.Rule {
+	return []*rulesets.Rule{
+		{Type: "creation"},
+		{Type: "deletion"},
+		{Type: "update"},
+		{Type: "required_linear_history"},
+		{Type: "required_signatures"},
+		{Type: "non_fast_forward"},
+		{Type: "pull_request", Parameters: json.RawMessage(`{
+			"allowed_merge_methods": ["merge", "squash", "rebase"],
+			"dismiss_stale_reviews_on_push": true,
+			"dismissal_restriction": {"allowed_actors": [], "enabled": false},
+			"ignore_approvals_from_contributors": true,
+			"require_code_owner_review": false,
+			"require_extra_approval_for_unattributed_changes": true,
+			"require_last_push_approval": false,
+			"required_approving_review_count": 2,
+			"required_review_thread_resolution": false,
+			"required_reviewers": []
+		}`)},
+		{Type: "merge_queue", Parameters: json.RawMessage(`{
+			"actor_controlled_merging": true,
+			"check_response_timeout_minutes": 60,
+			"grouping_strategy": "ALLGREEN",
+			"max_entries_to_build": 5,
+			"max_entries_to_merge": 5,
+			"merge_method": "MERGE",
+			"min_entries_to_merge": 1,
+			"min_entries_to_merge_wait_minutes": 5
+		}`)},
+	}
+}
+
+// withMergeQueueRule declares the merge_queue rule pullRequestOnGitHub holds.
+func withMergeQueueRule() repositoryModifier {
+	return withRules(func(r *v1alpha1.Rules) {
+		r.MergeQueue = &v1alpha1.RulesMergeQueue{
+			CheckResponseTimeoutMinutes:  60,
+			GroupingStrategy:             "ALLGREEN",
+			MaxEntriesToBuild:            5,
+			MaxEntriesToMerge:            5,
+			MergeMethod:                  "MERGE",
+			MinEntriesToMerge:            1,
+			MinEntriesToMergeWaitMinutes: 5,
+		}
+	})
+}
+
+// withPullRequestRule declares a pull_request rule requiring approvingReviews approvals
+// and dismissing stale reviews.
+func withPullRequestRule(approvingReviews int) repositoryModifier {
+	return withRules(func(r *v1alpha1.Rules) {
+		r.PullRequest = &v1alpha1.RulesPullRequest{
+			DismissStaleReviewsOnPush:    github.Ptr(true),
+			RequiredApprovingReviewCount: github.Ptr(approvingReviews),
+		}
+	})
+}
+
+// requireExtraApprovalForUnattributedChanges is undocumented, so an update carries it
+// only when the CR sets it or GitHub returns it. An unset field means GitHub's default,
+// true: once GitHub returns the field, a false there is drift and the update sends true.
+func TestRequireExtraApprovalForUnattributedChanges(t *testing.T) {
+	const (
+		withTrue  = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_extra_approval_for_unattributed_changes":true,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+		withFalse = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_extra_approval_for_unattributed_changes":false,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+		without   = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+	)
+	cases := map[string]struct {
+		cr           *bool
+		onGitHub     *bool
+		wantUpToDate bool
+		wantSent     string
+	}{
+		"CRTrueGitHubFalse":   {cr: github.Ptr(true), onGitHub: github.Ptr(false), wantSent: withTrue},
+		"CRFalseGitHubAbsent": {cr: github.Ptr(false), wantSent: withFalse},
+		"CRUnsetGitHubTrue":   {onGitHub: github.Ptr(true), wantUpToDate: true, wantSent: withTrue},
+		"CRUnsetGitHubFalse":  {onGitHub: github.Ptr(false), wantSent: withTrue},
+		"CRUnsetGitHubAbsent": {wantUpToDate: true, wantSent: without},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cr := repository(withRules(func(r *v1alpha1.Rules) {
+				r.PullRequest = &v1alpha1.RulesPullRequest{
+					DismissStaleReviewsOnPush:                  github.Ptr(true),
+					RequiredApprovingReviewCount:               github.Ptr(1),
+					RequireExtraApprovalForUnattributedChanges: tc.cr,
+				}
+			}))
+			onGitHub := func(dismissStale bool) func(*rulesets.ModelledRules) {
+				return func(m *rulesets.ModelledRules) {
+					m.PullRequest = &rulesets.PullRequestRuleParameters{
+						AllowedMergeMethods:          []string{"merge", "squash", "rebase"},
+						DismissStaleReviewsOnPush:    dismissStale,
+						DismissalRestriction:         &rulesets.DismissalRestriction{AllowedActors: []*rulesets.Actor{}},
+						RequiredApprovingReviewCount: 1,
+						RequiredReviewers:            []*rulesets.RequiredReviewer{},
+
+						RequireExtraApprovalForUnattributedChanges: tc.onGitHub,
+					}
+				}
+			}
+
+			rs := upToDateRulesets()
+			rulesetHolding(t, rs, onGitHub(true))
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.wantUpToDate)
+			}
+
+			// dismiss_stale_reviews_on_push differs too, so every case sends an update.
+			rs = upToDateRulesets()
+			rulesetHolding(t, rs, onGitHub(false))
+			if got := sentParameters(t, sentRules(t, rs, cr.DeepCopy()), "pull_request"); got != tc.wantSent {
+				t.Errorf("pull_request parameters sent:\nwant %s\n got %s", tc.wantSent, got)
+			}
+		})
+	}
+}
+
+// A new ruleset with the field unset is created without it, by the update and with the
+// repository, and GitHub applies its default, true.
+func TestRequireExtraApprovalForUnattributedChangesUnsetOnCreate(t *testing.T) {
+	want := `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":false,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_last_push_approval":false,"required_approving_review_count":0,"required_review_thread_resolution":false,"required_reviewers":[]}`
+	var created []rulesets.Ruleset
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		created = append(created, r)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	withPullRequest := withRules(func(r *v1alpha1.Rules) { r.PullRequest = &v1alpha1.RulesPullRequest{} })
+
+	if err := updateRepositoryRules(context.Background(), repository(withPullRequest), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	repos := &fake.MockRepositoriesClient{
+		MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+			return r, fake.GenerateEmptyResponse(), nil
+		},
+		MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+			return nil, fake.GenerateEmptyResponse(), nil
+		},
+		MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+			return topics, fake.GenerateEmptyResponse(), nil
+		},
+	}
+	teams := &fake.MockTeamsClient{
+		MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+	cr := repository(withPullRequest)
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+	e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rs}}}
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if len(created) != 2 {
+		t.Fatalf("CreateRuleset calls = %d, want 2", len(created))
+	}
+	for i, path := range []string{"update", "create"} {
+		if got := sentParameters(t, created[i].Rules, "pull_request"); got != want {
+			t.Errorf("pull_request parameters sent by %s:\nwant %s\n got %s", path, want, got)
+		}
+	}
+}
+
+// An update sends only the parameters built from the CR, so it resets unmodelled
+// parameters set on GitHub.
+func TestUpdateSendsOnlyCRParameters(t *testing.T) {
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, pullRequestOnGitHub())
+
+	sent := sentRules(t, rs, repository(withPullRequestRule(1), withMergeQueueRule()))
+
+	wantPR := `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_extra_approval_for_unattributed_changes":true,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+	if got := sentParameters(t, sent, "pull_request"); got != wantPR {
+		t.Errorf("pull_request parameters sent:\nwant %s\n got %s", wantPR, got)
+	}
+	wantMQ := `{"check_response_timeout_minutes":60,"grouping_strategy":"ALLGREEN","max_entries_to_build":5,"max_entries_to_merge":5,"merge_method":"MERGE","min_entries_to_merge":1,"min_entries_to_merge_wait_minutes":5}`
+	if got := sentParameters(t, sent, "merge_queue"); got != wantMQ {
+		t.Errorf("merge_queue parameters sent:\nwant %s\n got %s", wantMQ, got)
+	}
+}
+
+// Observe compares modelled parameters only, so a CR matching them is up to date.
+func TestObserveIgnoresUnmodelledParameters(t *testing.T) {
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, pullRequestOnGitHub())
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository(withPullRequestRule(2), withMergeQueueRule()))
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub differs from the CR only in parameters the provider does not model")
+	}
+}
+
+// The next update resets parameters the provider has no field for, so Observe reports
+// them on RulesetsPartial and the ruleset_parameters gauge on every Observe. They are
+// not drift: GitHub may return a new parameter on every read, and drift would update
+// the ruleset on every poll. Once GitHub holds only modelled parameters, both clear.
+func TestObserveUnmanagedParametersSetRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	gauge := metrics.RepositoryUnreconcilableForTest()
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, pullRequestOnGitHub())
+	cr := repository(withPullRequestRule(2), withMergeQueueRule())
+	cr.Spec.ForProvider.Org = "acme"
+	e := external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}
+	want := "ruleset test-ruleset-1: rule merge_queue has parameter actor_controlled_merging that this provider does not manage; GitHub resets it when the ruleset is next updated; " +
+		"ruleset test-ruleset-1: rule pull_request has parameter ignore_approvals_from_contributors that this provider does not manage; GitHub resets it when the ruleset is next updated"
+
+	for observe := 1; observe <= 2; observe++ {
+		got, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if !got.ResourceUpToDate {
+			t.Errorf("Observe %d: ResourceUpToDate = false, want true: unmanaged parameters are not drift", observe)
+		}
+		condition := cr.GetCondition(typeRulesetsPartial)
+		if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedParameters || condition.Message != want {
+			t.Errorf("Observe %d: RulesetsPartial = %v/%v %q, want True/%v %q", observe, condition.Status, condition.Reason, condition.Message, reasonUnmanagedParameters, want)
+		}
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 1 {
+			t.Errorf("Observe %d: unreconcilable{dimension=ruleset_parameters} = %v, want 1", observe, got)
+		}
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+			t.Errorf("Observe %d: unreconcilable{dimension=rulesets_forbidden} = %v, want 0: GitHub lists the rulesets", observe, got)
+		}
+	}
+
+	modelled := upToDateRulesets()
+	rulesetHolding(t, modelled, func(m *rulesets.ModelledRules) {
+		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
+	})
+	cr.Spec.ForProvider = repository(withPullRequestRule(2)).Spec.ForProvider
+	cr.Spec.ForProvider.Org = "acme"
+	e = external{github: clientFor(upToDateRepositories(nil), modelled), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Message != "" {
+		t.Errorf("RulesetsPartial with only modelled parameters = %v %q, want False with no message", got.Status, got.Message)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} with only modelled parameters = %v, want 0", got)
+	}
+}
+
+// The next update resets a nested parameter as well, so RulesetsPartial names it by its
+// path inside the rule's parameters.
+func TestObserveNestedUnmanagedParameterNamesItsPath(t *testing.T) {
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, append(pullRequestOnGitHub()[:6], &rulesets.Rule{Type: "pull_request", Parameters: json.RawMessage(`{
+		"dismiss_stale_reviews_on_push": true,
+		"dismissal_restriction": {"allowed_actors": [], "enabled": false, "foo": true},
+		"required_approving_review_count": 2
+	}`)}))
+	cr := repository(withPullRequestRule(2))
+	want := "ruleset test-ruleset-1: rule pull_request has parameter dismissal_restriction.foo that this provider does not manage; GitHub resets it when the ruleset is next updated"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionTrue || got.Reason != reasonUnmanagedParameters || got.Message != want {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", got.Status, got.Reason, got.Message, reasonUnmanagedParameters, want)
+	}
+}
+
+// A surplus ruleset is deleted, never updated, so its parameters leave RulesetsPartial False.
+func TestObserveSurplusRulesetParametersLeaveRulesetsPartialFalse(t *testing.T) {
+	surplus := func() *rulesets.Ruleset {
+		return &rulesets.Ruleset{
+			ID:          github.Ptr(githubOnlyRulesetID),
+			Name:        "github-only",
+			Enforcement: rr1enforcement,
+			Rules:       []*rulesets.Rule{{Type: "merge_queue", Parameters: json.RawMessage(`{"actor_controlled_merging":true}`)}},
+		}
+	}
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return append(githubRuleset(), surplus()), fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		if rulesetID == githubOnlyRulesetID {
+			return surplus(), fake.GenerateEmptyResponse(), nil
+		}
+		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+	}
+	metrics := telemetry.NewForTest()
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
+		t.Errorf("RulesetsPartial = %v, want False", got)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0", got)
+	}
+}
+
+// One sentence names a rule's unmanaged parameters, in the singular or the plural.
+func TestUnmanagedParametersSentence(t *testing.T) {
+	cases := map[string]struct {
+		keys []string
+		want string
+	}{
+		"One": {
+			keys: []string{"a"},
+			want: "ruleset main: rule merge_queue has parameter a that this provider does not manage; GitHub resets it when the ruleset is next updated",
+		},
+		"Several": {
+			keys: []string{"a", "b"},
+			want: "ruleset main: rule merge_queue has parameters a, b that this provider does not manage; GitHub resets them when the ruleset is next updated",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := unmanagedParametersSentence("main", "merge_queue", tc.keys); got != tc.want {
+				t.Errorf("unmanagedParametersSentence:\nwant %s\n got %s", tc.want, got)
+			}
+		})
+	}
+}
+
+// A required reviewer id that GitHub returns as a JSON string matches the CR's number.
+func TestObserveRequiredReviewerIDAsString(t *testing.T) {
+	rs := upToDateRulesets()
+	rules := githubRuleset()[0].Rules
+	rulesetWithRules(rs, append(rules, &rulesets.Rule{Type: "pull_request", Parameters: json.RawMessage(`{
+		"allowed_merge_methods": ["merge", "squash", "rebase"],
+		"dismiss_stale_reviews_on_push": false,
+		"dismissal_restriction": {"allowed_actors": [], "enabled": false},
+		"require_code_owner_review": false,
+		"require_extra_approval_for_unattributed_changes": true,
+		"require_last_push_approval": false,
+		"required_approving_review_count": 0,
+		"required_review_thread_resolution": false,
+		"required_reviewers": [{"file_patterns": ["*.go"], "minimum_approvals": 1, "reviewer": {"id": "2002", "type": "Team"}}]
+	}`)}))
+	cr := repository(withRules(func(r *v1alpha1.Rules) {
+		r.PullRequest = &v1alpha1.RulesPullRequest{RequiredReviewers: []*v1alpha1.RulesRequiredReviewer{
+			{FilePatterns: []string{"*.go"}, MinimumApprovals: 1, Reviewer: v1alpha1.RulesReviewer{ID: 2002, Type: "Team"}},
+		}}
+	}))
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds the declared reviewer, its id as a string")
+	}
+}
+
+// withBypassActors replaces the CR ruleset's bypass actors.
+func withBypassActors(actors ...*v1alpha1.RulesetByPassActors) repositoryModifier {
+	return func(cr *v1alpha1.Repository) { (*cr.Spec.ForProvider.RepositoryRules)[0].BypassActors = actors }
+}
+
+// rulesetWithBypassActors makes GitHub return the CR's ruleset with the given bypass actors.
+func rulesetWithBypassActors(rs *fake.MockRulesetsClient, actors ...*rulesets.BypassActor) {
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		r := githubRuleset()[0]
+		r.BypassActors = actors
+		return r, fake.GenerateEmptyResponse(), nil
+	}
+}
+
+// OrganizationAdmin and DeployKey actors match GitHub's null actor_id with or without a
+// CR actorId, and are sent as declared. Other actors match by ID, in any order.
+func TestObserveBypassActorsWithoutID(t *testing.T) {
+	team := &rulesets.BypassActor{ActorID: github.Ptr(rr1actorId), ActorType: github.Ptr("Team"), BypassMode: github.Ptr("always")}
+	orgAdmin := &rulesets.BypassActor{ActorType: github.Ptr("OrganizationAdmin"), BypassMode: github.Ptr("always")}
+	deployKey := &rulesets.BypassActor{ActorType: github.Ptr("DeployKey"), BypassMode: github.Ptr("exempt")}
+	crActor := func(id *int64, typ, mode string) *v1alpha1.RulesetByPassActors {
+		return &v1alpha1.RulesetByPassActors{ActorID: id, ActorType: github.Ptr(typ), BypassMode: github.Ptr(mode)}
+	}
+
+	cases := map[string]struct {
+		cr       *v1alpha1.Repository
+		upToDate bool
+	}{
+		"IDsDeclared": {
+			cr:       repository(withBypassActors(crActor(github.Ptr(int64(1)), "OrganizationAdmin", "always"), crActor(github.Ptr(int64(7)), "DeployKey", "exempt"), crActor(github.Ptr(rr1actorId), "Team", "always"))),
+			upToDate: true,
+		},
+		"IDsUnset": {
+			cr:       repository(withBypassActors(crActor(github.Ptr(rr1actorId), "Team", "always"), crActor(nil, "DeployKey", "exempt"), crActor(nil, "OrganizationAdmin", "always"))),
+			upToDate: true,
+		},
+		"TeamIDDiffers": {
+			cr: repository(withBypassActors(crActor(nil, "OrganizationAdmin", "always"), crActor(nil, "DeployKey", "exempt"), crActor(github.Ptr(rr1actorId+1), "Team", "always"))),
+		},
+		"ModeDiffers": {
+			cr: repository(withBypassActors(crActor(nil, "OrganizationAdmin", "pull_request"), crActor(nil, "DeployKey", "exempt"), crActor(github.Ptr(rr1actorId), "Team", "always"))),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rulesetWithBypassActors(rs, orgAdmin, team, deployKey)
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), tc.cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.upToDate)
+			}
+		})
+	}
+
+	withID := func(a *rulesets.BypassActor, id int64) *rulesets.BypassActor {
+		c := *a
+		c.ActorID = &id
+		return &c
+	}
+	for name, want := range map[string][]*rulesets.BypassActor{
+		"IDsDeclared": {withID(deployKey, 7), withID(orgAdmin, 1), team},
+		"IDsUnset":    {deployKey, orgAdmin, team},
+	} {
+		sent, err := crRepoRulesToRulesConfig(crRulesets(t, *cases[name].cr.Spec.ForProvider.RepositoryRules)[rr1name])
+		if err != nil {
+			t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+		}
+		if diff := cmp.Diff(want, sent.BypassActors); diff != "" {
+			t.Errorf("%s: bypass actors sent: -want, +got:\n%s", name, diff)
+		}
+	}
+}
+
+// A bypass actor without a mode is sent as "always" and matches what GitHub stores.
+// Listed again with mode "always", it is the same actor twice, which Observe reports
+// on RulesetsPartial before it reads any ruleset.
+func TestBypassActorModeDefaultAndDuplicates(t *testing.T) {
+	cr := repository(withBypassActors(
+		&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(rr1actorId), ActorType: github.Ptr("Team")},
+	))
+	rs := upToDateRulesets()
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds the team with bypass_mode always")
+	}
+
+	sent, err := crRepoRulesToRulesConfig(crRulesets(t, *cr.Spec.ForProvider.RepositoryRules)[rr1name])
+	if err != nil {
+		t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+	}
+	want := []*rulesets.BypassActor{{ActorID: github.Ptr(rr1actorId), ActorType: github.Ptr("Team"), BypassMode: github.Ptr("always")}}
+	if diff := cmp.Diff(want, sent.BypassActors); diff != "" {
+		t.Errorf("bypass actors sent: -want, +got:\n%s", diff)
+	}
+
+	twice := repository(withBypassActors(
+		&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(rr1actorId), ActorType: github.Ptr("Team")},
+		&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(rr1actorId), ActorType: github.Ptr("Team"), BypassMode: github.Ptr("always")},
+	))
+	if _, err = (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), twice); err != nil {
+		t.Fatalf("Observe with the actor twice: %v", err)
+	}
+	wantMsg := fmt.Sprintf("ruleset %s lists bypass actor Team %d twice with bypassMode always", rr1name, rr1actorId)
+	if c := twice.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || c.Message != wantMsg {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
+	}
+}
+
+// A status check's integration_id is always compared: GitHub keeps a check declared by
+// context alone without an id, so an id on GitHub that the CR leaves unset is drift, and
+// the update sends the check without one, which clears it.
+func TestObserveStatusCheckIntegrationID(t *testing.T) {
+	cases := map[string]struct {
+		cr       *int64
+		onGitHub *int64
+		upToDate bool
+		sent     string // parameters sent on update, when there is drift
+	}{
+		"UnsetAgainstUnset": {upToDate: true},
+		"UnsetAgainstSet":   {onGitHub: github.Ptr(int64(15368)), sent: `{"do_not_enforce_on_create":false,"required_status_checks":[{"context":"ci"}],"strict_required_status_checks_policy":false}`},
+		"SetEqual":          {cr: github.Ptr(int64(15368)), onGitHub: github.Ptr(int64(15368)), upToDate: true},
+		"SetDiffers":        {cr: github.Ptr(int64(1)), onGitHub: github.Ptr(int64(15368)), sent: `{"do_not_enforce_on_create":false,"required_status_checks":[{"context":"ci","integration_id":1}],"strict_required_status_checks_policy":false}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rulesetHolding(t, rs, func(r *rulesets.ModelledRules) {
+				r.RequiredStatusChecks = &rulesets.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*rulesets.StatusCheck{
+					{Context: "ci", IntegrationID: tc.onGitHub},
+				}}
+			})
+			cr := repository(withRules(func(r *v1alpha1.Rules) {
+				r.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{
+					{Context: "ci", IntegrationID: tc.cr},
+				}}
+			}))
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.upToDate)
+			}
+			if tc.upToDate {
+				return
+			}
+			if got := sentParameters(t, sentRules(t, rs, cr), "required_status_checks"); got != tc.sent {
+				t.Errorf("parameters sent = %s, want %s", got, tc.sent)
+			}
+		})
+	}
+}
+
+// secretTypes defaults to provider_patterns, is always sent, and is compared in any order.
+func TestSecretScanningAlertResolutionSecretTypes(t *testing.T) {
+	onGitHub := func(types ...string) func(*rulesets.ModelledRules) {
+		return func(r *rulesets.ModelledRules) {
+			r.RequireSecretScanningAlertResolution = &rulesets.RequireSecretScanningAlertResolutionRuleParameters{SecretTypes: types}
+		}
+	}
+	withTypes := func(types ...v1alpha1.RulesSecretType) repositoryModifier {
+		return withRules(func(r *v1alpha1.Rules) {
+			r.RequireSecretScanningAlertResolution = &v1alpha1.RulesSecretScanningAlertResolution{SecretTypes: types}
+		})
+	}
+	cases := map[string]struct {
+		cr       *v1alpha1.Repository
+		onGitHub []string
+		upToDate bool
+		sent     string // parameters sent on update
+	}{
+		"UnsetAgainstDefault": {cr: repository(withTypes()), onGitHub: []string{"provider_patterns"}, upToDate: true, sent: `{"secret_types":["provider_patterns"]}`},
+		"UnsetAgainstOther":   {cr: repository(withTypes()), onGitHub: []string{"generic_patterns", "custom_patterns"}, sent: `{"secret_types":["provider_patterns"]}`},
+		"EmptyAgainstDefault": {cr: repository(withTypes([]v1alpha1.RulesSecretType{}...)), onGitHub: []string{"provider_patterns"}, upToDate: true, sent: `{"secret_types":["provider_patterns"]}`},
+		"SetSameInOtherOrder": {cr: repository(withTypes("generic_patterns", "custom_patterns")), onGitHub: []string{"custom_patterns", "generic_patterns"}, upToDate: true, sent: `{"secret_types":["custom_patterns","generic_patterns"]}`},
+		"SetDiffers":          {cr: repository(withTypes("custom_patterns")), onGitHub: []string{"provider_patterns"}, sent: `{"secret_types":["custom_patterns"]}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rulesetHolding(t, rs, onGitHub(tc.onGitHub...))
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), tc.cr.DeepCopy())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.upToDate)
+			}
+
+			// Force an update with another change, to see what is sent for the rule.
+			cr := tc.cr.DeepCopy()
+			(*cr.Spec.ForProvider.RepositoryRules)[0].Rules.Creation = github.Ptr(false)
+			if got := sentParameters(t, sentRules(t, rs, cr), "require_secret_scanning_alert_resolution"); got != tc.sent {
+				t.Errorf("parameters sent = %s, want %s", got, tc.sent)
+			}
+		})
+	}
+}
+
+// update_allows_fetch_and_merge is sent whenever the update rule is on, false when unset.
+// It is compared when GitHub returns it, which GitHub does on forks only.
+func TestUpdateAllowsFetchAndMerge(t *testing.T) {
+	withFetchAndMerge := func(v *bool) repositoryModifier {
+		return withRules(func(r *v1alpha1.Rules) { r.UpdateAllowsFetchAndMerge = v })
+	}
+	cases := map[string]struct {
+		cr       *bool
+		onGitHub string // update parameters GitHub returns; "" for none
+		upToDate bool
+		sent     string
+	}{
+		"UnsetAgainstFalse":  {onGitHub: `{"update_allows_fetch_and_merge":false}`, upToDate: true, sent: `{"update_allows_fetch_and_merge":false}`},
+		"UnsetAgainstAbsent": {upToDate: true, sent: `{"update_allows_fetch_and_merge":false}`},
+		"TrueAgainstAbsent":  {cr: github.Ptr(true), upToDate: true, sent: `{"update_allows_fetch_and_merge":true}`},
+		"UnsetAgainstTrue":   {onGitHub: `{"update_allows_fetch_and_merge":true}`, sent: `{"update_allows_fetch_and_merge":false}`},
+		"FalseAgainstAbsent": {cr: github.Ptr(false), upToDate: true, sent: `{"update_allows_fetch_and_merge":false}`},
+		"TrueAgainstFalse":   {cr: github.Ptr(true), onGitHub: `{"update_allows_fetch_and_merge":false}`, sent: `{"update_allows_fetch_and_merge":true}`},
+		"TrueAgainstTrue":    {cr: github.Ptr(true), onGitHub: `{"update_allows_fetch_and_merge":true}`, upToDate: true, sent: `{"update_allows_fetch_and_merge":true}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rules := githubRuleset()[0].Rules
+			for _, r := range rules {
+				if r.Type == "update" && tc.onGitHub != "" {
+					r.Parameters = json.RawMessage(tc.onGitHub)
+				}
+			}
+			rs := upToDateRulesets()
+			rulesetWithRules(rs, rules)
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository(withFetchAndMerge(tc.cr)))
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.upToDate)
+			}
+
+			// Force an update with another change, to see what is sent for the update rule.
+			cr := repository(withFetchAndMerge(tc.cr), withRules(func(r *v1alpha1.Rules) { r.Creation = github.Ptr(false) }))
+			if got := sentParameters(t, sentRules(t, rs, cr), "update"); got != tc.sent {
+				t.Errorf("update parameters sent = %s, want %s", got, tc.sent)
+			}
+		})
+	}
+
+	// With the update rule off, updateAllowsFetchAndMerge has no effect.
+	cr := repository(withRules(func(r *v1alpha1.Rules) {
+		r.Update = github.Ptr(false)
+		r.UpdateAllowsFetchAndMerge = github.Ptr(true)
+	}))
+	rs := upToDateRulesets()
+	rulesetHolding(t, rs, func(r *rulesets.ModelledRules) { r.Update = nil })
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: updateAllowsFetchAndMerge without update means nothing")
+	}
+}
+
+const inheritedRulesetID int64 = 789
+
+// withInheritedRuleset adds to GitHub's list an organization ruleset named name that
+// holds an unmodelled rule.
+func withInheritedRuleset(t *testing.T, rs *fake.MockRulesetsClient, name string) {
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		own := githubRuleset()
+		own[0].SourceType = github.Ptr("Repository")
+		inherited := &rulesets.Ruleset{ID: github.Ptr(inheritedRulesetID), Name: name, SourceType: github.Ptr("Organization"), Enforcement: rr1enforcement}
+		return append(own, inherited), fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		if rulesetID == inheritedRulesetID {
+			t.Errorf("GetRuleset called for the inherited ruleset; it is not the repository's to compare")
+			return &rulesets.Ruleset{ID: github.Ptr(inheritedRulesetID), Name: name, Rules: []*rulesets.Rule{{Type: "workflows"}}}, fake.GenerateEmptyResponse(), nil
+		}
+		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		t.Errorf("DeleteRuleset(%d) called; the only ruleset not in the CR is inherited and must be left alone", rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
+}
+
+// Observe and Update touch only the repository's own rulesets, even when an inherited
+// one shares a name with a declared ruleset.
+func TestInheritedRulesetIsNotManaged(t *testing.T) {
+	for name, inheritedName := range map[string]string{"OtherName": "org-policy", "SameNameAsCR": rr1name} {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			withInheritedRuleset(t, rs, inheritedName)
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: only an inherited ruleset is not in the CR")
+			}
+
+			var updated []int64
+			rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+				updated = append(updated, rulesetID)
+				return &r, fake.GenerateEmptyResponse(), nil
+			}
+			// Change the CR ruleset so Update runs.
+			cr := repository(withRules(func(r *v1alpha1.Rules) { r.Creation = github.Ptr(false) }))
+			if err := updateRepositoryRules(context.Background(), cr, clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+				t.Fatalf("updateRepositoryRules: %v", err)
+			}
+			if diff := cmp.Diff([]int64{rr1Id}, updated); diff != "" {
+				t.Errorf("UpdateRuleset IDs: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// A CR with no rules and no bypass actors matches a ruleset holding none, and the
+// update sends both as [] to clear a ruleset holding some.
+func TestRulesetClearsRulesAndBypassActors(t *testing.T) {
+	cleared := func(actors []*v1alpha1.RulesetByPassActors) *v1alpha1.Repository {
+		return repository(func(cr *v1alpha1.Repository) {
+			(*cr.Spec.ForProvider.RepositoryRules)[0].BypassActors = actors
+			(*cr.Spec.ForProvider.RepositoryRules)[0].Rules = nil
+		})
+	}
+	for name, actors := range map[string][]*v1alpha1.RulesetByPassActors{"EmptyList": {}, "Unset": nil} {
+		t.Run(name, func(t *testing.T) {
+			empty := upToDateRulesets()
+			empty.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+				r := githubRuleset()[0]
+				r.BypassActors, r.Rules = []*rulesets.BypassActor{}, []*rulesets.Rule{}
+				return r, fake.GenerateEmptyResponse(), nil
+			}
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), empty)}).Observe(context.Background(), cleared(actors))
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: neither side holds rules or bypass actors")
+			}
+
+			rs := upToDateRulesets()
+			got, err = (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cleared(actors))
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = true, want false: GitHub holds rules and a bypass actor the CR does not")
+			}
+			var body []byte
+			rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+				body, _ = json.Marshal(r)
+				return &r, fake.GenerateEmptyResponse(), nil
+			}
+			if err := updateRepositoryRules(context.Background(), cleared(actors), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+				t.Fatalf("updateRepositoryRules: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(body, &fields); err != nil {
+				t.Fatalf("unmarshal %s: %v", body, err)
+			}
+			for _, key := range []string{"rules", "bypass_actors"} {
+				if string(fields[key]) != "[]" {
+					t.Errorf("UpdateRuleset %s = %s, want []; body %s", key, fields[key], body)
+				}
+			}
+		})
+	}
+}
+
+// A push ruleset is sent "conditions": {} and is up to date whatever refName the CR
+// declares, because GitHub stores its conditions as null.
+func TestPushRulesetHasNoConditions(t *testing.T) {
+	for name, conditions := range map[string]*rulesets.Conditions{"Null": nil, "Empty": {}} {
+		t.Run(name, func(t *testing.T) { testPushRulesetHasNoConditions(t, conditions) })
+	}
+}
+
+func testPushRulesetHasNoConditions(t *testing.T, conditions *rulesets.Conditions) {
+	push := func(cr *v1alpha1.Repository) {
+		(*cr.Spec.ForProvider.RepositoryRules)[0].Target = github.Ptr("push")
+	}
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		r := githubRuleset()
+		r[0].Target = github.Ptr("push")
+		return r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		r := githubRuleset()[0]
+		r.Target, r.Conditions = github.Ptr("push"), conditions
+		return r, fake.GenerateEmptyResponse(), nil
+	}
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository(push))
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: conditions do not apply to a push ruleset")
+	}
+
+	var body []byte
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		body, _ = json.Marshal(r)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	if err := updateRepositoryRules(context.Background(), repository(push, withRules(func(r *v1alpha1.Rules) { r.Creation = github.Ptr(false) })), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	if !strings.Contains(string(body), `"conditions":{}`) {
+		t.Errorf("UpdateRuleset body = %s, want \"conditions\":{} for a push ruleset", body)
+	}
+}
+
+// Changing a ruleset's target to push is drift, and the update sends "conditions": {}
+// to clear the old ref_name. A new push ruleset is created with "conditions": {} too.
+func TestRulesetTargetChangeToPush(t *testing.T) {
+	push := func(cr *v1alpha1.Repository) {
+		(*cr.Spec.ForProvider.RepositoryRules)[0].Target = github.Ptr("push")
+	}
+	type sentBody struct {
+		Target     *string         `json:"target"`
+		Conditions json.RawMessage `json:"conditions"`
+	}
+	decode := func(t *testing.T, r rulesets.Ruleset) sentBody {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var got sentBody
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", b, err)
+		}
+		return got
+	}
+
+	t.Run("Update", func(t *testing.T) {
+		// GitHub holds the fixture ruleset: target branch with a ref_name condition.
+		rs := upToDateRulesets()
+		got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository(push))
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if got.ResourceUpToDate {
+			t.Errorf("ResourceUpToDate = true, want false: the CR changes the target to push")
+		}
+		var sent []sentBody
+		rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			sent = append(sent, decode(t, r))
+			return &r, fake.GenerateEmptyResponse(), nil
+		}
+		if err := updateRepositoryRules(context.Background(), repository(push), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+			t.Fatalf("updateRepositoryRules: %v", err)
+		}
+		if len(sent) != 1 || sent[0].Target == nil || *sent[0].Target != rulesetTargetPush || string(sent[0].Conditions) != "{}" {
+			t.Errorf("UpdateRuleset requests = %+v, want one with target push and conditions {}", sent)
+		}
+	})
+
+	t.Run("Create", func(t *testing.T) {
+		rs := upToDateRulesets()
+		rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return nil, fake.GenerateEmptyResponse(), nil
+		}
+		var sent []sentBody
+		rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			sent = append(sent, decode(t, r))
+			return &r, fake.GenerateEmptyResponse(), nil
+		}
+		if err := updateRepositoryRules(context.Background(), repository(push), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+			t.Fatalf("updateRepositoryRules: %v", err)
+		}
+		if len(sent) != 1 || sent[0].Target == nil || *sent[0].Target != rulesetTargetPush || string(sent[0].Conditions) != "{}" {
+			t.Errorf("CreateRuleset requests = %+v, want one with target push and conditions {}", sent)
+		}
+	})
+}
+
+// A CR with conditions: {} matches a ruleset GitHub returns with {} or empty ref lists.
+func TestObserveConditionsWithoutRefName(t *testing.T) {
+	cr := repository(func(cr *v1alpha1.Repository) {
+		(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{}
+	})
+	for name, conditions := range map[string]*rulesets.Conditions{
+		"Empty":      {},
+		"EmptyLists": {RefName: &rulesets.RefName{Include: []string{}, Exclude: []string{}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+				r := githubRuleset()[0]
+				r.Conditions = conditions
+				return r, fake.GenerateEmptyResponse(), nil
+			}
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: neither side targets a ref")
+			}
+		})
+	}
+}
+
+// A failed ruleset list fails Observe instead of reading as "no rulesets".
+func TestObserveFailsWhenRulesetListFails(t *testing.T) {
+	errBoom := errors.New("boom")
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, errBoom
+	}
+	_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+	if diff := cmp.Diff(errBoom, err, test.EquateErrors()); diff != "" {
+		t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
+	}
+}
+
+// rulesetsForbidden answers the ruleset list with GitHub's 403 for a private repository
+// on a plan without rulesets, and fails the test on any other ruleset call.
+func rulesetsForbidden(t *testing.T) *fake.MockRulesetsClient {
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: planWithoutRulesets}
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetRuleset called after the list answered 403")
+		return nil, nil, errors.New("unexpected GetRuleset")
+	}
+	return rs
+}
+
+const planWithoutRulesets = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+
+// rulesetsWithoutCalls fails the test on any ruleset call, the list included.
+func rulesetsWithoutCalls(t *testing.T) *fake.MockRulesetsClient {
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetAllRulesets called")
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetRuleset called")
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	return rs
+}
+
+// withDuplicateRefPattern lists refs/heads/main twice in the first ruleset's include.
+func withDuplicateRefPattern(cr *v1alpha1.Repository) {
+	(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{RefName: &v1alpha1.RulesetRefName{
+		Include: []string{"refs/heads/main", "refs/heads/main"},
+		Exclude: []string{},
+	}}
+}
+
+// GitHub refuses rulesets on a private repository whose plan has none. Observe reports
+// that on RulesetsPartial and the rulesets gauge while the repository declares rulesets,
+// and lets the other blocks decide ResourceUpToDate, so the rest of the repository keeps
+// reconciling.
+func TestObserveRulesetListForbidden(t *testing.T) {
+	cases := map[string]struct {
+		cr           *v1alpha1.Repository
+		wantUpToDate bool
+	}{
+		"DeclaredRulesets": {
+			cr:           repository(),
+			wantUpToDate: true,
+		},
+		"TopicsDrift": {
+			cr:           repository(withDifferentTopics()),
+			wantUpToDate: false,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			tc.cr.Spec.ForProvider.Org = "acme"
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), tc.cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate %v", got, tc.wantUpToDate)
+			}
+			condition := tc.cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonRulesetsForbidden {
+				t.Errorf("RulesetsPartial = %v/%v, want True/%v", condition.Status, condition.Reason, reasonRulesetsForbidden)
+			}
+			if !strings.HasSuffix(condition.Message, ": "+planWithoutRulesets) {
+				t.Errorf("RulesetsPartial message = %q, want GitHub's message %q", condition.Message, planWithoutRulesets)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 1 {
+				t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 1", got)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+				t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0: nothing was fetched", got)
+			}
+		})
+	}
+}
+
+// repositoryRules: [] asks for a repository without rulesets, which a plan refusing
+// rulesets already gives. Observe reports RulesetsPartial False and the rulesets gauge 0
+// on the 403, also after an earlier report, so a Free-plan private repository declaring
+// no rulesets keeps no alert firing.
+func TestObserveRulesetListForbiddenWithoutDeclaredRulesets(t *testing.T) {
+	cases := map[string]struct {
+		forbiddenBefore bool
+	}{
+		"FirstObserve":   {forbiddenBefore: false},
+		"AfterForbidden": {forbiddenBefore: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			cr := repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{} })
+			cr.Spec.ForProvider.Org = "acme"
+			if tc.forbiddenBefore {
+				metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetsForbidden, true)
+				cr.SetConditions(xpv2.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
+			}
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || !got.ResourceUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate true", got)
+			}
+			if condition := cr.GetCondition(typeRulesetsPartial); condition.Status != corev1.ConditionFalse || condition.Reason != reasonRulesetsReconciled || condition.Message != "" {
+				t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", condition.Status, condition.Reason, condition.Message, reasonRulesetsReconciled)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+				t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 0", got)
+			}
+		})
+	}
+}
+
+// Once GitHub lists the rulesets again, RulesetsPartial turns False and the gauge 0.
+func TestObserveRulesetListAllowedClearsRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(403): %v", err)
+	}
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(200): %v", err)
+	}
+
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsReconciled || got.Message != "" {
+		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsReconciled)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+		t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 0", got)
+	}
+}
+
+// A ruleset listing a ref pattern twice is a mistake in the spec. Observe reports it on
+// RulesetsPartial and the ruleset_spec gauge without reading the rulesets, and lets the
+// other blocks decide ResourceUpToDate, so the rest of the repository keeps reconciling.
+func TestObserveInvalidRulesetsSetRulesetsPartial(t *testing.T) {
+	cases := map[string]struct {
+		cr           *v1alpha1.Repository
+		wantUpToDate bool
+	}{
+		"OtherBlocksUpToDate": {
+			cr:           repository(withDuplicateRefPattern),
+			wantUpToDate: true,
+		},
+		"TopicsDrift": {
+			cr:           repository(withDuplicateRefPattern, withDifferentTopics()),
+			wantUpToDate: false,
+		},
+	}
+	wantMsg := fmt.Sprintf("ruleset %s lists ref pattern refs/heads/main twice in include", rr1name)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			tc.cr.Spec.ForProvider.Org = "acme"
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t)), metrics: metrics}).Observe(context.Background(), tc.cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate %v", got, tc.wantUpToDate)
+			}
+			condition := tc.cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonInvalidRulesets || condition.Message != wantMsg {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonInvalidRulesets, wantMsg)
+			}
+			gauge := metrics.RepositoryUnreconcilableForTest()
+			if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetSpec)); got != 1 {
+				t.Errorf("unreconcilable{dimension=ruleset_spec} = %v, want 1", got)
+			}
+			for _, dimension := range []string{telemetry.DimensionRulesetsForbidden, telemetry.DimensionRulesetParameters} {
+				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != 0 {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want 0: nothing was read", dimension, got)
+				}
+			}
+		})
+	}
+}
+
+// Once the spec lists each ref pattern once, RulesetsPartial turns False and the
+// ruleset_spec gauge 0.
+func TestObserveFixedRulesetsClearRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	cr := repository(withDuplicateRefPattern)
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t)), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(invalid): %v", err)
+	}
+	cr.Spec.ForProvider.RepositoryRules = repository().Spec.ForProvider.RepositoryRules
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(fixed): %v", err)
+	}
+
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsReconciled || got.Message != "" {
+		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsReconciled)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetSpec)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_spec} = %v, want 0", got)
+	}
+}
+
+// Any other failure of the ruleset list fails Observe, so a transient error is retried
+// instead of being reported as a refusal: a 500, and a 403 that is GitHub's rate limit.
+func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
+	cases := map[string]error{
+		"ServerError": &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusInternalServerError}, Message: "Server Error"},
+		"RateLimit":   &github.RateLimitError{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: "API rate limit exceeded"},
+	}
+	for name, listErr := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+				return nil, nil, listErr
+			}
+			cr := repository()
+
+			_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+			if !errors.Is(err, listErr) {
+				t.Errorf("Observe(...) error = %#v, want the list error %#v", err, listErr)
+			}
+			if got := cr.GetCondition(typeRulesetsPartial).Status; got == corev1.ConditionTrue {
+				t.Errorf("RulesetsPartial = True, want it unset after a %s", name)
+			}
+		})
+	}
+}
+
+// A repository whose rulesets the provider leaves alone publishes rulesets=0,
+// ruleset_parameters=0, ruleset_spec=0 and RulesetsPartial False, so an earlier report does not keep
+// an alert firing:
+// repositoryRules unset, the repository archived, or the CR being deleted.
+func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
+	archived := upToDateRepositories(nil)
+	archived.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+		r := githubRepository()
+		r.Archived = github.Ptr(true)
+		return r, nil, nil
+	}
+	deleted := repository()
+	now := metav1.Now()
+	deleted.SetDeletionTimestamp(&now)
+	cases := map[string]struct {
+		repos *fake.MockRepositoriesClient
+		cr    *v1alpha1.Repository
+	}{
+		"RepositoryRulesUnset": {
+			repos: upToDateRepositories(nil),
+			cr:    repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = nil }),
+		},
+		"Archived": {
+			repos: archived,
+			cr:    repository(withArchived(true)),
+		},
+		"Deleted": {
+			repos: upToDateRepositories(nil),
+			cr:    deleted,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetsForbidden, true)
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetParameters, true)
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetSpec, true)
+			tc.cr.Spec.ForProvider.Org = "acme"
+			tc.cr.SetConditions(xpv2.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
+
+			if _, err := (&external{github: clientFor(tc.repos, rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), tc.cr); err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got := tc.cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
+				t.Errorf("RulesetsPartial = %v, want False", got)
+			}
+			for _, dimension := range []string{telemetry.DimensionRulesetsForbidden, telemetry.DimensionRulesetParameters, telemetry.DimensionRulesetSpec} {
+				if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, dimension)); got != 0 {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want 0", dimension, got)
+				}
+			}
+		})
+	}
+}
+
+// While GitHub answers the ruleset list with 403, Update leaves rulesets out and brings
+// the rest of the repository to the CR, so the topics converge and Synced can turn True.
+// The CR carries no RulesetsPartial here: Observe returns early on other drift, and the
+// first reconcile after an upgrade has no condition yet, so Update decides from the list.
+func TestUpdateSkipsRulesetsWhileForbidden(t *testing.T) {
+	var replaced []string
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		replaced = topics
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr := repository(withDifferentTopics())
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+
+	if _, err := (&external{github: clientFor(repos, rulesetsForbidden(t))}).Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update while forbidden: %v", err)
+	}
+	if diff := cmp.Diff(cr.Spec.ForProvider.Topics, replaced); diff != "" {
+		t.Errorf("topics sent: -want, +got:\n%s", diff)
+	}
+}
+
+// A ruleset list that fails for any reason other than 403 fails the update, so a
+// transient error never passes for a refused feature.
+func TestUpdateRulesetListErrorFails(t *testing.T) {
+	errBoom := errors.New("boom")
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, errBoom
+	}
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr := repository()
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+
+	_, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr)
+	if diff := cmp.Diff(errBoom, err, test.EquateErrors()); diff != "" {
+		t.Errorf("Update(...): -want error, +got error:\n%s", diff)
+	}
+}
+
+// A failed GET of a declared ruleset fails Observe and the update, instead of making
+// the ruleset look missing.
+func TestRulesetGetErrorFails(t *testing.T) {
+	errBoom := errors.New("boom")
+	rs := upToDateRulesets()
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, errBoom
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called for %q after a failed GET", r.Name)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+
+	_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+	if diff := cmp.Diff(errBoom, err, test.EquateErrors()); diff != "" {
+		t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
+	}
+	err = updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo)
+	if diff := cmp.Diff(errBoom, err, test.EquateErrors()); diff != "" {
+		t.Errorf("updateRepositoryRules(...): -want error, +got error:\n%s", diff)
+	}
+}
+
+// Observe fails on parameters it cannot decode, so it compares only what GitHub really holds.
+func TestObserveRuleDecodeErrorFails(t *testing.T) {
+	cases := map[string]*rulesets.Rule{
+		"size not a number":       {Type: "max_file_size", Parameters: json.RawMessage(`{"max_file_size":"big"}`)},
+		"reviewer id missing":     {Type: "pull_request", Parameters: json.RawMessage(`{"required_reviewers":[{"reviewer":{"type":"Team"}}]}`)},
+		"reviewer id null":        {Type: "pull_request", Parameters: json.RawMessage(`{"required_reviewers":[{"reviewer":{"id":null,"type":"Team"}}]}`)},
+		"actor id not an integer": {Type: "pull_request", Parameters: json.RawMessage(`{"dismissal_restriction":{"allowed_actors":[{"id":1.5,"type":"User"}]}}`)},
+	}
+	for name, rule := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rulesetWithRules(rs, append(githubRuleset()[0].Rules, rule))
+
+			_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+			if err == nil || !strings.Contains(err.Error(), "rule "+rule.Type) {
+				t.Errorf("Observe(...) error = %v, want the %s decode error", err, rule.Type)
+			}
+		})
+	}
+}
+
+// A declared ruleset missing on GitHub is created with the CR's rules, by the update
+// and with the repository.
+func TestDeclaredRulesetIsCreated(t *testing.T) {
+	var created []rulesets.Ruleset
+	createRuleset := func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		created = append(created, r)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	check := func(t *testing.T) {
+		t.Helper()
+		if len(created) != 1 {
+			t.Fatalf("CreateRuleset calls = %d, want 1", len(created))
+		}
+		got, err := rulesets.Decode(created[0].Rules)
+		if err != nil {
+			t.Fatalf("decode created rules: %v", err)
+		}
+		if created[0].Name != rr1name {
+			t.Errorf("created ruleset %q, want %q", created[0].Name, rr1name)
+		}
+		if diff := cmp.Diff(githubRules(), got); diff != "" {
+			t.Errorf("created rules: -want, +got:\n%s", diff)
+		}
+	}
+
+	t.Run("Update", func(t *testing.T) {
+		created = nil
+		rs := upToDateRulesets()
+		rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return nil, fake.GenerateEmptyResponse(), nil
+		}
+		rs.MockCreateRuleset = createRuleset
+		if err := updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+			t.Fatalf("updateRepositoryRules: %v", err)
+		}
+		check(t)
+	})
+
+	t.Run("Create", func(t *testing.T) {
+		created = nil
+		repos := &fake.MockRepositoriesClient{
+			MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+				return r, fake.GenerateEmptyResponse(), nil
+			},
+			MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+				return nil, fake.GenerateEmptyResponse(), nil
+			},
+			MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+				return topics, fake.GenerateEmptyResponse(), nil
+			},
+		}
+		teams := &fake.MockTeamsClient{
+			MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+				return fake.GenerateEmptyResponse(), nil
+			},
+		}
+		cr := repository()
+		cr.Spec.ForProvider.Webhooks = nil
+		cr.Spec.ForProvider.BranchProtectionRules = nil
+		e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: &fake.MockRulesetsClient{MockCreateRuleset: createRuleset}}}}
+		if _, err := e.Create(context.Background(), cr); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		check(t)
+	})
+}
+
+// Refs compare as sets, for include and exclude alike.
+func TestConditionsRefOrder(t *testing.T) {
+	cr := repository(func(cr *v1alpha1.Repository) {
+		(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{RefName: &v1alpha1.RulesetRefName{
+			Include: []string{"refs/heads/a", "refs/heads/b"},
+			Exclude: []string{"refs/heads/x", "refs/heads/y"},
+		}}
+	})
+	rs := upToDateRulesets()
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		r := githubRuleset()[0]
+		r.Conditions = &rulesets.Conditions{RefName: &rulesets.RefName{Include: []string{"refs/heads/b", "refs/heads/a"}, Exclude: []string{"refs/heads/y", "refs/heads/x"}}}
+		return r, fake.GenerateEmptyResponse(), nil
+	}
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: the same refs in another order")
+	}
+}
+
+// GitHub stores OrganizationAdmin and DeployKey with a null ID, so two of them with the
+// same mode are the same actor whatever their IDs: Observe reports the duplicate on
+// RulesetsPartial, and Observe, Create and Update make no ruleset call.
+func TestBypassActorsDuplicateIgnoredIDTypes(t *testing.T) {
+	for _, typ := range []string{"OrganizationAdmin", "DeployKey"} {
+		withDuplicate := withBypassActors(
+			&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(int64(1)), ActorType: github.Ptr(typ), BypassMode: github.Ptr("exempt")},
+			&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(int64(2)), ActorType: github.Ptr(typ), BypassMode: github.Ptr("exempt")},
+		)
+		wantMsg := fmt.Sprintf("ruleset %s lists bypass actor %s twice with bypassMode exempt", rr1name, typ)
+		check := func(t *testing.T, err error) {
+			t.Helper()
+			if err != nil {
+				t.Errorf("error = %v, want nil: the rest of the repository keeps reconciling", err)
+			}
+		}
+
+		t.Run(typ+"/Observe", func(t *testing.T) {
+			cr := repository(withDuplicate)
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), cr)
+			check(t, err)
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: the other blocks are up to date")
+			}
+			if c := cr.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || !strings.Contains(c.Message, wantMsg) {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v containing %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
+			}
+		})
+		t.Run(typ+"/Update", func(t *testing.T) {
+			repos := upToDateRepositories(nil)
+			repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+				return req, fake.GenerateEmptyResponse(), nil
+			}
+			repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+				return topics, fake.GenerateEmptyResponse(), nil
+			}
+			cr := settingsOnlyRepository()
+			cr.Spec.ForProvider.RepositoryRules = repository(withDuplicate).Spec.ForProvider.RepositoryRules
+			_, err := (&external{github: clientFor(repos, rulesetsWithoutCalls(t))}).Update(context.Background(), cr)
+			check(t, err)
+		})
+		t.Run(typ+"/Create", func(t *testing.T) {
+			repos := &fake.MockRepositoriesClient{
+				MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+					return r, fake.GenerateEmptyResponse(), nil
+				},
+				MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+				MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+					return topics, fake.GenerateEmptyResponse(), nil
+				},
+			}
+			teams := &fake.MockTeamsClient{
+				MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+			}
+			cr := repository(withDuplicate)
+			cr.Spec.ForProvider.Webhooks = nil
+			cr.Spec.ForProvider.BranchProtectionRules = nil
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rulesetsWithoutCalls(t)}}}
+			_, err := e.Create(context.Background(), cr)
+			check(t, err)
+		})
+	}
+}
+
+// A ref pattern listed twice in include or exclude is reported on RulesetsPartial with
+// a message naming it, because GitHub stores each pattern once. Observe, Update and
+// Create make no ruleset call and go on with the rest of the repository.
+func TestRefPatternDuplicates(t *testing.T) {
+	cases := map[string]v1alpha1.RulesetRefName{
+		"include": {Include: []string{"refs/heads/main", "~DEFAULT_BRANCH", "refs/heads/main"}, Exclude: []string{"refs/heads/x"}},
+		"exclude": {Include: []string{"refs/heads/main"}, Exclude: []string{"refs/heads/y", "refs/heads/x", "refs/heads/y"}},
+	}
+	for list, refName := range cases {
+		withDuplicate := func(cr *v1alpha1.Repository) {
+			(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{RefName: refName.DeepCopy()}
+		}
+		pattern := "refs/heads/main"
+		if list == "exclude" {
+			pattern = "refs/heads/y"
+		}
+		wantMsg := fmt.Sprintf("ruleset %s lists ref pattern %s twice in %s", rr1name, pattern, list)
+		check := func(t *testing.T, err error) {
+			t.Helper()
+			if err != nil {
+				t.Errorf("error = %v, want nil: the rest of the repository keeps reconciling", err)
+			}
+		}
+
+		t.Run(list+"/Observe", func(t *testing.T) {
+			cr := repository(withDuplicate)
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), cr)
+			check(t, err)
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: the other blocks are up to date")
+			}
+			if c := cr.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || c.Message != wantMsg {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
+			}
+		})
+		t.Run(list+"/Update", func(t *testing.T) {
+			repos := upToDateRepositories(nil)
+			repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+				return req, fake.GenerateEmptyResponse(), nil
+			}
+			repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+				return topics, fake.GenerateEmptyResponse(), nil
+			}
+			cr := settingsOnlyRepository()
+			cr.Spec.ForProvider.RepositoryRules = repository(withDuplicate).Spec.ForProvider.RepositoryRules
+			_, err := (&external{github: clientFor(repos, rulesetsWithoutCalls(t))}).Update(context.Background(), cr)
+			check(t, err)
+		})
+		t.Run(list+"/Create", func(t *testing.T) {
+			repos := &fake.MockRepositoriesClient{
+				MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+					return r, fake.GenerateEmptyResponse(), nil
+				},
+				MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+				MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+					return topics, fake.GenerateEmptyResponse(), nil
+				},
+			}
+			teams := &fake.MockTeamsClient{
+				MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+			}
+			cr := repository(withDuplicate)
+			cr.Spec.ForProvider.Webhooks = nil
+			cr.Spec.ForProvider.BranchProtectionRules = nil
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rulesetsWithoutCalls(t)}}}
+			_, err := e.Create(context.Background(), cr)
+			check(t, err)
+		})
+	}
+}
+
+// A ruleset the CR does not name is deleted without a GET, so its deletion goes ahead
+// even when the GET or its parameters would fail.
+func TestSurplusRulesetIsNotFetched(t *testing.T) {
+	surplus := &rulesets.Ruleset{ID: github.Ptr(githubOnlyRulesetID), Name: "github-only", SourceType: github.Ptr("Repository"), Enforcement: rr1enforcement}
+	for name, get := range map[string]func() (*rulesets.Ruleset, error){
+		"GetFails": func() (*rulesets.Ruleset, error) { return nil, errors.New("boom") },
+		"BadParameters": func() (*rulesets.Ruleset, error) {
+			return &rulesets.Ruleset{ID: surplus.ID, Name: surplus.Name, Rules: []*rulesets.Rule{{Type: "max_file_size", Parameters: json.RawMessage(`{"max_file_size":"big"}`)}}}, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+				return append(githubRuleset(), surplus), fake.GenerateEmptyResponse(), nil
+			}
+			rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+				if rulesetID == githubOnlyRulesetID {
+					t.Errorf("GetRuleset called for the surplus ruleset")
+					r, err := get()
+					return r, fake.GenerateEmptyResponse(), err
+				}
+				return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+			}
+			var deleted []int64
+			rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+				deleted = append(deleted, rulesetID)
+				return fake.GenerateEmptyResponse(), nil
+			}
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = true, want false: the surplus ruleset must be deleted")
+			}
+			if err := updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+				t.Fatalf("updateRepositoryRules: %v", err)
+			}
+			if diff := cmp.Diff([]int64{githubOnlyRulesetID}, deleted); diff != "" {
+				t.Errorf("DeleteRuleset IDs: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// Observe skips rulesets while the CR is being deleted, so the deletion goes ahead even
+// when the ruleset endpoint fails.
+func TestObserveDeletedCRSkipsRulesets(t *testing.T) {
+	rs := &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return nil, nil, errors.New("403 Upgrade to GitHub Pro or make this repository public")
+		},
+	}
+	cr := repository()
+	now := metav1.Now()
+	cr.SetDeletionTimestamp(&now)
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Errorf("ResourceExists = false, want true: the repository is still there to delete")
+	}
+}
+
+// GitHub's bypass actors are sorted again after an OrganizationAdmin takes the CR's ID.
+func TestBypassActorsResortedAfterIDOverride(t *testing.T) {
+	cr := repository(withBypassActors(
+		&v1alpha1.RulesetByPassActors{ActorID: github.Ptr(int64(5)), ActorType: github.Ptr("OrganizationAdmin"), BypassMode: github.Ptr("always")},
+		&v1alpha1.RulesetByPassActors{ActorType: github.Ptr("OrganizationAdmin"), BypassMode: github.Ptr("exempt")},
+	))
+	rs := upToDateRulesets()
+	rulesetWithBypassActors(rs,
+		&rulesets.BypassActor{ActorType: github.Ptr("OrganizationAdmin"), BypassMode: github.Ptr("always")},
+		&rulesets.BypassActor{ActorType: github.Ptr("OrganizationAdmin"), BypassMode: github.Ptr("exempt")},
+	)
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds both actors")
+	}
+}
+
+// A status check listed twice in the CR is sent and compared twice, as GitHub keeps both.
+func TestStatusChecksDuplicatesKept(t *testing.T) {
+	cr := repository(withRules(func(r *v1alpha1.Rules) {
+		r.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "ci"}, {Context: "ci"}}}
+	}))
+	twice := func(r *rulesets.ModelledRules) {
+		r.RequiredStatusChecks = &rulesets.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*rulesets.StatusCheck{{Context: "ci"}, {Context: "ci"}}}
+	}
+	rs := upToDateRulesets()
+	rulesetHolding(t, rs, twice)
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds ci twice, as declared")
+	}
+
+	once := upToDateRulesets()
+	rulesetHolding(t, once, func(r *rulesets.ModelledRules) {
+		r.RequiredStatusChecks = &rulesets.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*rulesets.StatusCheck{{Context: "ci"}}}
+	})
+	want := githubRules()
+	twice(want)
+	if diff := cmp.Diff(want, updatedRules(t, once, cr.DeepCopy())); diff != "" {
+		t.Errorf("UpdateRuleset rules: -want, +got:\n%s", diff)
+	}
+}
+
+// An unset target means "branch", GitHub's default, and is sent explicitly.
+func TestRulesetTargetDefaultsToBranch(t *testing.T) {
+	cr := repository(func(cr *v1alpha1.Repository) { (*cr.Spec.ForProvider.RepositoryRules)[0].Target = nil })
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets())}).Observe(context.Background(), cr.DeepCopy())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds a branch ruleset")
+	}
+	sent, err := crRepoRulesToRulesConfig(crRulesets(t, *cr.Spec.ForProvider.RepositoryRules)[rr1name])
+	if err != nil {
+		t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+	}
+	if diff := cmp.Diff(github.Ptr("branch"), sent.Target); diff != "" {
+		t.Errorf("target sent: -want, +got:\n%s", diff)
+	}
+}
+
+// Bypass actors of other types differ by type, ID and mode, so all of them are kept
+// and sent.
+func TestBypassActorsDistinctIDsKept(t *testing.T) {
+	actor := func(id int64, typ, mode string) *v1alpha1.RulesetByPassActors {
+		return &v1alpha1.RulesetByPassActors{ActorID: github.Ptr(id), ActorType: github.Ptr(typ), BypassMode: github.Ptr(mode)}
+	}
+	wire := func(id int64, typ, mode string) *rulesets.BypassActor {
+		return &rulesets.BypassActor{ActorID: github.Ptr(id), ActorType: github.Ptr(typ), BypassMode: github.Ptr(mode)}
+	}
+	cr := repository(withBypassActors(
+		actor(7, "Team", "always"),
+		actor(9, "Team", "always"),
+		actor(7, "User", "always"),
+		actor(9, "Team", "pull_request"),
+	))
+	rs := upToDateRulesets()
+	rulesetWithBypassActors(rs,
+		wire(9, "Team", "pull_request"),
+		wire(7, "User", "always"),
+		wire(9, "Team", "always"),
+		wire(7, "Team", "always"),
+	)
+
+	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false, want true: GitHub holds the four declared actors")
+	}
+
+	sent, err := crRepoRulesToRulesConfig(crRulesets(t, *cr.Spec.ForProvider.RepositoryRules)[rr1name])
+	if err != nil {
+		t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+	}
+	want := []*rulesets.BypassActor{
+		wire(7, "Team", "always"),
+		wire(9, "Team", "always"),
+		wire(9, "Team", "pull_request"),
+		wire(7, "User", "always"),
+	}
+	if diff := cmp.Diff(want, sent.BypassActors); diff != "" {
+		t.Errorf("bypass actors sent: -want, +got:\n%s", diff)
 	}
 }

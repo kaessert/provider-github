@@ -61,12 +61,16 @@ type RateLimitMetrics struct {
 	repositoryUnreconcilable *prometheus.GaugeVec
 }
 
-// Dimensions of declared repository state GitHub may refuse to apply.
+// Dimensions of declared repository state that stays unapplied: state GitHub refuses
+// to apply, and rulesets whose spec lists a ref pattern or bypass actor twice.
 const (
-	DimensionCollaborators    = "collaborators"
-	DimensionBranchProtection = "branch_protection"
-	DimensionArchived         = "archived"
-	DimensionSettings         = "settings"
+	DimensionCollaborators     = "collaborators"
+	DimensionBranchProtection  = "branch_protection"
+	DimensionArchived          = "archived"
+	DimensionSettings          = "settings"
+	DimensionRulesetsForbidden = "rulesets_forbidden"
+	DimensionRulesetParameters = "ruleset_parameters"
+	DimensionRulesetSpec       = "ruleset_spec"
 )
 
 // labelOrganization is the metric label naming the GitHub org a call targeted.
@@ -137,7 +141,7 @@ func newRateLimitMetrics() *RateLimitMetrics {
 		repositoryUnreconcilable: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "github_repository_unreconcilable",
-				Help: "1 while the repository has declared state GitHub will not apply, per dimension (collaborators, branch_protection, archived)",
+				Help: "1 while the repository has declared state that stays unapplied, per dimension (collaborators, branch_protection, archived, settings, rulesets_forbidden, ruleset_parameters, ruleset_spec)",
 			},
 			[]string{labelOrganization, "repository", "dimension"},
 		),

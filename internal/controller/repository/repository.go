@@ -17,6 +17,7 @@ limitations under the License.
 package repository
 
 import (
+	stdcmp "cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -49,6 +50,7 @@ import (
 	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 	"github.com/provider-github/provider-github/internal/controller/driftcmp"
 	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 	"github.com/provider-github/provider-github/internal/telemetry"
@@ -240,21 +242,18 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	}
 
-	if cr.Spec.ForProvider.RepositoryRules != nil {
-		ghRepositoryRules, _ := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
-
-		crRepositoryRulesToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
-		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+	// Rulesets are skipped while the CR is being deleted, so the deletion goes ahead even
+	// when the ruleset endpoint fails (403 on plans without private-repository rulesets).
+	cr.Status.AtProvider.RepositoryRules = nil
+	if cr.Spec.ForProvider.RepositoryRules != nil && !meta.WasDeleted(cr) {
+		rulesDrift, err := c.observeRulesets(ctx, cr, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
-			return managed.ExternalObservation{}, err
-		}
-
-		drift = drift || !driftcmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig)
+		drift = drift || rulesDrift
 	} else {
-		cr.Status.AtProvider.RepositoryRules = nil
+		setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
+		c.recordRulesetsUnreconcilable(cr)
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
@@ -340,12 +339,106 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 	})
 }
 
+// Condition surfaced while a ruleset in the spec lists the same ref pattern or bypass
+// actor twice, while GitHub answers the ruleset list with 403 on a repository that
+// declares rulesets, such as a private one whose plan has no rulesets, or while a
+// managed ruleset holds rule types or parameters the provider does not model. An
+// invalid spec leaves the list unread and a 403 leaves nothing fetched, so either
+// reason stands alone. While rulesets hold both unmanaged rule types and unmanaged
+// parameters, the reason is UnmanagedRuleTypes and the message names both.
+const (
+	typeRulesetsPartial       xpv2.ConditionType   = "RulesetsPartial"
+	reasonInvalidRulesets     xpv2.ConditionReason = "InvalidRulesets"
+	reasonRulesetsForbidden   xpv2.ConditionReason = "RulesetsForbidden"
+	reasonUnmanagedRuleTypes  xpv2.ConditionReason = "UnmanagedRuleTypes"
+	reasonUnmanagedParameters xpv2.ConditionReason = "UnmanagedParameters"
+	reasonRulesetsReconciled  xpv2.ConditionReason = "RulesetsReconciled"
+)
+
+// rulesetReport lists, sorted, one sentence per managed ruleset left as it is because
+// it holds rule types the provider does not model, and one per rule holding
+// parameters the provider does not model. skipped holds the names of those rulesets
+// left as they are, sorted. extraApprovalReturned holds, sorted, the names of the
+// rulesets whose pull_request rule GitHub answered with
+// requireExtraApprovalForUnattributedChanges while the CR leaves it unset; the desired
+// value is GitHub's default, true.
+type rulesetReport struct {
+	unmanagedTypes        []string
+	unmanagedParameters   []string
+	skipped               []string
+	extraApprovalReturned []string
+	// observed holds, keyed by name, every ruleset of the repository as GitHub holds it, in CR
+	// form with the rule types and parameters the provider models, whether or not the
+	// ruleset is compared. A ruleset the CR does not name is listed by name only.
+	observed map[string]v1alpha1.RepositoryRuleset
+}
+
+// applyRulesetReport brings the CR's rulesets, as getRepositoryRulesMapFromCr returns
+// them, to the desired state compared with and sent to GitHub: the rulesets in
+// report.skipped drop out, and the pull_request rule of the rulesets in
+// report.extraApprovalReturned gets requireExtraApprovalForUnattributedChanges true.
+// Rules.PullRequest is a pointer held by the map entry, so the value set through it is
+// in crRulesets.
+func applyRulesetReport(crRulesets map[string]v1alpha1.RepositoryRuleset, report rulesetReport) {
+	for _, name := range report.skipped {
+		delete(crRulesets, name)
+	}
+	for _, name := range report.extraApprovalReturned {
+		crRulesets[name].Rules.PullRequest.RequireExtraApprovalForUnattributedChanges = pointer.To(true)
+	}
+}
+
+// setRulesetsPartialCondition carries the message from invalid, the error naming the
+// duplicate in the spec, GitHub's message from forbidden, the 403 of the ruleset list,
+// or the sentences of report, unmanaged rule types first, in that order, and reports
+// False when there are none.
+func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden error, report rulesetReport) {
+	c := xpv2.Condition{Type: typeRulesetsPartial, LastTransitionTime: metav1.Now()}
+	switch {
+	case invalid != nil:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonInvalidRulesets
+		c.Message = invalid.Error()
+	case forbidden != nil:
+		msg := forbidden.Error()
+		var errResp *github.ErrorResponse
+		if errors.As(forbidden, &errResp) {
+			msg = errResp.Message
+		}
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonRulesetsForbidden
+		c.Message = "GitHub answers the ruleset list with 403, so rulesets are left as they are: " + msg
+	case len(report.unmanagedTypes) > 0:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonUnmanagedRuleTypes
+		c.Message = strings.Join(slices.Concat(report.unmanagedTypes, report.unmanagedParameters), "; ")
+	case len(report.unmanagedParameters) > 0:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonUnmanagedParameters
+		c.Message = strings.Join(report.unmanagedParameters, "; ")
+	default:
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonRulesetsReconciled
+	}
+	cr.SetConditions(c)
+}
+
+// recordRulesetsUnreconcilable publishes the ruleset_spec, rulesets and ruleset_parameters
+// dimensions, each from its reasons of the RulesetsPartial condition.
+func (c *external) recordRulesetsUnreconcilable(cr *v1alpha1.Repository) {
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetSpec, typeRulesetsPartial, reasonInvalidRulesets)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetsForbidden, typeRulesetsPartial, reasonRulesetsForbidden)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedRuleTypes, reasonUnmanagedParameters)
+}
+
 // recordUnreconcilable publishes the dimension's gauge from its condition's current status.
-func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv2.ConditionType) {
+// With a reason given, the dimension is unreconcilable only while the condition holds it.
+func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv2.ConditionType, reason ...xpv2.ConditionReason) {
 	if c.metrics == nil {
 		return
 	}
-	unreconcilable := cr.GetCondition(conditionType).Status == corev1.ConditionTrue
+	condition := cr.GetCondition(conditionType)
+	unreconcilable := condition.Status == corev1.ConditionTrue && (len(reason) == 0 || slices.Contains(reason, condition.Reason))
 	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
 }
 
@@ -392,17 +485,65 @@ func (c *external) mirrorFrozenSections(ctx context.Context, cr *v1alpha1.Reposi
 		// As when not archived, a failed list reads as no rulesets: an organization
 		// whose plan has no rulesets answers the list with an error.
 		ghRulesets, _ := getRepositoryRules(ctx, c.github, org, name)
-		// No ruleset is named here, so rule types this provider does not manage are
-		// mirrored rather than rejected: only a write needs them rejected.
-		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, nil)
+		// Every ruleset is fetched, and one holding rule types this provider does not
+		// manage is mirrored with the rule types it models: only a write needs it
+		// left alone.
+		named := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
+		for _, r := range ghRulesets {
+			named[r.Name] = v1alpha1.RepositoryRuleset{Name: r.Name}
+		}
+		_, report, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, named)
 		if err != nil {
 			return err
 		}
-		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
+		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(report.observed); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// observeRulesets reads the repository's rulesets, mirrors them into
+// status.atProvider and reports whether they differ from the spec. A spec that lists
+// the same ref pattern or bypass actor twice, or a 403 on the ruleset list, leaves the
+// rulesets unread and is reported through the RulesetsPartial condition, so the other
+// sections still decide whether the repository is up to date.
+func (c *external) observeRulesets(ctx context.Context, cr *v1alpha1.Repository, name string) (bool, error) {
+	crRulesets, invalid := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
+	if invalid != nil {
+		setRulesetsPartialCondition(cr, invalid, nil, rulesetReport{})
+		c.recordRulesetsUnreconcilable(cr)
+		return false, nil
+	}
+
+	ghRulesets, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
+	if err != nil && !ghclient.Is403(err) {
+		return false, err
+	}
+	if err != nil {
+		// The refusal leaves the declared rulesets unapplied; a repository that declares
+		// none already has the state it asks for.
+		if len(*cr.Spec.ForProvider.RepositoryRules) > 0 {
+			setRulesetsPartialCondition(cr, nil, err, rulesetReport{})
+		} else {
+			setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
+		}
+		c.recordRulesetsUnreconcilable(cr)
+		return false, nil
+	}
+
+	ghRulesetsToConfig, report, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRulesets, crRulesets)
+	if err != nil {
+		return false, err
+	}
+	setRulesetsPartialCondition(cr, nil, nil, report)
+	c.recordRulesetsUnreconcilable(cr)
+	if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(report.observed); err != nil {
+		return false, err
+	}
+
+	applyRulesetReport(crRulesets, report)
+	return !driftcmp.Equal(crRulesets, ghRulesetsToConfig), nil
 }
 
 // observeArchived reports drift for an archived repo. Only team access, topics and
@@ -437,6 +578,8 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
+	setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
+	c.recordRulesetsUnreconcilable(cr)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
@@ -1909,11 +2052,16 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 	}
 	if cr.Spec.ForProvider.RepositoryRules != nil {
-		rulesMap := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
+		// An invalid spec returns no rulesets to create; Observe reports it through RulesetsPartial.
+		rulesMap, _ := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
-			_, _, err := c.github.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, name, *crRepoRulesToRulesConfig(rule))
+			ruleset, err := crRepoRulesToRulesConfig(rule)
+			if err != nil {
+				return managed.ExternalCreation{}, err
+			}
+			_, _, err = c.github.Rulesets.CreateRuleset(ctx, cr.Spec.ForProvider.Org, name, *ruleset)
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -2430,19 +2578,29 @@ func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, o
 	return nil
 }
 
-// getRepositoryRules retrieves all the rules for a given GitHub repository.
+// getRepositoryRules retrieves the repository's own rulesets.
 // It uses pagination to handle large numbers of rules, fetching 100 rules per API call.
-func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*github.RepositoryRuleset, error) {
-	opt := &github.ListOptions{PerPage: 100}
-	var allRules []*github.RepositoryRuleset
+// Inherited rulesets belong to the organization or enterprise and are managed there.
+func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*rulesets.Ruleset, error) {
+	opt := &github.RepositoryListRulesetsOptions{
+		// GitHub lists inherited rulesets by default.
+		IncludesParents: github.Ptr(false),
+		ListOptions:     github.ListOptions{PerPage: 100},
+	}
+	var allRules []*rulesets.Ruleset
 
 	for {
-		rules, resp, err := gh.Repositories.GetAllRulesets(ctx, org, repo, &github.RepositoryListRulesetsOptions{IncludesParents: github.Ptr(true)})
+		rules, resp, err := gh.Rulesets.GetAllRulesets(ctx, org, repo, opt)
 		if err != nil {
 			return nil, err
 		}
 
-		allRules = append(allRules, rules...)
+		for _, rule := range rules {
+			if rule.SourceType != nil && *rule.SourceType != rulesetSourceRepository {
+				continue
+			}
+			allRules = append(allRules, rule)
+		}
 
 		if resp.NextPage == 0 {
 			break
@@ -2454,380 +2612,892 @@ func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo stri
 }
 
 // getRepositoryRulesMapFromCr generates a map from the RepositoryRules slice
-// in the Crossplane resource.
-//
-//nolint:gocyclo
-func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]v1alpha1.RepositoryRuleset {
+// in the Crossplane resource, each ruleset in the form normalizeRuleset returns.
+func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
 	crRulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(rules))
 
 	for i := range rules {
-		// Use a copy to avoid changing passed []v1alpha1.RepositoryRules
-		// This prevents the controller from changing the spec of the live CR
-		// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
-		orig := &rules[i]
-		rCopy := orig.DeepCopy()
-
-		// handle optional fields
-		rCopy.Target = util.StringDerefToPointer(rCopy.Target, "branch")
-		rCopy.Enforcement = util.StringDerefToPointer(rCopy.Enforcement, "active")
-
-		rConditions := rCopy.Conditions
-
-		if rConditions != nil && rConditions.RefName != nil {
-			if rConditions.RefName.Include != nil {
-				rConditions.RefName.Include = util.SortAndReturn(rConditions.RefName.Include)
-			}
-			if rConditions.RefName.Exclude != nil {
-				rConditions.RefName.Exclude = util.SortAndReturn(rConditions.RefName.Exclude)
-			}
-		}
-
-		if rConditions == nil {
-			rConditions = &v1alpha1.RulesetConditions{
-				RefName: &v1alpha1.RulesetRefName{
-					Include: []string{},
-					Exclude: []string{},
-				},
-			}
-			// Update the rConditions reference in rCopy
-			rCopy.Conditions = rConditions
-		}
-
-		rBActors := rCopy.BypassActors
-		if rBActors != nil {
-			for a := range rBActors {
-				actor := rBActors[a] // Make a copy of the actor
-
-				// Set ActorId, ActorType, and BypassMode fields
-				actor.ActorID = rBActors[a].ActorID
-				actor.ActorType = rBActors[a].ActorType
-				actor.BypassMode = rBActors[a].BypassMode
-
-				// Update the actor in the slice
-				rBActors[a] = actor
-			}
-			util.SortRulesBypassActors(rBActors)
-		}
-		rRules := rCopy.Rules
-		if rRules != nil {
-			rRules.RequiredSignatures = util.BoolDerefToPointer(rRules.RequiredSignatures, false)
-			rRules.NonFastForward = util.BoolDerefToPointer(rRules.NonFastForward, false)
-			rRules.Creation = util.BoolDerefToPointer(rRules.Creation, false)
-			rRules.Deletion = util.BoolDerefToPointer(rRules.Deletion, false)
-			rRules.RequiredLinearHistory = util.BoolDerefToPointer(rRules.RequiredLinearHistory, false)
-			rRules.Update = util.BoolDerefToPointer(rRules.Update, false)
-
-			if rRules.RequiredDeployments != nil {
-				if rRules.RequiredDeployments.Environments != nil {
-					rRules.RequiredDeployments.Environments = util.SortAndReturn(rRules.RequiredDeployments.Environments)
-				}
-			}
-			if rRules.PullRequest != nil {
-				rRules.PullRequest.DismissStaleReviewsOnPush = util.BoolDerefToPointer(rRules.PullRequest.DismissStaleReviewsOnPush, false)
-				rRules.PullRequest.RequireCodeOwnerReview = util.BoolDerefToPointer(rRules.PullRequest.RequireCodeOwnerReview, false)
-				rRules.PullRequest.RequireLastPushApproval = util.BoolDerefToPointer(rRules.PullRequest.RequireLastPushApproval, false)
-				rRules.PullRequest.RequiredReviewThreadResolution = util.BoolDerefToPointer(rRules.PullRequest.RequiredReviewThreadResolution, false)
-				rRules.PullRequest.RequiredApprovingReviewCount = util.IntDerefToPointer(rRules.PullRequest.RequiredApprovingReviewCount, 0)
-			}
-			if rRules.RequiredStatusChecks != nil {
-				if rRules.RequiredStatusChecks.RequiredStatusChecks != nil {
-					copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
-					copy(copyOfStatusChecks, rRules.RequiredStatusChecks.RequiredStatusChecks)
-					util.SortRulesRequiredStatusChecks(copyOfStatusChecks)
-					rRules.RequiredStatusChecks.RequiredStatusChecks = copyOfStatusChecks
-				}
-				rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = util.BoolDerefToPointer(rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy, false)
-			}
-		}
-		crRulesToConfig[rCopy.Name] = *rCopy
-	}
-
-	return crRulesToConfig
-}
-
-// getRepositoryRulesWithConfig creates a map of RepositoryRules based on the
-// branch rules fetched from the GitHub API. It checks for unmanaged rules only
-// in the rulesets named in crRulesets: those not named there are deleted, never updated.
-//
-//nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.RepositoryRuleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
-	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
-
-	for _, rule := range ghRulesets {
-		rRuleset, _, err := gh.Repositories.GetRuleset(ctx, owner, repo, *rule.ID, true)
+		rule, err := normalizeRuleset(rules[i])
 		if err != nil {
 			return nil, err
 		}
-		if _, inCR := crRulesets[rule.Name]; inCR {
-			if types := unmanagedRuleTypes(rRuleset.GetRules()); len(types) > 0 {
-				return nil, errors.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+		crRulesToConfig[rule.Name] = rule
+	}
+
+	return crRulesToConfig, nil
+}
+
+// normalizeRuleset returns a copy of the ruleset in the form that is compared and sent:
+// unset fields hold GitHub's defaults and lists GitHub treats as sets are sorted. It
+// returns the same ruleset for a ruleset it has already normalised.
+//
+//nolint:gocyclo
+func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRuleset, error) {
+	// Use a copy to avoid changing passed []v1alpha1.RepositoryRules
+	// This prevents the controller from changing the spec of the live CR
+	// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
+	rCopy := rule.DeepCopy()
+
+	// handle optional fields
+	rCopy.Target = util.StringDerefToPointer(rCopy.Target, "branch")
+	rCopy.Enforcement = util.StringDerefToPointer(rCopy.Enforcement, "active")
+
+	rCopy.Conditions = rulesetConditions(*rCopy.Target, rCopy.Conditions)
+	rCopy.BypassActors = rulesetBypassActors(rCopy.BypassActors)
+	if err := duplicateBypassActor(rCopy.Name, rCopy.BypassActors); err != nil {
+		return v1alpha1.RepositoryRuleset{}, err
+	}
+	if err := duplicateRefPattern(rCopy.Name, rCopy.Conditions); err != nil {
+		return v1alpha1.RepositoryRuleset{}, err
+	}
+
+	// Unset rules mean every rule is off.
+	if rCopy.Rules == nil {
+		rCopy.Rules = &v1alpha1.Rules{}
+	}
+	rRules := rCopy.Rules
+	rRules.RequiredSignatures = util.BoolDerefToPointer(rRules.RequiredSignatures, false)
+	rRules.NonFastForward = util.BoolDerefToPointer(rRules.NonFastForward, false)
+	rRules.Creation = util.BoolDerefToPointer(rRules.Creation, false)
+	rRules.Deletion = util.BoolDerefToPointer(rRules.Deletion, false)
+	rRules.RequiredLinearHistory = util.BoolDerefToPointer(rRules.RequiredLinearHistory, false)
+	rRules.Update = util.BoolDerefToPointer(rRules.Update, false)
+	rRules.LicenseComplianceScanning = util.BoolDerefToPointer(rRules.LicenseComplianceScanning, false)
+	// Fetch and merge is a parameter of the update rule, so it is set only with that rule.
+	if *rRules.Update {
+		rRules.UpdateAllowsFetchAndMerge = util.BoolDerefToPointer(rRules.UpdateAllowsFetchAndMerge, false)
+	} else {
+		rRules.UpdateAllowsFetchAndMerge = nil
+	}
+	if r := rRules.RequireSecretScanningAlertResolution; r != nil {
+		r.SecretTypes = secretTypeSet(r.SecretTypes)
+	}
+
+	if rRules.RequiredDeployments != nil {
+		rRules.RequiredDeployments.Environments = util.SortAndReturn(util.DefaultToStringSlice(rRules.RequiredDeployments.Environments))
+	}
+	if rRules.PullRequest != nil {
+		pullRequestDefaults(rRules.PullRequest)
+	}
+	if rRules.RequiredStatusChecks != nil {
+		copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
+		copy(copyOfStatusChecks, rRules.RequiredStatusChecks.RequiredStatusChecks)
+		util.SortRulesRequiredStatusChecks(copyOfStatusChecks)
+		rRules.RequiredStatusChecks.RequiredStatusChecks = copyOfStatusChecks
+		rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = util.BoolDerefToPointer(rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy, false)
+		rRules.RequiredStatusChecks.DoNotEnforceOnCreate = util.BoolDerefToPointer(rRules.RequiredStatusChecks.DoNotEnforceOnCreate, false)
+	}
+	for _, p := range []*v1alpha1.RulesPattern{rRules.CommitMessagePattern, rRules.CommitAuthorEmailPattern, rRules.CommitterEmailPattern, rRules.BranchNamePattern, rRules.TagNamePattern} {
+		if p != nil {
+			p.Name = util.StringDerefToPointer(p.Name, "")
+			p.Negate = util.BoolDerefToPointer(p.Negate, false)
+		}
+	}
+	if rRules.CodeCoverage != nil {
+		rRules.CodeCoverage.MinimumCoverage = canonicalDecimal(rRules.CodeCoverage.MinimumCoverage)
+		rRules.CodeCoverage.MaxCoverageDrop = canonicalDecimal(rRules.CodeCoverage.MaxCoverageDrop)
+	}
+	if rRules.CodeScanning != nil {
+		util.SortRulesCodeScanningTools(rRules.CodeScanning.CodeScanningTools)
+	}
+	if rRules.CopilotCodeReview != nil {
+		rRules.CopilotCodeReview.ReviewOnPush = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewOnPush, false)
+		rRules.CopilotCodeReview.ReviewDraftPullRequests = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewDraftPullRequests, false)
+	}
+	if rRules.FileExtensionRestriction != nil {
+		rRules.FileExtensionRestriction.RestrictedFileExtensions = util.SortAndReturn(rRules.FileExtensionRestriction.RestrictedFileExtensions)
+	}
+	if rRules.FilePathRestriction != nil {
+		rRules.FilePathRestriction.RestrictedFilePaths = util.SortAndReturn(rRules.FilePathRestriction.RestrictedFilePaths)
+		rRules.FilePathRestriction.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.FilePathRestriction.IgnoredFilePaths))
+	}
+	if rRules.MaxFileSize != nil {
+		rRules.MaxFileSize.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.MaxFileSize.IgnoredFilePaths))
+	}
+	return *rCopy, nil
+}
+
+// getRepositoryRulesWithConfig returns the repository's rulesets in CR form, keyed by
+// name. It fetches the rulesets the CR names; the others are listed by name only,
+// because they are going to be deleted. A fetched ruleset holding rule types the
+// provider does not model is left out of the result, and its name is in
+// report.skipped, so the callers drop it from their CR map as well and compare and
+// diff leave it as it is. The report names those rulesets and the rules of the other
+// fetched rulesets that hold parameters the provider does not manage, and lists in
+// extraApprovalReturned the rulesets whose desired
+// requireExtraApprovalForUnattributedChanges is GitHub's default; the callers apply
+// both lists to their CR map with applyRulesetReport.
+//
+//nolint:gocyclo
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, rulesetReport, error) {
+	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
+	report := rulesetReport{observed: make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))}
+
+	for _, rule := range ghRulesets {
+		if _, inCR := crRulesets[rule.Name]; !inCR {
+			rulesToConfig[rule.Name] = v1alpha1.RepositoryRuleset{Name: rule.Name}
+			report.observed[rule.Name] = v1alpha1.RepositoryRuleset{Name: rule.Name}
+			continue
+		}
+		rRuleset, _, err := gh.Rulesets.GetRuleset(ctx, owner, repo, *rule.ID, false)
+		if err != nil {
+			return nil, rulesetReport{}, err
+		}
+		ruleset, convErr := rulesetFromGitHub(rule, rRuleset)
+		if convErr == nil {
+			report.observed[rule.Name] = *ruleset.DeepCopy()
+		}
+		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
+			report.unmanagedTypes = append(report.unmanagedTypes, fmt.Sprintf("ruleset %s has rule types this provider does not manage (%s); it is left as it is until they are removed on GitHub or modelled by the provider", rule.Name, strings.Join(types, ", ")))
+			report.skipped = append(report.skipped, rule.Name)
+			continue
+		}
+		for _, r := range rRuleset.Rules {
+			if keys := rulesets.UnmanagedParameters(r); len(keys) > 0 {
+				report.unmanagedParameters = append(report.unmanagedParameters, unmanagedParametersSentence(rule.Name, r.Type, keys))
 			}
 		}
-		ruleset := v1alpha1.RepositoryRuleset{
-			Target:      pointer.To(string(pointer.Deref(rule.Target, ""))),
-			Enforcement: (*string)(&rule.Enforcement),
-			Name:        rule.Name,
-
-			Conditions: &v1alpha1.RulesetConditions{
-				RefName: &v1alpha1.RulesetRefName{
-					Include: []string{},
-					Exclude: []string{},
-				},
-			},
-			BypassActors: nil,
-			Rules: &v1alpha1.Rules{
-				Creation:              pointer.To(false),
-				Update:                pointer.To(false),
-				Deletion:              pointer.To(false),
-				RequiredLinearHistory: pointer.To(false),
-				RequiredDeployments:   nil,
-				RequiredSignatures:    pointer.To(false),
-				NonFastForward:        pointer.To(false),
-				PullRequest:           nil,
-				RequiredStatusChecks:  nil,
-			},
+		if convErr != nil {
+			return nil, rulesetReport{}, convErr
 		}
-
-		if rRuleset.Conditions != nil {
-			if rRuleset.Conditions.RefName != nil {
-				ruleset.Conditions.RefName = &v1alpha1.RulesetRefName{
-					Include: util.SortAndReturn(rRuleset.Conditions.RefName.Include),
-					Exclude: util.SortAndReturn(rRuleset.Conditions.RefName.Exclude),
-				}
-			}
+		withoutUndeclared(&ruleset, crRulesets[rule.Name])
+		if c, g := crRulesets[rule.Name].Rules, ruleset.Rules.PullRequest; c != nil && c.PullRequest != nil && c.PullRequest.RequireExtraApprovalForUnattributedChanges == nil && g != nil && g.RequireExtraApprovalForUnattributedChanges != nil {
+			report.extraApprovalReturned = append(report.extraApprovalReturned, rule.Name)
 		}
-
-		if rRuleset.BypassActors != nil {
-			if len(rRuleset.BypassActors) > 0 {
-				ruleset.BypassActors = make([]*v1alpha1.RulesetByPassActors, len(rRuleset.BypassActors))
-				for i, actor := range rRuleset.BypassActors {
-					ruleset.BypassActors[i] = &v1alpha1.RulesetByPassActors{
-						ActorType:  (*string)(actor.ActorType),
-						ActorID:    actor.ActorID,
-						BypassMode: (*string)(actor.BypassMode),
-					}
-				}
-				util.SortRulesBypassActors(ruleset.BypassActors)
-			}
-
-		}
-		if rRuleset != nil && rRuleset.Rules != nil {
-			rules := rRuleset.Rules
-			if rules.Creation != nil {
-				ruleset.Rules.Creation = pointer.To(true)
-			}
-			if rules.Deletion != nil {
-				ruleset.Rules.Deletion = pointer.To(true)
-			}
-			if rules.RequiredLinearHistory != nil {
-				ruleset.Rules.RequiredLinearHistory = pointer.To(true)
-			}
-			if rules.RequiredSignatures != nil {
-				ruleset.Rules.RequiredSignatures = pointer.To(true)
-			}
-			if rules.NonFastForward != nil {
-				ruleset.Rules.NonFastForward = pointer.To(true)
-			}
-			if rules.Update != nil {
-				ruleset.Rules.Update = pointer.To(true)
-			}
-			if params := rules.PullRequest; params != nil {
-				ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
-					RequireCodeOwnerReview:         pointer.To(params.RequireCodeOwnerReview),
-					RequireLastPushApproval:        pointer.To(params.RequireLastPushApproval),
-					RequiredReviewThreadResolution: pointer.To(params.RequiredReviewThreadResolution),
-					RequiredApprovingReviewCount:   pointer.To(params.RequiredApprovingReviewCount),
-					DismissStaleReviewsOnPush:      pointer.To(params.DismissStaleReviewsOnPush),
-				}
-			}
-			if params := rules.RequiredDeployments; params != nil {
-				ruleset.Rules.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{
-					Environments: util.SortAndReturn(params.RequiredDeploymentEnvironments),
-				}
-			}
-			if params := rules.RequiredStatusChecks; params != nil {
-				requiredStatusChecksParameters := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(params.RequiredStatusChecks))
-				for i, statusCheck := range params.RequiredStatusChecks {
-					requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
-						Context:       statusCheck.Context,
-						IntegrationID: statusCheck.IntegrationID,
-					}
-				}
-				util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
-
-				ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
-					StrictRequiredStatusChecksPolicy: pointer.To(params.StrictRequiredStatusChecksPolicy),
-					RequiredStatusChecks:             requiredStatusChecksParameters,
-				}
-			}
-		}
-
 		rulesToConfig[rule.Name] = ruleset
 	}
 
-	return rulesToConfig, nil
+	slices.Sort(report.unmanagedTypes)
+	slices.Sort(report.unmanagedParameters)
+	slices.Sort(report.skipped)
+	slices.Sort(report.extraApprovalReturned)
+	return rulesToConfig, report, nil
 
 }
 
-// unmanagedRuleTypes returns the sorted types of the rules in a ruleset that the
-// provider does not model. An update sends only the modelled rules, so GitHub would
-// drop these; the caller stops before anything is written. merge_queue, workflows
-// and the *_pattern rules are not listed: rulesets holding them are reconciled.
-func unmanagedRuleTypes(rules *github.RepositoryRulesetRules) []string {
-	if rules == nil {
-		return nil
-	}
-	present := map[github.RepositoryRuleType]bool{
-		github.RulesetRuleTypeCodeScanning:             rules.CodeScanning != nil,
-		github.RulesetRuleTypeCopilotCodeReview:        rules.CopilotCodeReview != nil,
-		github.RulesetRuleTypeFileExtensionRestriction: rules.FileExtensionRestriction != nil,
-		github.RulesetRuleTypeFilePathRestriction:      rules.FilePathRestriction != nil,
-		github.RulesetRuleTypeMaxFilePathLength:        rules.MaxFilePathLength != nil,
-		github.RulesetRuleTypeMaxFileSize:              rules.MaxFileSize != nil,
-		github.RulesetRuleTypeRepositoryCreate:         rules.RepositoryCreate != nil,
-		github.RulesetRuleTypeRepositoryDelete:         rules.RepositoryDelete != nil,
-		github.RulesetRuleTypeRepositoryName:           rules.RepositoryName != nil,
-		github.RulesetRuleTypeRepositoryTransfer:       rules.RepositoryTransfer != nil,
-		github.RulesetRuleTypeRepositoryVisibility:     rules.RepositoryVisibility != nil,
-	}
-	var types []string
-	for t, ok := range present {
-		if ok {
-			types = append(types, string(t))
-		}
-	}
-	slices.Sort(types)
-	return types
-}
-
-// crRepoRulesToRulesConfig transforms a RepositoryRuleset object from the Crossplane resource
-// into a Ruleset object that can be used with the GitHub API.
+// rulesetFromGitHub converts a ruleset GitHub holds into its CR form, with the rule
+// types and parameters the provider models. rule is the entry of the list and
+// rRuleset the ruleset fetched by its ID.
 //
 //nolint:gocyclo
-func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.RepositoryRuleset {
-	githubRuleset := &github.RepositoryRuleset{
+func rulesetFromGitHub(rule, rRuleset *rulesets.Ruleset) (v1alpha1.RepositoryRuleset, error) {
+	target := pointer.Deref(rule.Target, "")
+	ruleset := v1alpha1.RepositoryRuleset{
+		Target:      pointer.To(target),
+		Enforcement: &rule.Enforcement,
 		Name:        rule.Name,
-		Enforcement: github.RulesetEnforcement(*rule.Enforcement),
-		Target:      (*github.RulesetTarget)(rule.Target),
+		Rules: &v1alpha1.Rules{
+			Creation:                  pointer.To(false),
+			Update:                    pointer.To(false),
+			Deletion:                  pointer.To(false),
+			RequiredLinearHistory:     pointer.To(false),
+			RequiredDeployments:       nil,
+			RequiredSignatures:        pointer.To(false),
+			NonFastForward:            pointer.To(false),
+			LicenseComplianceScanning: pointer.To(false),
+			PullRequest:               nil,
+			RequiredStatusChecks:      nil,
+		},
 	}
 
-	// If BypassActors is not empty, transform it into the github rule BypassActors.
-	// An empty list stays nil: go-github v62 omitted it from the request, v90 would send [].
-	if len(rule.BypassActors) > 0 {
-		githubBypassActors := make([]*github.BypassActor, len(rule.BypassActors))
-		for i, actor := range rule.BypassActors {
-			githubBypassActors[i] = &github.BypassActor{
-				ActorID:    actor.ActorID,
-				ActorType:  (*github.BypassActorType)(actor.ActorType),
-				BypassMode: (*github.BypassMode)(actor.BypassMode),
-			}
-		}
-		githubRuleset.BypassActors = githubBypassActors
+	var conditions *v1alpha1.RulesetConditions
+	if c := rRuleset.Conditions; c != nil && c.RefName != nil {
+		conditions = &v1alpha1.RulesetConditions{RefName: &v1alpha1.RulesetRefName{Include: c.RefName.Include, Exclude: c.RefName.Exclude}}
 	}
+	ruleset.Conditions = rulesetConditions(target, conditions)
 
-	// If Conditions is not nil, transform it into the github rule Conditions
-	if rule.Conditions != nil {
-		githubConditions := &github.RepositoryRulesetConditions{
-			RefName: &github.RepositoryRulesetRefConditionParameters{
-				Include: rule.Conditions.RefName.Include,
-				Exclude: rule.Conditions.RefName.Exclude,
-			},
+	actors := make([]*v1alpha1.RulesetByPassActors, len(rRuleset.BypassActors))
+	for i, actor := range rRuleset.BypassActors {
+		actors[i] = &v1alpha1.RulesetByPassActors{
+			ActorType:  actor.ActorType,
+			ActorID:    actor.ActorID,
+			BypassMode: actor.BypassMode,
 		}
-		githubRuleset.Conditions = githubConditions
 	}
-	// If Rules is not nil, transform it into the github rule Rules
-	if rule.Rules != nil {
-		githubRules := github.RepositoryRulesetRules{}
-		if rule.Rules.RequiredStatusChecks != nil {
-			params := github.RequiredStatusChecksRuleParameters{
-				StrictRequiredStatusChecksPolicy: *rule.Rules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy,
+	ruleset.BypassActors = rulesetBypassActors(actors)
+
+	if rRuleset.Rules != nil {
+		rules, err := rulesets.Decode(rRuleset.Rules)
+		if err != nil {
+			return v1alpha1.RepositoryRuleset{}, err
+		}
+		if rules.Creation != nil {
+			ruleset.Rules.Creation = pointer.To(true)
+		}
+		if rules.Deletion != nil {
+			ruleset.Rules.Deletion = pointer.To(true)
+		}
+		if rules.RequiredLinearHistory != nil {
+			ruleset.Rules.RequiredLinearHistory = pointer.To(true)
+		}
+		if rules.RequiredSignatures != nil {
+			ruleset.Rules.RequiredSignatures = pointer.To(true)
+		}
+		if rules.NonFastForward != nil {
+			ruleset.Rules.NonFastForward = pointer.To(true)
+		}
+		if rules.Update != nil {
+			ruleset.Rules.Update = pointer.To(true)
+			// GitHub returns this on forks only. Elsewhere it takes the CR's value.
+			ruleset.Rules.UpdateAllowsFetchAndMerge = rules.Update.UpdateAllowsFetchAndMerge
+		}
+		if rules.LicenseComplianceScanning != nil {
+			ruleset.Rules.LicenseComplianceScanning = pointer.To(true)
+		}
+		if params := rules.RequireSecretScanningAlertResolution; params != nil {
+			var types []v1alpha1.RulesSecretType
+			for _, t := range params.SecretTypes {
+				types = append(types, v1alpha1.RulesSecretType(t))
 			}
-			requiredStatusChecks := make([]*github.RuleStatusCheck, len(rule.Rules.RequiredStatusChecks.RequiredStatusChecks))
-			for i, statusCheck := range rule.Rules.RequiredStatusChecks.RequiredStatusChecks {
-				requiredStatusChecks[i] = &github.RuleStatusCheck{
+			ruleset.Rules.RequireSecretScanningAlertResolution = &v1alpha1.RulesSecretScanningAlertResolution{SecretTypes: secretTypeSet(types)}
+		}
+		if params := rules.PullRequest; params != nil {
+			if ruleset.Rules.PullRequest, err = pullRequestFromGitHub(params); err != nil {
+				return v1alpha1.RepositoryRuleset{}, errors.Wrap(err, "rule pull_request")
+			}
+		}
+		if params := rules.RequiredDeployments; params != nil {
+			ruleset.Rules.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{
+				Environments: util.SortAndReturn(util.DefaultToStringSlice(params.RequiredDeploymentEnvironments)),
+			}
+		}
+		if params := rules.RequiredStatusChecks; params != nil {
+			requiredStatusChecksParameters := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(params.RequiredStatusChecks))
+			for i, statusCheck := range params.RequiredStatusChecks {
+				requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
 					Context:       statusCheck.Context,
 					IntegrationID: statusCheck.IntegrationID,
 				}
 			}
-			params.RequiredStatusChecks = requiredStatusChecks
-			githubRules.RequiredStatusChecks = &params
-		}
+			util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
 
-		if *rule.Rules.Creation {
-			githubRules.Creation = &github.EmptyRuleParameters{}
-		}
-
-		if *rule.Rules.Deletion {
-			githubRules.Deletion = &github.EmptyRuleParameters{}
-		}
-
-		if *rule.Rules.RequiredLinearHistory {
-			githubRules.RequiredLinearHistory = &github.EmptyRuleParameters{}
-		}
-
-		if *rule.Rules.RequiredSignatures {
-			githubRules.RequiredSignatures = &github.EmptyRuleParameters{}
-		}
-		if *rule.Rules.NonFastForward {
-			githubRules.NonFastForward = &github.EmptyRuleParameters{}
-		}
-		if *rule.Rules.Update {
-			githubRules.Update = &github.UpdateRuleParameters{}
-		}
-		if rule.Rules.PullRequest != nil {
-			githubRules.PullRequest = &github.PullRequestRuleParameters{
-				DismissStaleReviewsOnPush:      *rule.Rules.PullRequest.DismissStaleReviewsOnPush,
-				RequireCodeOwnerReview:         *rule.Rules.PullRequest.RequireCodeOwnerReview,
-				RequireLastPushApproval:        *rule.Rules.PullRequest.RequireLastPushApproval,
-				RequiredReviewThreadResolution: *rule.Rules.PullRequest.RequiredReviewThreadResolution,
-				RequiredApprovingReviewCount:   *rule.Rules.PullRequest.RequiredApprovingReviewCount,
+			ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
+				DoNotEnforceOnCreate:             pointer.To(params.DoNotEnforceOnCreate),
+				StrictRequiredStatusChecksPolicy: pointer.To(params.StrictRequiredStatusChecksPolicy),
+				RequiredStatusChecks:             requiredStatusChecksParameters,
 			}
 		}
-		if rule.Rules.RequiredDeployments != nil {
-			githubRules.RequiredDeployments = &github.RequiredDeploymentsRuleParameters{
-				RequiredDeploymentEnvironments: rule.Rules.RequiredDeployments.Environments,
+		if params := rules.MergeQueue; params != nil {
+			ruleset.Rules.MergeQueue = &v1alpha1.RulesMergeQueue{
+				CheckResponseTimeoutMinutes:  params.CheckResponseTimeoutMinutes,
+				GroupingStrategy:             params.GroupingStrategy,
+				MaxEntriesToBuild:            params.MaxEntriesToBuild,
+				MaxEntriesToMerge:            params.MaxEntriesToMerge,
+				MergeMethod:                  params.MergeMethod,
+				MinEntriesToMerge:            params.MinEntriesToMerge,
+				MinEntriesToMergeWaitMinutes: params.MinEntriesToMergeWaitMinutes,
 			}
 		}
-		// No rules stays nil: go-github v62 omitted an empty list from the request, v90 would send [].
-		if githubRules != (github.RepositoryRulesetRules{}) {
-			githubRuleset.Rules = &githubRules
+		ruleset.Rules.CommitMessagePattern = patternRuleFromGitHub(rules.CommitMessagePattern)
+		ruleset.Rules.CommitAuthorEmailPattern = patternRuleFromGitHub(rules.CommitAuthorEmailPattern)
+		ruleset.Rules.CommitterEmailPattern = patternRuleFromGitHub(rules.CommitterEmailPattern)
+		ruleset.Rules.BranchNamePattern = patternRuleFromGitHub(rules.BranchNamePattern)
+		ruleset.Rules.TagNamePattern = patternRuleFromGitHub(rules.TagNamePattern)
+		if params := rules.CodeScanning; params != nil {
+			tools := make([]*v1alpha1.RulesCodeScanningTool, len(params.CodeScanningTools))
+			for i, tool := range params.CodeScanningTools {
+				tools[i] = &v1alpha1.RulesCodeScanningTool{
+					Tool:                    tool.Tool,
+					AlertsThreshold:         tool.AlertsThreshold,
+					SecurityAlertsThreshold: tool.SecurityAlertsThreshold,
+				}
+			}
+			util.SortRulesCodeScanningTools(tools)
+			ruleset.Rules.CodeScanning = &v1alpha1.RulesCodeScanning{CodeScanningTools: tools}
 		}
-
+		if params := rules.CodeQuality; params != nil {
+			ruleset.Rules.CodeQuality = &v1alpha1.RulesCodeQuality{Severity: params.Severity}
+		}
+		if params := rules.CodeCoverage; params != nil {
+			ruleset.Rules.CodeCoverage = &v1alpha1.RulesCodeCoverage{
+				MinimumCoverage: decimalFromGitHub(params.MinimumCoverage),
+				MaxCoverageDrop: decimalFromGitHub(params.MaxCoverageDrop),
+			}
+		}
+		if params := rules.CopilotCodeReview; params != nil {
+			ruleset.Rules.CopilotCodeReview = &v1alpha1.RulesCopilotCodeReview{
+				ReviewOnPush:            pointer.To(params.ReviewOnPush),
+				ReviewDraftPullRequests: pointer.To(params.ReviewDraftPullRequests),
+			}
+		}
+		if params := rules.FileExtensionRestriction; params != nil {
+			ruleset.Rules.FileExtensionRestriction = &v1alpha1.RulesFileExtensionRestriction{
+				RestrictedFileExtensions: util.SortAndReturn(params.RestrictedFileExtensions),
+			}
+		}
+		if params := rules.FilePathRestriction; params != nil {
+			ruleset.Rules.FilePathRestriction = &v1alpha1.RulesFilePathRestriction{
+				RestrictedFilePaths: util.SortAndReturn(params.RestrictedFilePaths),
+				IgnoredFilePaths:    util.SortAndReturn(util.DefaultToStringSlice(params.IgnoredFilePaths)),
+			}
+		}
+		if params := rules.MaxFilePathLength; params != nil {
+			ruleset.Rules.MaxFilePathLength = &v1alpha1.RulesMaxFilePathLength{MaxFilePathLength: params.MaxFilePathLength}
+		}
+		if params := rules.MaxFileSize; params != nil {
+			ruleset.Rules.MaxFileSize = &v1alpha1.RulesMaxFileSize{
+				MaxFileSize:      params.MaxFileSize,
+				IgnoredFilePaths: util.SortAndReturn(util.DefaultToStringSlice(params.IgnoredFilePaths)),
+			}
+		}
 	}
-	return githubRuleset
+	return ruleset, nil
 }
+
+// patternRuleFromGitHub converts a GitHub pattern rule into its CR form. A missing
+// name becomes "" and a missing negate becomes false.
+func patternRuleFromGitHub(params *rulesets.PatternRuleParameters) *v1alpha1.RulesPattern {
+	if params == nil {
+		return nil
+	}
+	return &v1alpha1.RulesPattern{
+		Name:     util.StringDerefToPointer(params.Name, ""),
+		Negate:   util.BoolDerefToPointer(params.Negate, false),
+		Operator: params.Operator,
+		Pattern:  params.Pattern,
+	}
+}
+
+// unmanagedParametersSentence states that the next update of ruleset resets the
+// parameters keys of its ruleType rule.
+func unmanagedParametersSentence(ruleset, ruleType string, keys []string) string {
+	if len(keys) == 1 {
+		return fmt.Sprintf("ruleset %s: rule %s has parameter %s that this provider does not manage; GitHub resets it when the ruleset is next updated", ruleset, ruleType, keys[0])
+	}
+	return fmt.Sprintf("ruleset %s: rule %s has parameters %s that this provider does not manage; GitHub resets them when the ruleset is next updated", ruleset, ruleType, strings.Join(keys, ", "))
+}
+
+// unmanagedRuleTypes returns the sorted, unique types of the unmodelled rules in a
+// ruleset. An update would delete these rules, so the caller leaves the ruleset as it is.
+func unmanagedRuleTypes(rules []*rulesets.Rule) []string {
+	var types []string
+	for _, rule := range rules {
+		if !rulesets.IsModelled(rule.Type) {
+			types = append(types, rule.Type)
+		}
+	}
+	slices.Sort(types)
+	return slices.Compact(types)
+}
+
+// crRepoRulesToRulesConfig transforms a RepositoryRuleset object from the Crossplane resource
+// into a Ruleset object that can be used with the GitHub API. It normalises the ruleset
+// first, so it takes the ruleset as declared or as getRepositoryRulesMapFromCr returns it.
+//
+//nolint:gocyclo
+func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) (*rulesets.Ruleset, error) {
+	rule, err := normalizeRuleset(rule)
+	if err != nil {
+		return nil, err
+	}
+	// Bypass actors and rules are always sent, as [] when empty, because an update keeps
+	// what GitHub holds for an omitted key.
+	githubRuleset := &rulesets.Ruleset{
+		Name:         rule.Name,
+		Enforcement:  *rule.Enforcement,
+		Target:       rule.Target,
+		BypassActors: make([]*rulesets.BypassActor, len(rule.BypassActors)),
+		Rules:        []*rulesets.Rule{},
+	}
+
+	for i, actor := range rule.BypassActors {
+		githubRuleset.BypassActors[i] = &rulesets.BypassActor{
+			ActorID:    actor.ActorID,
+			ActorType:  actor.ActorType,
+			BypassMode: actor.BypassMode,
+		}
+	}
+
+	// A push ruleset is sent "conditions": {}, which clears a ref_name left from an
+	// earlier target. GitHub rejects ref_name on push rulesets.
+	if pointer.Deref(rule.Target, "") == rulesetTargetPush {
+		githubRuleset.Conditions = &rulesets.Conditions{}
+	} else if rule.Conditions != nil && rule.Conditions.RefName != nil {
+		githubRuleset.Conditions = &rulesets.Conditions{
+			RefName: &rulesets.RefName{
+				Include: util.DefaultToStringSlice(rule.Conditions.RefName.Include),
+				Exclude: util.DefaultToStringSlice(rule.Conditions.RefName.Exclude),
+			},
+		}
+	}
+	githubRules := rulesets.ModelledRules{}
+	if rule.Rules.RequiredStatusChecks != nil {
+		params := rulesets.RequiredStatusChecksRuleParameters{
+			DoNotEnforceOnCreate:             *rule.Rules.RequiredStatusChecks.DoNotEnforceOnCreate,
+			StrictRequiredStatusChecksPolicy: *rule.Rules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy,
+		}
+		requiredStatusChecks := make([]*rulesets.StatusCheck, len(rule.Rules.RequiredStatusChecks.RequiredStatusChecks))
+		for i, statusCheck := range rule.Rules.RequiredStatusChecks.RequiredStatusChecks {
+			requiredStatusChecks[i] = &rulesets.StatusCheck{
+				Context:       statusCheck.Context,
+				IntegrationID: statusCheck.IntegrationID,
+			}
+		}
+		params.RequiredStatusChecks = requiredStatusChecks
+		githubRules.RequiredStatusChecks = &params
+	}
+
+	if *rule.Rules.Creation {
+		githubRules.Creation = &rulesets.EmptyRuleParameters{}
+	}
+
+	if *rule.Rules.Deletion {
+		githubRules.Deletion = &rulesets.EmptyRuleParameters{}
+	}
+
+	if *rule.Rules.RequiredLinearHistory {
+		githubRules.RequiredLinearHistory = &rulesets.EmptyRuleParameters{}
+	}
+
+	if *rule.Rules.RequiredSignatures {
+		githubRules.RequiredSignatures = &rulesets.EmptyRuleParameters{}
+	}
+	if *rule.Rules.NonFastForward {
+		githubRules.NonFastForward = &rulesets.EmptyRuleParameters{}
+	}
+	if *rule.Rules.Update {
+		githubRules.Update = &rulesets.UpdateRuleParameters{UpdateAllowsFetchAndMerge: rule.Rules.UpdateAllowsFetchAndMerge}
+	}
+	if *rule.Rules.LicenseComplianceScanning {
+		githubRules.LicenseComplianceScanning = &rulesets.EmptyRuleParameters{}
+	}
+	if r := rule.Rules.RequireSecretScanningAlertResolution; r != nil {
+		params := &rulesets.RequireSecretScanningAlertResolutionRuleParameters{SecretTypes: []string{}}
+		for _, t := range r.SecretTypes {
+			params.SecretTypes = append(params.SecretTypes, string(t))
+		}
+		githubRules.RequireSecretScanningAlertResolution = params
+	}
+	if rule.Rules.PullRequest != nil {
+		githubRules.PullRequest = pullRequestToGitHub(rule.Rules.PullRequest)
+	}
+	if rule.Rules.RequiredDeployments != nil {
+		githubRules.RequiredDeployments = &rulesets.RequiredDeploymentsRuleParameters{
+			RequiredDeploymentEnvironments: rule.Rules.RequiredDeployments.Environments,
+		}
+	}
+	if mq := rule.Rules.MergeQueue; mq != nil {
+		githubRules.MergeQueue = &rulesets.MergeQueueRuleParameters{
+			CheckResponseTimeoutMinutes:  mq.CheckResponseTimeoutMinutes,
+			GroupingStrategy:             mq.GroupingStrategy,
+			MaxEntriesToBuild:            mq.MaxEntriesToBuild,
+			MaxEntriesToMerge:            mq.MaxEntriesToMerge,
+			MergeMethod:                  mq.MergeMethod,
+			MinEntriesToMerge:            mq.MinEntriesToMerge,
+			MinEntriesToMergeWaitMinutes: mq.MinEntriesToMergeWaitMinutes,
+		}
+	}
+	githubRules.CommitMessagePattern = patternRuleToGitHub(rule.Rules.CommitMessagePattern)
+	githubRules.CommitAuthorEmailPattern = patternRuleToGitHub(rule.Rules.CommitAuthorEmailPattern)
+	githubRules.CommitterEmailPattern = patternRuleToGitHub(rule.Rules.CommitterEmailPattern)
+	githubRules.BranchNamePattern = patternRuleToGitHub(rule.Rules.BranchNamePattern)
+	githubRules.TagNamePattern = patternRuleToGitHub(rule.Rules.TagNamePattern)
+	if rule.Rules.CodeScanning != nil {
+		tools := make([]*rulesets.CodeScanningTool, len(rule.Rules.CodeScanning.CodeScanningTools))
+		for i, tool := range rule.Rules.CodeScanning.CodeScanningTools {
+			tools[i] = &rulesets.CodeScanningTool{
+				Tool:                    tool.Tool,
+				AlertsThreshold:         tool.AlertsThreshold,
+				SecurityAlertsThreshold: tool.SecurityAlertsThreshold,
+			}
+		}
+		githubRules.CodeScanning = &rulesets.CodeScanningRuleParameters{CodeScanningTools: tools}
+	}
+	if rule.Rules.CodeQuality != nil {
+		githubRules.CodeQuality = &rulesets.CodeQualityRuleParameters{Severity: rule.Rules.CodeQuality.Severity}
+	}
+	if cc := rule.Rules.CodeCoverage; cc != nil {
+		minimum, err := decimalToGitHub(cc.MinimumCoverage)
+		if err != nil {
+			return nil, errors.Wrapf(err, "ruleset %s: minimumCoverage", rule.Name)
+		}
+		maxDrop, err := decimalToGitHub(cc.MaxCoverageDrop)
+		if err != nil {
+			return nil, errors.Wrapf(err, "ruleset %s: maxCoverageDrop", rule.Name)
+		}
+		githubRules.CodeCoverage = &rulesets.CodeCoverageRuleParameters{MinimumCoverage: minimum, MaxCoverageDrop: maxDrop}
+	}
+	if rule.Rules.CopilotCodeReview != nil {
+		githubRules.CopilotCodeReview = &rulesets.CopilotCodeReviewRuleParameters{
+			ReviewOnPush:            *rule.Rules.CopilotCodeReview.ReviewOnPush,
+			ReviewDraftPullRequests: *rule.Rules.CopilotCodeReview.ReviewDraftPullRequests,
+		}
+	}
+	if rule.Rules.FileExtensionRestriction != nil {
+		githubRules.FileExtensionRestriction = &rulesets.FileExtensionRestrictionRuleParameters{
+			RestrictedFileExtensions: rule.Rules.FileExtensionRestriction.RestrictedFileExtensions,
+		}
+	}
+	if rule.Rules.FilePathRestriction != nil {
+		githubRules.FilePathRestriction = &rulesets.FilePathRestrictionRuleParameters{
+			RestrictedFilePaths: rule.Rules.FilePathRestriction.RestrictedFilePaths,
+			IgnoredFilePaths:    rule.Rules.FilePathRestriction.IgnoredFilePaths,
+		}
+	}
+	if rule.Rules.MaxFilePathLength != nil {
+		githubRules.MaxFilePathLength = &rulesets.MaxFilePathLengthRuleParameters{MaxFilePathLength: rule.Rules.MaxFilePathLength.MaxFilePathLength}
+	}
+	if rule.Rules.MaxFileSize != nil {
+		githubRules.MaxFileSize = &rulesets.MaxFileSizeRuleParameters{
+			MaxFileSize:      rule.Rules.MaxFileSize.MaxFileSize,
+			IgnoredFilePaths: rule.Rules.MaxFileSize.IgnoredFilePaths,
+		}
+	}
+	rules, err := githubRules.Encode()
+	if err != nil {
+		return nil, err
+	}
+	githubRuleset.Rules = rules
+	return githubRuleset, nil
+}
+
+// patternRuleToGitHub converts a CR pattern rule into the GitHub API form.
+func patternRuleToGitHub(p *v1alpha1.RulesPattern) *rulesets.PatternRuleParameters {
+	if p == nil {
+		return nil
+	}
+	return &rulesets.PatternRuleParameters{
+		Name:     p.Name,
+		Negate:   p.Negate,
+		Operator: p.Operator,
+		Pattern:  p.Pattern,
+	}
+}
+
+const (
+	// rulesetSourceRepository is the source_type of a ruleset the repository holds itself.
+	rulesetSourceRepository = "Repository"
+	rulesetTargetPush       = "push"
+
+	// refNameInclude and refNameExclude name the lists of a ruleset's ref conditions.
+	refNameInclude = "include"
+	refNameExclude = "exclude"
+
+	// secretTypeProviderPatterns is the secret type GitHub applies when none is listed.
+	secretTypeProviderPatterns v1alpha1.RulesSecretType = "provider_patterns"
+
+	// The merge methods a pull request may be merged with, all allowed when none is listed.
+	mergeMethodMerge  v1alpha1.RulesMergeMethod = "merge"
+	mergeMethodSquash v1alpha1.RulesMergeMethod = "squash"
+	mergeMethodRebase v1alpha1.RulesMergeMethod = "rebase"
+)
+
+// rulesetConditions returns a ruleset's conditions in the form that is compared and
+// sent. A push ruleset gets nil, as GitHub stores it. Other rulesets get both ref
+// lists, sorted.
+func rulesetConditions(target string, c *v1alpha1.RulesetConditions) *v1alpha1.RulesetConditions {
+	if target == rulesetTargetPush {
+		return nil
+	}
+	refName := &v1alpha1.RulesetRefName{Include: []string{}, Exclude: []string{}}
+	if c != nil && c.RefName != nil {
+		refName.Include = util.SortAndReturn(slices.Clone(util.DefaultToStringSlice(c.RefName.Include)))
+		refName.Exclude = util.SortAndReturn(slices.Clone(util.DefaultToStringSlice(c.RefName.Exclude)))
+	}
+	return &v1alpha1.RulesetConditions{RefName: refName}
+}
+
+// rulesetBypassActors returns bypass actors in the form that is compared and sent:
+// sorted, the mode defaulting to "always", and nil for an empty list.
+func rulesetBypassActors(actors []*v1alpha1.RulesetByPassActors) []*v1alpha1.RulesetByPassActors {
+	if len(actors) == 0 {
+		return nil
+	}
+	out := make([]*v1alpha1.RulesetByPassActors, len(actors))
+	for i, actor := range actors {
+		out[i] = actor.DeepCopy()
+		out[i].BypassMode = util.StringDerefToPointer(actor.BypassMode, "always")
+	}
+	util.SortRulesBypassActors(out)
+	return out
+}
+
+// duplicateBypassActor returns an error naming the first actor the ruleset lists twice.
+// GitHub stores each actor once, so the CR must list each once too. Actors match on type,
+// mode and ID; OrganizationAdmin and DeployKey match on type and mode, as GitHub stores
+// their ID as null. The actors come from rulesetBypassActors, so each mode is set.
+func duplicateBypassActor(ruleset string, actors []*v1alpha1.RulesetByPassActors) error {
+	seen := map[string]bool{}
+	for _, a := range actors {
+		actor := pointer.Deref(a.ActorType, "")
+		if !actorIDIgnored(a.ActorType) && a.ActorID != nil {
+			actor += fmt.Sprintf(" %d", *a.ActorID)
+		}
+		key := actor + "/" + pointer.Deref(a.BypassMode, "")
+		if seen[key] {
+			return errors.Errorf("ruleset %s lists bypass actor %s twice with bypassMode %s", ruleset, actor, pointer.Deref(a.BypassMode, ""))
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// duplicateRefPattern returns an error naming the first ref pattern the ruleset lists twice
+// in include or exclude. GitHub stores each pattern once, so the CR must list each once too.
+// The conditions come from rulesetConditions, so both lists are sorted.
+func duplicateRefPattern(ruleset string, c *v1alpha1.RulesetConditions) error {
+	if c == nil {
+		return nil
+	}
+	for _, list := range []struct {
+		name     string
+		patterns []string
+	}{{refNameInclude, c.RefName.Include}, {refNameExclude, c.RefName.Exclude}} {
+		for i := 1; i < len(list.patterns); i++ {
+			if list.patterns[i] == list.patterns[i-1] {
+				return errors.Errorf("ruleset %s lists ref pattern %s twice in %s", ruleset, list.patterns[i], list.name)
+			}
+		}
+	}
+	return nil
+}
+
+// actorIDIgnored reports whether GitHub stores this actor type with a null actor_id.
+func actorIDIgnored(actorType *string) bool {
+	t := pointer.Deref(actorType, "")
+	return t == "OrganizationAdmin" || t == "DeployKey"
+}
+
+// secretTypeSet returns secret types in the form that is compared and sent: sorted.
+// An empty list becomes provider_patterns, GitHub's default.
+func secretTypeSet(types []v1alpha1.RulesSecretType) []v1alpha1.RulesSecretType {
+	if len(types) == 0 {
+		return []v1alpha1.RulesSecretType{secretTypeProviderPatterns}
+	}
+	out := slices.Clone(types)
+	slices.Sort(out)
+	return out
+}
+
+// withoutUndeclared gives gh, GitHub's form of the ruleset, the CR's values for fields
+// GitHub fills in by itself: OrganizationAdmin and DeployKey actor IDs and a missing
+// update_allows_fetch_and_merge. It sorts gh's bypass actors.
+func withoutUndeclared(gh *v1alpha1.RepositoryRuleset, cr v1alpha1.RepositoryRuleset) {
+	for _, actor := range gh.BypassActors {
+		if !actorIDIgnored(actor.ActorType) {
+			continue
+		}
+		i := slices.IndexFunc(cr.BypassActors, func(c *v1alpha1.RulesetByPassActors) bool {
+			return pointer.Deref(c.ActorType, "") == *actor.ActorType && pointer.Deref(c.BypassMode, "") == pointer.Deref(actor.BypassMode, "")
+		})
+		if i >= 0 {
+			actor.ActorID = cr.BypassActors[i].ActorID
+		}
+	}
+	util.SortRulesBypassActors(gh.BypassActors)
+
+	if gh.Rules == nil || cr.Rules == nil {
+		return
+	}
+	if gh.Rules.UpdateAllowsFetchAndMerge == nil && *gh.Rules.Update {
+		gh.Rules.UpdateAllowsFetchAndMerge = cr.Rules.UpdateAllowsFetchAndMerge
+	}
+}
+
+// pullRequestDefaults fills a pull_request rule's unset parameters with GitHub's defaults
+// and sorts its merge methods, dismissal actors and required reviewers, which GitHub
+// treats as sets. It is applied to the CR and to GitHub's form alike, so they compare equal.
+func pullRequestDefaults(p *v1alpha1.RulesPullRequest) {
+	p.DismissStaleReviewsOnPush = util.BoolDerefToPointer(p.DismissStaleReviewsOnPush, false)
+	p.RequireCodeOwnerReview = util.BoolDerefToPointer(p.RequireCodeOwnerReview, false)
+	p.RequireLastPushApproval = util.BoolDerefToPointer(p.RequireLastPushApproval, false)
+	p.RequiredReviewThreadResolution = util.BoolDerefToPointer(p.RequiredReviewThreadResolution, false)
+	p.RequiredApprovingReviewCount = util.IntDerefToPointer(p.RequiredApprovingReviewCount, 0)
+
+	if len(p.AllowedMergeMethods) == 0 {
+		p.AllowedMergeMethods = []v1alpha1.RulesMergeMethod{mergeMethodMerge, mergeMethodSquash, mergeMethodRebase}
+	}
+	p.AllowedMergeMethods = slices.Clone(p.AllowedMergeMethods)
+	slices.Sort(p.AllowedMergeMethods)
+
+	if p.DismissalRestriction == nil {
+		p.DismissalRestriction = &v1alpha1.RulesDismissalRestriction{}
+	}
+	if p.DismissalRestriction.AllowedActors == nil {
+		p.DismissalRestriction.AllowedActors = []*v1alpha1.RulesDismissalActor{}
+	}
+	slices.SortFunc(p.DismissalRestriction.AllowedActors, func(a, b *v1alpha1.RulesDismissalActor) int {
+		return stdcmp.Or(strings.Compare(a.Type, b.Type), stdcmp.Compare(a.ID, b.ID))
+	})
+
+	if p.RequiredReviewers == nil {
+		p.RequiredReviewers = []*v1alpha1.RulesRequiredReviewer{}
+	}
+	for _, r := range p.RequiredReviewers {
+		r.FilePatterns = util.DefaultToStringSlice(r.FilePatterns)
+	}
+	slices.SortFunc(p.RequiredReviewers, func(a, b *v1alpha1.RulesRequiredReviewer) int {
+		return stdcmp.Or(
+			strings.Compare(a.Reviewer.Type, b.Reviewer.Type),
+			stdcmp.Compare(a.Reviewer.ID, b.Reviewer.ID),
+			stdcmp.Compare(a.MinimumApprovals, b.MinimumApprovals),
+			slices.Compare(a.FilePatterns, b.FilePatterns),
+		)
+	})
+}
+
+// pullRequestFromGitHub converts GitHub's pull_request parameters into their CR form,
+// with defaults filled in. An actor id that is missing or not an integer is an error.
+func pullRequestFromGitHub(params *rulesets.PullRequestRuleParameters) (*v1alpha1.RulesPullRequest, error) {
+	p := &v1alpha1.RulesPullRequest{
+		RequireCodeOwnerReview:                     pointer.To(params.RequireCodeOwnerReview),
+		RequireLastPushApproval:                    pointer.To(params.RequireLastPushApproval),
+		RequiredReviewThreadResolution:             pointer.To(params.RequiredReviewThreadResolution),
+		RequiredApprovingReviewCount:               pointer.To(params.RequiredApprovingReviewCount),
+		DismissStaleReviewsOnPush:                  pointer.To(params.DismissStaleReviewsOnPush),
+		RequireExtraApprovalForUnattributedChanges: params.RequireExtraApprovalForUnattributedChanges,
+	}
+	for _, m := range params.AllowedMergeMethods {
+		p.AllowedMergeMethods = append(p.AllowedMergeMethods, v1alpha1.RulesMergeMethod(m))
+	}
+	if dr := params.DismissalRestriction; dr != nil {
+		p.DismissalRestriction = &v1alpha1.RulesDismissalRestriction{Enabled: dr.Enabled}
+		for _, a := range dr.AllowedActors {
+			id, err := a.ID.Int64()
+			if err != nil {
+				return nil, errors.Wrap(err, "dismissal actor id")
+			}
+			p.DismissalRestriction.AllowedActors = append(p.DismissalRestriction.AllowedActors, &v1alpha1.RulesDismissalActor{ID: id, Type: a.Type})
+		}
+	}
+	for _, r := range params.RequiredReviewers {
+		id, err := r.Reviewer.ID.Int64()
+		if err != nil {
+			return nil, errors.Wrap(err, "required reviewer id")
+		}
+		p.RequiredReviewers = append(p.RequiredReviewers, &v1alpha1.RulesRequiredReviewer{
+			FilePatterns:     slices.Clone(r.FilePatterns),
+			MinimumApprovals: r.MinimumApprovals,
+			Reviewer:         v1alpha1.RulesReviewer{ID: id, Type: r.Reviewer.Type},
+		})
+	}
+	pullRequestDefaults(p)
+	return p, nil
+}
+
+// pullRequestToGitHub converts a defaulted pull_request rule into GitHub's form. Every
+// modelled parameter is sent, defaults included.
+func pullRequestToGitHub(p *v1alpha1.RulesPullRequest) *rulesets.PullRequestRuleParameters {
+	params := &rulesets.PullRequestRuleParameters{
+		AllowedMergeMethods:            make([]string, len(p.AllowedMergeMethods)),
+		DismissStaleReviewsOnPush:      *p.DismissStaleReviewsOnPush,
+		DismissalRestriction:           &rulesets.DismissalRestriction{Enabled: p.DismissalRestriction.Enabled, AllowedActors: make([]*rulesets.Actor, len(p.DismissalRestriction.AllowedActors))},
+		RequireCodeOwnerReview:         *p.RequireCodeOwnerReview,
+		RequireLastPushApproval:        *p.RequireLastPushApproval,
+		RequiredApprovingReviewCount:   *p.RequiredApprovingReviewCount,
+		RequiredReviewThreadResolution: *p.RequiredReviewThreadResolution,
+		RequiredReviewers:              make([]*rulesets.RequiredReviewer, len(p.RequiredReviewers)),
+
+		RequireExtraApprovalForUnattributedChanges: p.RequireExtraApprovalForUnattributedChanges,
+	}
+	for i, m := range p.AllowedMergeMethods {
+		params.AllowedMergeMethods[i] = string(m)
+	}
+	for i, a := range p.DismissalRestriction.AllowedActors {
+		params.DismissalRestriction.AllowedActors[i] = &rulesets.Actor{ID: json.Number(strconv.FormatInt(a.ID, 10)), Type: a.Type}
+	}
+	for i, r := range p.RequiredReviewers {
+		params.RequiredReviewers[i] = &rulesets.RequiredReviewer{
+			FilePatterns:     r.FilePatterns,
+			MinimumApprovals: r.MinimumApprovals,
+			Reviewer:         rulesets.Actor{ID: json.Number(strconv.FormatInt(r.Reviewer.ID, 10)), Type: r.Reviewer.Type},
+		}
+	}
+	return params
+}
+
+// canonicalDecimal returns the decimal number s in its shortest form, "80.0" as "80",
+// so equal numbers compare equal. A non-number is returned as is.
+func canonicalDecimal(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	f, err := strconv.ParseFloat(*s, 64)
+	if err != nil {
+		return s
+	}
+	return pointer.To(strconv.FormatFloat(f, 'f', -1, 64))
+}
+
+// decimalFromGitHub converts a number GitHub returns into its CR form, a decimal string.
+func decimalFromGitHub(f *float64) *string {
+	if f == nil {
+		return nil
+	}
+	return pointer.To(strconv.FormatFloat(*f, 'f', -1, 64))
+}
+
+// decimalToGitHub converts a CR decimal string into the number GitHub takes.
+func decimalToGitHub(s *string) (*float64, error) {
+	if s == nil {
+		return nil, nil
+	}
+	f, err := strconv.ParseFloat(*s, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// maxRulesetsPerRepository is GitHub's per-repository limit on rulesets.
+const maxRulesetsPerRepository = 75
 
 // updateRepositoryRules synchronizes the repository rules of a GitHub repository
 // to match with those detailed in the repository resource object.
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
 func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	// Generate a map of the repository rules from the Crossplane resource
+	crRToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
+	if err != nil {
+		// The spec is invalid; Observe reports it through RulesetsPartial.
+		return nil
+	}
 	// Fetch the current repository rules from GitHub
 	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if ghclient.Is403(err) {
+		// GitHub refuses rulesets on this repository; Observe reports it through RulesetsPartial.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	// Generate a map of the repository rules from the Crossplane resource
-	crRToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
-	// Generate a map of the repository rules from GitHub
-	ghRToConfig, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
+	// Generate a map of the repository rules from GitHub. Rulesets holding rule types the
+	// provider does not model are left out of it and named in report.skipped.
+	ghRToConfig, report, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
 	if err != nil {
 		return err
 	}
+	applyRulesetReport(crRToConfig, report)
 	// Determine which rules need to be deleted, added, or updated
 	toDelete, toAdd, toUpdate := util.DiffRepositoryRulesets(ghRToConfig, crRToConfig)
 
 	// Delete the rules that are no longer needed
-	for name := range toDelete {
-		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
-		_, err = gh.Repositories.DeleteRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID)
-		if err != nil {
+	deleteRules := func() error {
+		for name := range toDelete {
+			rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
+			_, err = gh.Rulesets.DeleteRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// Create and update before deleting, so a failed create leaves the old ruleset in place.
+	// Over GitHub's cap the surplus rulesets go first, so the creates fit.
+	deleteFirst := len(ghRepoRules)+len(toAdd) > maxRulesetsPerRepository
+	if deleteFirst {
+		if err := deleteRules(); err != nil {
 			return err
 		}
 	}
 	// Add the new rules
 	for _, rule := range toAdd {
-		_, _, err := gh.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, *crRepoRulesToRulesConfig(rule))
+		ruleset, err := crRepoRulesToRulesConfig(rule)
+		if err != nil {
+			return err
+		}
+		_, _, err = gh.Rulesets.CreateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, *ruleset)
 		if err != nil {
 			return err
 		}
@@ -2835,18 +3505,25 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	// Update the existing rules
 	for name, rule := range toUpdate {
 		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
-		_, _, err := gh.Repositories.UpdateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID, *crRepoRulesToRulesConfig(rule))
+		ruleset, err := crRepoRulesToRulesConfig(rule)
 		if err != nil {
 			return err
 		}
+		_, _, err = gh.Rulesets.UpdateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID, *ruleset)
+		if err != nil {
+			return err
+		}
+	}
+	if !deleteFirst {
+		return deleteRules()
 	}
 	return nil
 }
 
 // findRulesetIDByName iterates over a slice of GitHub Ruleset pointers and returns the ID of the ruleset
 // that matches the provided name. If no match is found, it returns an error.
-func findRulesetIDByName(rulesets []*github.RepositoryRuleset, name string) (int64, error) {
-	for _, ruleset := range rulesets {
+func findRulesetIDByName(ghRulesets []*rulesets.Ruleset, name string) (int64, error) {
+	for _, ruleset := range ghRulesets {
 		if ruleset.Name == name {
 			return *ruleset.ID, nil
 		}

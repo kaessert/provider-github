@@ -43,6 +43,7 @@ func TestWrapperParity(t *testing.T) {
 		"UsersClient":         "usersClient",
 		"TeamsClient":         "teamsClient",
 		"RepositoriesClient":  "repositoriesClient",
+		"RulesetsClient":      "rulesetsClient",
 	}
 
 	interfaceMethods := parseInterfaceMethods(t, "services.go")

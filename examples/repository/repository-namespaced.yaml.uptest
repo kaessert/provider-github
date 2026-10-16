@@ -87,6 +87,7 @@ crossplane.io/update-test: |
           requiredLinearHistory: false
           requiredSignatures: false
           nonFastForward: false
+          licenseComplianceScanning: false
     ignoreListElementKeys:
       - bypassActors
   - field: archived

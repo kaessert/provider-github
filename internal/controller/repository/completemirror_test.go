@@ -63,7 +63,7 @@ type observed struct {
 func observeBoth(t *testing.T, repos *fake.MockRepositoriesClient, cr *v1alpha1.Repository) map[string]observed {
 	t.Helper()
 	cr.Spec.ForProvider.Org = "acme"
-	e := &external{github: clientFor(repos), secretNamespace: "default"}
+	e := &external{github: clientFor(repos, upToDateRulesets()), secretNamespace: "default"}
 	out := map[string]observed{}
 
 	ns := ddtest.Convert(t, cr.DeepCopy(), &namespacedv1alpha1.Repository{})

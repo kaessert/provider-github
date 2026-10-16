@@ -38,9 +38,14 @@ type RepositoryParameters struct {
 	// +optional
 	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules"`
 
-	// RepositoryRules are the rules for the repository
+	// RepositoryRules are the rulesets of the repository. When set, the list is
+	// authoritative: the repository ends up with exactly the rulesets it names, and
+	// an empty list ([]) deletes them all. When the field is absent, the rulesets
+	// on GitHub stay as they are. GitHub allows at most 75 rulesets per repository.
+	// +kubebuilder:validation:MaxItems=75
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.name == x.name))",message="each ruleset name may appear once in repositoryRules"
 	// +optional
-	RepositoryRules []RepositoryRuleset `json:"repositoryRules"`
+	RepositoryRules *[]RepositoryRuleset `json:"repositoryRules,omitzero"`
 
 	// Creates a new repository using a repository template
 	CreateFromTemplate *TemplateRepo `json:"createFromTemplate,omitempty"`
@@ -390,19 +395,28 @@ type BranchProtectionRestrictions struct {
 }
 
 // RepositoryRuleset represents the rules for a repository
+// +kubebuilder:validation:XValidation:rule="(has(self.target) && self.target == 'push') || !has(self.rules) || !(has(self.rules.fileExtensionRestriction) || has(self.rules.filePathRestriction) || has(self.rules.maxFilePathLength) || has(self.rules.maxFileSize))",message="fileExtensionRestriction, filePathRestriction, maxFilePathLength and maxFileSize apply to a push ruleset"
+// +kubebuilder:validation:XValidation:rule="!(has(self.target) && self.target == 'push') || !has(self.conditions)",message="conditions apply to a branch or tag ruleset"
 type RepositoryRuleset struct {
 	// Name is the name of the ruleset
+	// +kubebuilder:validation:MaxLength=255
 	Name string `json:"name"`
-	// Enforcement is the enforcement level of the ruleset, can be one of: "disabled", "active"
+	// Enforcement is the enforcement level of the ruleset, one of "disabled", "active" or
+	// "evaluate" (GitHub Enterprise only). Defaults to "active".
+	// +kubebuilder:validation:Enum=disabled;active;evaluate
 	// +optional
 	Enforcement *string `json:"enforcement,omitempty"`
-	// Target is the target of the ruleset, can be one of: "branch", "tag"
+	// Target is what the ruleset applies to, one of "branch", "tag" or "push". Defaults to "branch".
+	// +kubebuilder:validation:Enum=branch;tag;push
 	// +optional
 	Target *string `json:"target,omitempty"`
-	// BypassActors is the list of actors that can bypass the ruleset
+	// BypassActors is the list of actors that can bypass the ruleset. An empty list
+	// makes the ruleset apply to everyone. Each actor is listed once: an unset BypassMode
+	// counts as "always", and OrganizationAdmin and DeployKey match on ActorType and BypassMode.
 	// +optional
 	BypassActors []*RulesetByPassActors `json:"bypassActors"`
-	// Conditions is the conditions for the ruleset, which branches or tags are included or excluded from the ruleset
+	// Conditions is the conditions for the ruleset, which branches or tags are included or excluded from the ruleset.
+	// Branch and tag rulesets only. A push ruleset applies to every push.
 	// +optional
 	Conditions *RulesetConditions `json:"conditions,omitempty"`
 	// Rules is the rules for the ruleset
@@ -411,25 +425,32 @@ type RepositoryRuleset struct {
 }
 
 type RulesetByPassActors struct {
-	// ActorId is the ID of the actor
+	// ActorId is the ID of the actor: the App ID for Integration, the role ID for
+	// RepositoryRole, the team ID for Team and the user ID for User. OrganizationAdmin
+	// and DeployKey are identified by their type alone, so ActorId is optional for them.
 	// +optional
 	ActorID *int64 `json:"actorId,omitempty"`
-	// ActorType is the type of the actor, can be one of: Integration, OrganizationAdmin, RepositoryRole, Team
+	// ActorType is the type of the actor, one of: Integration, OrganizationAdmin, RepositoryRole, Team, DeployKey, User
+	// +kubebuilder:validation:Enum=Integration;OrganizationAdmin;RepositoryRole;Team;DeployKey;User
 	// +optional
 	ActorType *string `json:"actorType,omitempty"`
-	// BypassMode is the bypass mode of the actor, can be one of: "always", "pull_request"
+	// BypassMode is the bypass mode of the actor, one of: "always", "pull_request", "exempt"
+	// +kubebuilder:validation:Enum=always;pull_request;exempt
 	// +optional
 	BypassMode *string `json:"bypassMode,omitempty"`
 }
 
 type RulesetConditions struct {
+	// RefName selects the refs the ruleset applies to. Unset selects an empty set of refs.
+	// +optional
 	RefName *RulesetRefName `json:"refName,omitempty"`
 }
 
 type RulesetRefName struct {
-	// Include is the list of branches or tags to include
+	// Include is the list of refs to include: full ref patterns such as
+	// "refs/heads/main" or "refs/tags/v*", or "~DEFAULT_BRANCH" or "~ALL". Each pattern is listed once.
 	Include []string `json:"include"`
-	// Exclude is the list of branches or tags to exclude
+	// Exclude is the list of refs to exclude, in the same form as Include. Each pattern is listed once.
 	Exclude []string `json:"exclude"`
 }
 
@@ -443,6 +464,10 @@ type Rules struct {
 	// Update restricts the update of matching branches or tags that are set in Conditions
 	// +optional
 	Update *bool `json:"update,omitempty"`
+	// UpdateAllowsFetchAndMerge lets the branch pull changes from its upstream repository
+	// while Update is on. Defaults to false. It takes effect on forks only.
+	// +optional
+	UpdateAllowsFetchAndMerge *bool `json:"updateAllowsFetchAndMerge,omitempty"`
 	// RequiredLinearHistory requires a linear commit history, which prevents merge commits.
 	// +optional
 	RequiredLinearHistory *bool `json:"requiredLinearHistory,omitempty"`
@@ -461,6 +486,187 @@ type Rules struct {
 	// NonFastForward restricts force pushes to matching branches or tags that are set in Conditions
 	// +optional
 	NonFastForward *bool `json:"nonFastForward,omitempty"`
+	// MergeQueue requires merges to go through a merge queue.
+	// +optional
+	MergeQueue *RulesMergeQueue `json:"mergeQueue,omitempty"`
+	// CommitMessagePattern requires commit messages to match a pattern.
+	// +optional
+	CommitMessagePattern *RulesPattern `json:"commitMessagePattern,omitempty"`
+	// CommitAuthorEmailPattern requires commit author emails to match a pattern.
+	// +optional
+	CommitAuthorEmailPattern *RulesPattern `json:"commitAuthorEmailPattern,omitempty"`
+	// CommitterEmailPattern requires committer emails to match a pattern.
+	// +optional
+	CommitterEmailPattern *RulesPattern `json:"committerEmailPattern,omitempty"`
+	// BranchNamePattern requires branch names to match a pattern.
+	// +optional
+	BranchNamePattern *RulesPattern `json:"branchNamePattern,omitempty"`
+	// TagNamePattern requires tag names to match a pattern.
+	// +optional
+	TagNamePattern *RulesPattern `json:"tagNamePattern,omitempty"`
+	// CodeScanning requires code scanning results before merging.
+	// +optional
+	CodeScanning *RulesCodeScanning `json:"codeScanning,omitempty"`
+	// CodeQuality requires code quality results before merging.
+	// +optional
+	CodeQuality *RulesCodeQuality `json:"codeQuality,omitempty"`
+	// CodeCoverage requires code coverage results before merging.
+	// +optional
+	CodeCoverage *RulesCodeCoverage `json:"codeCoverage,omitempty"`
+	// LicenseComplianceScanning requires license compliance scanning results before merging.
+	// It needs license compliance scanning enabled on GitHub, or GitHub answers 422.
+	// +optional
+	LicenseComplianceScanning *bool `json:"licenseComplianceScanning,omitempty"`
+	// RequireSecretScanningAlertResolution blocks merging pull requests with unresolved secret
+	// scanning alerts. {} turns it on for GitHub's default secret types. It needs GitHub Secret
+	// Protection or Advanced Security enabled, or GitHub answers 422.
+	// +optional
+	RequireSecretScanningAlertResolution *RulesSecretScanningAlertResolution `json:"requireSecretScanningAlertResolution,omitempty"`
+	// CopilotCodeReview requests a Copilot code review for new pull requests.
+	// +optional
+	CopilotCodeReview *RulesCopilotCodeReview `json:"copilotCodeReview,omitempty"`
+	// FileExtensionRestriction prevents pushing files with the listed extensions. Push rulesets only.
+	// +optional
+	FileExtensionRestriction *RulesFileExtensionRestriction `json:"fileExtensionRestriction,omitempty"`
+	// FilePathRestriction prevents pushing changes to the listed file paths. Push rulesets only.
+	// +optional
+	FilePathRestriction *RulesFilePathRestriction `json:"filePathRestriction,omitempty"`
+	// MaxFilePathLength prevents pushing files with longer paths. Push rulesets only.
+	// +optional
+	MaxFilePathLength *RulesMaxFilePathLength `json:"maxFilePathLength,omitempty"`
+	// MaxFileSize prevents pushing files larger than the limit. Push rulesets only.
+	// +optional
+	MaxFileSize *RulesMaxFileSize `json:"maxFileSize,omitempty"`
+}
+
+type RulesMergeQueue struct {
+	// CheckResponseTimeoutMinutes is the maximum time, in minutes, for a required status check to report a conclusion.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=360
+	CheckResponseTimeoutMinutes int `json:"checkResponseTimeoutMinutes"`
+	// GroupingStrategy decides which pull requests' checks must pass: all of them (ALLGREEN) or the head of the group (HEADGREEN).
+	// +kubebuilder:validation:Enum=ALLGREEN;HEADGREEN
+	GroupingStrategy string `json:"groupingStrategy"`
+	// MaxEntriesToBuild is the maximum number of queued pull requests requesting checks and workflow runs at the same time.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	MaxEntriesToBuild int `json:"maxEntriesToBuild"`
+	// MaxEntriesToMerge is the maximum number of pull requests merged together in a group.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	MaxEntriesToMerge int `json:"maxEntriesToMerge"`
+	// MergeMethod is the method used to merge changes in queued pull requests.
+	// +kubebuilder:validation:Enum=MERGE;SQUASH;REBASE
+	MergeMethod string `json:"mergeMethod"`
+	// MinEntriesToMerge is the minimum number of pull requests merged together in a group.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	MinEntriesToMerge int `json:"minEntriesToMerge"`
+	// MinEntriesToMergeWaitMinutes is the time, in minutes, the merge queue waits for MinEntriesToMerge pull requests.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=360
+	MinEntriesToMergeWaitMinutes int `json:"minEntriesToMergeWaitMinutes"`
+}
+
+type RulesPattern struct {
+	// Name is how this rule appears to users.
+	// +optional
+	Name *string `json:"name,omitempty"`
+	// Negate inverts the rule: matching the pattern fails it.
+	// +optional
+	Negate *bool `json:"negate,omitempty"`
+	// Operator is how the pattern is matched.
+	// +kubebuilder:validation:Enum=starts_with;ends_with;contains;regex
+	Operator string `json:"operator"`
+	// Pattern is the pattern to match with.
+	Pattern string `json:"pattern"`
+}
+
+type RulesCodeScanning struct {
+	// CodeScanningTools is the list of tools that must provide code scanning results.
+	CodeScanningTools []*RulesCodeScanningTool `json:"codeScanningTools"`
+}
+
+type RulesCodeScanningTool struct {
+	// Tool is the name of a code scanning tool.
+	Tool string `json:"tool"`
+	// AlertsThreshold is the severity level at which code scanning results that raise alerts block a reference update.
+	// +kubebuilder:validation:Enum=none;errors;errors_and_warnings;all
+	AlertsThreshold string `json:"alertsThreshold"`
+	// SecurityAlertsThreshold is the severity level at which code scanning results that raise security alerts block a reference update.
+	// +kubebuilder:validation:Enum=none;critical;high_or_higher;medium_or_higher;all
+	SecurityAlertsThreshold string `json:"securityAlertsThreshold"`
+}
+
+type RulesCodeQuality struct {
+	// Severity is the lowest severity of code quality results that blocks a pull request.
+	// +kubebuilder:validation:Enum=errors;warnings;notes;all
+	Severity string `json:"severity"`
+}
+
+type RulesCodeCoverage struct {
+	// MinimumCoverage is the lowest coverage percentage allowed, a decimal number from 0 to 100 such as "80" or "72.5".
+	// Unset leaves the minimum open.
+	// +kubebuilder:validation:Pattern=`^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$`
+	// +optional
+	MinimumCoverage *string `json:"minimumCoverage,omitempty"`
+	// MaxCoverageDrop is the largest drop in coverage percentage allowed, a decimal number from 0 to 100 such as "5" or "0.5".
+	// Unset leaves the drop open.
+	// +kubebuilder:validation:Pattern=`^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$`
+	// +optional
+	MaxCoverageDrop *string `json:"maxCoverageDrop,omitempty"`
+}
+
+// RulesSecretType is a kind of secret scanning alert.
+// +kubebuilder:validation:Enum=provider_patterns;custom_patterns;generic_patterns
+type RulesSecretType string
+
+type RulesSecretScanningAlertResolution struct {
+	// SecretTypes are the kinds of alerts that must be resolved, each listed once. Unset or
+	// empty means provider_patterns, GitHub's default.
+	// +kubebuilder:validation:MaxItems=3
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="each secret type may appear once in secretTypes"
+	// +optional
+	SecretTypes []RulesSecretType `json:"secretTypes"`
+}
+
+type RulesCopilotCodeReview struct {
+	// ReviewOnPush requests a new review on each push to the pull request.
+	// +optional
+	ReviewOnPush *bool `json:"reviewOnPush,omitempty"`
+	// ReviewDraftPullRequests requests reviews on draft pull requests too.
+	// +optional
+	ReviewDraftPullRequests *bool `json:"reviewDraftPullRequests,omitempty"`
+}
+
+type RulesFileExtensionRestriction struct {
+	// RestrictedFileExtensions is the list of file extensions GitHub rejects in a push, each starting with "*.", such as "*.exe".
+	RestrictedFileExtensions []string `json:"restrictedFileExtensions"`
+}
+
+type RulesFilePathRestriction struct {
+	// RestrictedFilePaths is the list of file paths GitHub rejects changes to.
+	RestrictedFilePaths []string `json:"restrictedFilePaths"`
+	// IgnoredFilePaths are paths exempt from the rule. Unset means an empty list.
+	// +optional
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
+}
+
+type RulesMaxFilePathLength struct {
+	// MaxFilePathLength is the maximum number of characters allowed in file paths.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=32767
+	MaxFilePathLength int `json:"maxFilePathLength"`
+}
+
+type RulesMaxFileSize struct {
+	// MaxFileSize is the maximum file size allowed, in megabytes.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	MaxFileSize int64 `json:"maxFileSize"`
+	// IgnoredFilePaths are paths exempt from the rule. Unset means an empty list.
+	// +optional
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
 }
 
 type RulesRequiredDeployments struct {
@@ -469,10 +675,32 @@ type RulesRequiredDeployments struct {
 	Environments []string `json:"environments"`
 }
 
+// RulesMergeMethod is a method a pull request may be merged with.
+// +kubebuilder:validation:Enum=merge;squash;rebase
+type RulesMergeMethod string
+
 type RulesPullRequest struct {
+	// AllowedMergeMethods are the methods pull requests may be merged with, each listed once. Unset allows all three.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=3
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="each merge method may appear once in allowedMergeMethods"
+	// +optional
+	AllowedMergeMethods []RulesMergeMethod `json:"allowedMergeMethods"`
+	// DismissalRestriction limits who can dismiss reviews. Unset lets everyone with write access dismiss them.
+	// +optional
+	DismissalRestriction *RulesDismissalRestriction `json:"dismissalRestriction,omitempty"`
 	// DismissStaleReviewsOnPush automatically dismiss approving reviews when someone pushes a new commit.
 	// +optional
 	DismissStaleReviewsOnPush *bool `json:"dismissStaleReviewsOnPush,omitempty"`
+	// RequireExtraApprovalForUnattributedChanges requires an additional approval for
+	// pull requests containing unattributed changes, such as those Copilot makes. When
+	// unset, the provider sends true, GitHub's default, once GitHub returns the field for
+	// the rule, and sends the rule without it otherwise.
+	// +optional
+	RequireExtraApprovalForUnattributedChanges *bool `json:"requireExtraApprovalForUnattributedChanges,omitempty"`
+	// RequiredReviewers requires approvals from specific teams for changes to matching files. Unset means an empty list.
+	// +optional
+	RequiredReviewers []*RulesRequiredReviewer `json:"requiredReviewers"`
 	// RequireCodeOwnerReview requires the pull request to be approved by a code owner.
 	// +optional
 	RequireCodeOwnerReview *bool `json:"requireCodeOwnerReview,omitempty"`
@@ -480,6 +708,8 @@ type RulesPullRequest struct {
 	// +optional
 	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
 	// RequiredApprovingReviewCount specifies the number of reviewers required to approve pull requests.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
 	// +optional
 	RequiredApprovingReviewCount *int `json:"requiredApprovingReviewCount,omitempty"`
 	// RequiredReviewThreadResolution requires all conversations on code to be resolved before a pull request can be merged.
@@ -487,7 +717,47 @@ type RulesPullRequest struct {
 	RequiredReviewThreadResolution *bool `json:"requiredReviewThreadResolution,omitempty"`
 }
 
+type RulesDismissalRestriction struct {
+	// Enabled limits review dismissal to AllowedActors.
+	Enabled bool `json:"enabled"`
+	// AllowedActors are the actors who may dismiss reviews. Each must have write access
+	// to the repository; of the repository roles, only admin is accepted.
+	// +optional
+	AllowedActors []*RulesDismissalActor `json:"allowedActors"`
+}
+
+type RulesDismissalActor struct {
+	// Id is the ID of the actor: the user ID, the team ID, the App's installation ID
+	// for IntegrationInstallation, or the repository role ID.
+	ID int64 `json:"id"`
+	// Type is the type of the actor.
+	// +kubebuilder:validation:Enum=User;Team;IntegrationInstallation;RepositoryRole
+	Type string `json:"type"`
+}
+
+type RulesRequiredReviewer struct {
+	// FilePatterns are the file patterns whose changes need the reviewer's approval.
+	FilePatterns []string `json:"filePatterns"`
+	// MinimumApprovals is how many approvals the reviewer must give.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	MinimumApprovals int `json:"minimumApprovals"`
+	// Reviewer is the team that must approve.
+	Reviewer RulesReviewer `json:"reviewer"`
+}
+
+type RulesReviewer struct {
+	// Id is the ID of the team.
+	ID int64 `json:"id"`
+	// Type is the type of the reviewer.
+	// +kubebuilder:validation:Enum=Team
+	Type string `json:"type"`
+}
+
 type RulesRequiredStatusChecks struct {
+	// DoNotEnforceOnCreate allows a branch to be created even if the status checks would fail. Defaults to false.
+	// +optional
+	DoNotEnforceOnCreate *bool `json:"doNotEnforceOnCreate,omitempty"`
 	// RequiredStatusChecks is the list of status checks to require in order to merge into this branch.
 	// +optional
 	RequiredStatusChecks []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks"`
@@ -784,6 +1054,187 @@ type RulesObservation struct {
 
 	// NonFastForward is whether force pushes to matching refs are restricted.
 	NonFastForward *bool `json:"nonFastForward,omitempty"`
+
+	// UpdateAllowsFetchAndMerge is whether the branch may pull changes from its
+	// upstream repository while updates are restricted. GitHub returns it on forks only.
+	UpdateAllowsFetchAndMerge *bool `json:"updateAllowsFetchAndMerge,omitempty"`
+
+	// MergeQueue is the observed merge queue requirement.
+	MergeQueue *RulesMergeQueueObservation `json:"mergeQueue,omitempty"`
+
+	// CommitMessagePattern is the observed commit message pattern.
+	CommitMessagePattern *RulesPatternObservation `json:"commitMessagePattern,omitempty"`
+
+	// CommitAuthorEmailPattern is the observed commit author email pattern.
+	CommitAuthorEmailPattern *RulesPatternObservation `json:"commitAuthorEmailPattern,omitempty"`
+
+	// CommitterEmailPattern is the observed committer email pattern.
+	CommitterEmailPattern *RulesPatternObservation `json:"committerEmailPattern,omitempty"`
+
+	// BranchNamePattern is the observed branch name pattern.
+	BranchNamePattern *RulesPatternObservation `json:"branchNamePattern,omitempty"`
+
+	// TagNamePattern is the observed tag name pattern.
+	TagNamePattern *RulesPatternObservation `json:"tagNamePattern,omitempty"`
+
+	// CodeScanning is the observed code scanning requirement.
+	CodeScanning *RulesCodeScanningObservation `json:"codeScanning,omitempty"`
+
+	// CodeQuality is the observed code quality requirement.
+	CodeQuality *RulesCodeQualityObservation `json:"codeQuality,omitempty"`
+
+	// CodeCoverage is the observed code coverage requirement.
+	CodeCoverage *RulesCodeCoverageObservation `json:"codeCoverage,omitempty"`
+
+	// LicenseComplianceScanning is whether license compliance scanning results are required.
+	LicenseComplianceScanning *bool `json:"licenseComplianceScanning,omitempty"`
+
+	// ScanningAlertResolution is the observed requirement that secret scanning alerts are
+	// resolved before merging. It is requireSecretScanningAlertResolution in the spec.
+	ScanningAlertResolution *RulesScanningAlertResolutionObservation `json:"requireSecretScanningAlertResolution,omitempty"`
+
+	// CopilotCodeReview is the observed Copilot code review requirement.
+	CopilotCodeReview *RulesCopilotCodeReviewObservation `json:"copilotCodeReview,omitempty"`
+
+	// FileExtensionRestriction is the observed file extension restriction.
+	FileExtensionRestriction *RulesFileExtensionRestrictionObservation `json:"fileExtensionRestriction,omitempty"`
+
+	// FilePathRestriction is the observed file path restriction.
+	FilePathRestriction *RulesFilePathRestrictionObservation `json:"filePathRestriction,omitempty"`
+
+	// MaxFilePathLength is the observed file path length limit.
+	MaxFilePathLength *RulesMaxFilePathLengthObservation `json:"maxFilePathLength,omitempty"`
+
+	// MaxFileSize is the observed file size limit.
+	MaxFileSize *RulesMaxFileSizeObservation `json:"maxFileSize,omitempty"`
+}
+
+// RulesMergeQueueObservation is the observed merge queue requirement of a ruleset.
+type RulesMergeQueueObservation struct {
+	// CheckResponseTimeoutMinutes is the maximum time, in minutes, for a required status check to report a conclusion.
+	// +optional
+	CheckResponseTimeoutMinutes int `json:"checkResponseTimeoutMinutes"`
+
+	// GroupingStrategy is whether all pull requests' checks (ALLGREEN) or the head of the group's (HEADGREEN) must pass.
+	GroupingStrategy string `json:"groupingStrategy,omitempty"`
+
+	// MaxEntriesToBuild is the maximum number of queued pull requests requesting checks at the same time.
+	// +optional
+	MaxEntriesToBuild int `json:"maxEntriesToBuild"`
+
+	// MaxEntriesToMerge is the maximum number of pull requests merged together in a group.
+	// +optional
+	MaxEntriesToMerge int `json:"maxEntriesToMerge"`
+
+	// MergeMethod is the method used to merge queued pull requests.
+	MergeMethod string `json:"mergeMethod,omitempty"`
+
+	// MinEntriesToMerge is the minimum number of pull requests merged together in a group.
+	// +optional
+	MinEntriesToMerge int `json:"minEntriesToMerge"`
+
+	// MinEntriesToMergeWaitMinutes is the time, in minutes, the queue waits for MinEntriesToMerge pull requests.
+	// +optional
+	MinEntriesToMergeWaitMinutes int `json:"minEntriesToMergeWaitMinutes"`
+}
+
+// RulesPatternObservation is an observed pattern rule of a ruleset.
+type RulesPatternObservation struct {
+	// Name is how the rule appears to users.
+	Name *string `json:"name,omitempty"`
+
+	// Negate is whether matching the pattern fails the rule.
+	Negate *bool `json:"negate,omitempty"`
+
+	// Operator is how the pattern is matched.
+	Operator string `json:"operator,omitempty"`
+
+	// Pattern is the pattern to match with.
+	Pattern string `json:"pattern,omitempty"`
+}
+
+// RulesCodeScanningObservation is the observed code scanning requirement of a ruleset.
+type RulesCodeScanningObservation struct {
+	// CodeScanningTools lists the tools that must provide code scanning results.
+	// +optional
+	CodeScanningTools []RulesCodeScanningToolObservation `json:"codeScanningTools"`
+}
+
+// RulesCodeScanningToolObservation is a code scanning tool required by a ruleset.
+type RulesCodeScanningToolObservation struct {
+	// Tool is the name of the code scanning tool.
+	Tool string `json:"tool,omitempty"`
+
+	// AlertsThreshold is the severity at which alerts block a reference update.
+	AlertsThreshold string `json:"alertsThreshold,omitempty"`
+
+	// SecurityAlertsThreshold is the severity at which security alerts block a reference update.
+	SecurityAlertsThreshold string `json:"securityAlertsThreshold,omitempty"`
+}
+
+// RulesCodeQualityObservation is the observed code quality requirement of a ruleset.
+type RulesCodeQualityObservation struct {
+	// Severity is the lowest severity of code quality results that blocks a pull request.
+	Severity string `json:"severity,omitempty"`
+}
+
+// RulesCodeCoverageObservation is the observed code coverage requirement of a ruleset.
+type RulesCodeCoverageObservation struct {
+	// MinimumCoverage is the lowest coverage percentage allowed.
+	MinimumCoverage *string `json:"minimumCoverage,omitempty"`
+
+	// MaxCoverageDrop is the largest drop in coverage percentage allowed.
+	MaxCoverageDrop *string `json:"maxCoverageDrop,omitempty"`
+}
+
+// RulesScanningAlertResolutionObservation is the observed secret scanning alert requirement of a ruleset.
+type RulesScanningAlertResolutionObservation struct {
+	// AlertTypes lists the kinds of alerts that must be resolved. It is secretTypes in the spec.
+	// +optional
+	AlertTypes []string `json:"secretTypes"`
+}
+
+// RulesCopilotCodeReviewObservation is the observed Copilot code review requirement of a ruleset.
+type RulesCopilotCodeReviewObservation struct {
+	// ReviewOnPush is whether a new review is requested on each push.
+	ReviewOnPush *bool `json:"reviewOnPush,omitempty"`
+
+	// ReviewDraftPullRequests is whether draft pull requests are reviewed too.
+	ReviewDraftPullRequests *bool `json:"reviewDraftPullRequests,omitempty"`
+}
+
+// RulesFileExtensionRestrictionObservation is the observed file extension restriction of a ruleset.
+type RulesFileExtensionRestrictionObservation struct {
+	// RestrictedFileExtensions lists the file extensions GitHub rejects in a push.
+	// +optional
+	RestrictedFileExtensions []string `json:"restrictedFileExtensions"`
+}
+
+// RulesFilePathRestrictionObservation is the observed file path restriction of a ruleset.
+type RulesFilePathRestrictionObservation struct {
+	// RestrictedFilePaths lists the file paths GitHub rejects changes to.
+	// +optional
+	RestrictedFilePaths []string `json:"restrictedFilePaths"`
+
+	// IgnoredFilePaths lists the paths exempt from the rule.
+	// +optional
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
+}
+
+// RulesMaxFilePathLengthObservation is the observed file path length limit of a ruleset.
+type RulesMaxFilePathLengthObservation struct {
+	// MaxFilePathLength is the maximum number of characters allowed in file paths.
+	MaxFilePathLength int `json:"maxFilePathLength,omitempty"`
+}
+
+// RulesMaxFileSizeObservation is the observed file size limit of a ruleset.
+type RulesMaxFileSizeObservation struct {
+	// MaxFileSize is the maximum file size allowed, in megabytes.
+	MaxFileSize int64 `json:"maxFileSize,omitempty"`
+
+	// IgnoredFilePaths lists the paths exempt from the rule.
+	// +optional
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
 }
 
 // RulesRequiredDeploymentsObservation lists the environments that must be deployed to before merging.
@@ -809,6 +1260,64 @@ type RulesPullRequestObservation struct {
 
 	// RequiredReviewThreadResolution is whether conversations must be resolved before merging.
 	RequiredReviewThreadResolution *bool `json:"requiredReviewThreadResolution,omitempty"`
+
+	// AllowedMergeMethods lists the methods pull requests may be merged with.
+	// +optional
+	AllowedMergeMethods []string `json:"allowedMergeMethods"`
+
+	// DismissalRestriction is who may dismiss reviews.
+	DismissalRestriction *RulesDismissalRestrictionObservation `json:"dismissalRestriction,omitempty"`
+
+	// RequireExtraApprovalForUnattributedChanges is whether pull requests with
+	// unattributed changes need an additional approval. GitHub returns it for some rules only.
+	RequireExtraApprovalForUnattributedChanges *bool `json:"requireExtraApprovalForUnattributedChanges,omitempty"`
+
+	// RequiredReviewers lists the teams whose approval is required for matching files.
+	// +optional
+	RequiredReviewers []RulesRequiredReviewerObservation `json:"requiredReviewers"`
+}
+
+// RulesDismissalRestrictionObservation is the observed limit on who may dismiss reviews.
+type RulesDismissalRestrictionObservation struct {
+	// Enabled is whether review dismissal is limited to AllowedActors.
+	// +optional
+	Enabled bool `json:"enabled"`
+
+	// AllowedActors lists the actors who may dismiss reviews.
+	// +optional
+	AllowedActors []RulesDismissalActorObservation `json:"allowedActors"`
+}
+
+// RulesDismissalActorObservation is an actor who may dismiss reviews.
+type RulesDismissalActorObservation struct {
+	// ID is the ID of the actor.
+	ID int64 `json:"id,omitempty"`
+
+	// Type is the type of the actor.
+	Type string `json:"type,omitempty"`
+}
+
+// RulesRequiredReviewerObservation is a team whose approval a ruleset requires for matching files.
+type RulesRequiredReviewerObservation struct {
+	// FilePatterns lists the file patterns whose changes need the reviewer's approval.
+	// +optional
+	FilePatterns []string `json:"filePatterns"`
+
+	// MinimumApprovals is how many approvals the reviewer must give.
+	// +optional
+	MinimumApprovals int `json:"minimumApprovals"`
+
+	// Reviewer is the team that must approve.
+	Reviewer RulesReviewerObservation `json:"reviewer,omitempty"`
+}
+
+// RulesReviewerObservation is the team that must approve.
+type RulesReviewerObservation struct {
+	// ID is the ID of the team.
+	ID int64 `json:"id,omitempty"`
+
+	// Type is the type of the reviewer.
+	Type string `json:"type,omitempty"`
 }
 
 // RulesStatusChecksObservation is the observed status checks requirement of a ruleset.
@@ -819,6 +1328,9 @@ type RulesStatusChecksObservation struct {
 
 	// StrictRequiredStatusChecksPolicy is whether branches must be up-to-date before merging.
 	StrictRequiredStatusChecksPolicy *bool `json:"strictRequiredStatusChecksPolicy,omitempty"`
+
+	// DoNotEnforceOnCreate is whether a branch may be created even if the status checks would fail.
+	DoNotEnforceOnCreate *bool `json:"doNotEnforceOnCreate,omitempty"`
 }
 
 // RulesRequiredStatusChecksParametersObservation is a single status check required by a ruleset.
@@ -875,7 +1387,7 @@ type RepositoryObservation struct {
 	// for them only while forProvider.repositoryRules is set, so the field is
 	// empty otherwise.
 	// +optional
-	RepositoryRules []RepositoryRulesetObservation `json:"repositoryRules"`
+	RepositoryRules []RepositoryRulesetObservation `json:"repositoryRules,omitzero"`
 
 	// CreateFromTemplate is the template the repository was created from, when
 	// GitHub reports one. Whether all branches were included is not reported.
@@ -1003,6 +1515,7 @@ type RepositoryStatus struct {
 // +kubebuilder:printcolumn:name="COLLAB-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='CollaboratorPartial')].status"
 // +kubebuilder:printcolumn:name="BPR-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='BranchProtectionPartial')].status"
 // +kubebuilder:printcolumn:name="SETTINGS-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='SettingsPartial')].status"
+// +kubebuilder:printcolumn:name="RULESETS-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='RulesetsPartial')].status"
 // +kubebuilder:printcolumn:name="ARCHIVED",type="string",JSONPath=".status.conditions[?(@.type=='ArchivedConfigFrozen')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"

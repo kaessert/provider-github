@@ -34,6 +34,9 @@ spec:
     - jsonPath: .status.conditions[?(@.type=='SettingsPartial')].status
       name: SETTINGS-PARTIAL
       type: string
+    - jsonPath: .status.conditions[?(@.type=='RulesetsPartial')].status
+      name: RULESETS-PARTIAL
+      type: string
     - jsonPath: .status.conditions[?(@.type=='ArchivedConfigFrozen')].status
       name: ARCHIVED
       type: string
@@ -698,46 +701,70 @@ spec:
                       it will be public
                     type: boolean
                   repositoryRules:
-                    description: RepositoryRules are the rules for the repository
+                    description: |-
+                      RepositoryRules are the rulesets of the repository. When set, the list is
+                      authoritative: the repository ends up with exactly the rulesets it names, and
+                      an empty list ([]) deletes them all. When the field is absent, the rulesets
+                      on GitHub stay as they are. GitHub allows at most 75 rulesets per repository.
                     items:
                       description: RepositoryRuleset represents the rules for a repository
                       properties:
                         bypassActors:
-                          description: BypassActors is the list of actors that can
-                            bypass the ruleset
+                          description: |-
+                            BypassActors is the list of actors that can bypass the ruleset. An empty list
+                            makes the ruleset apply to everyone. Each actor is listed once: an unset BypassMode
+                            counts as "always", and OrganizationAdmin and DeployKey match on ActorType and BypassMode.
                           items:
                             properties:
                               actorId:
-                                description: ActorId is the ID of the actor
+                                description: |-
+                                  ActorId is the ID of the actor: the App ID for Integration, the role ID for
+                                  RepositoryRole, the team ID for Team and the user ID for User. OrganizationAdmin
+                                  and DeployKey are identified by their type alone, so ActorId is optional for them.
                                 format: int64
                                 type: integer
                               actorType:
                                 description: 'ActorType is the type of the actor,
-                                  can be one of: Integration, OrganizationAdmin, RepositoryRole,
-                                  Team'
+                                  one of: Integration, OrganizationAdmin, RepositoryRole,
+                                  Team, DeployKey, User'
+                                enum:
+                                - Integration
+                                - OrganizationAdmin
+                                - RepositoryRole
+                                - Team
+                                - DeployKey
+                                - User
                                 type: string
                               bypassMode:
                                 description: 'BypassMode is the bypass mode of the
-                                  actor, can be one of: "always", "pull_request"'
+                                  actor, one of: "always", "pull_request", "exempt"'
+                                enum:
+                                - always
+                                - pull_request
+                                - exempt
                                 type: string
                             type: object
                           type: array
                         conditions:
-                          description: Conditions is the conditions for the ruleset,
-                            which branches or tags are included or excluded from the
-                            ruleset
+                          description: |-
+                            Conditions is the conditions for the ruleset, which branches or tags are included or excluded from the ruleset.
+                            Branch and tag rulesets only. A push ruleset applies to every push.
                           properties:
                             refName:
+                              description: RefName selects the refs the ruleset applies
+                                to. Unset selects an empty set of refs.
                               properties:
                                 exclude:
-                                  description: Exclude is the list of branches or
-                                    tags to exclude
+                                  description: Exclude is the list of refs to exclude,
+                                    in the same form as Include. Each pattern is listed
+                                    once.
                                   items:
                                     type: string
                                   type: array
                                 include:
-                                  description: Include is the list of branches or
-                                    tags to include
+                                  description: |-
+                                    Include is the list of refs to include: full ref patterns such as
+                                    "refs/heads/main" or "refs/tags/v*", or "~DEFAULT_BRANCH" or "~ALL". Each pattern is listed once.
                                   items:
                                     type: string
                                   type: array
@@ -747,15 +774,215 @@ spec:
                               type: object
                           type: object
                         enforcement:
-                          description: 'Enforcement is the enforcement level of the
-                            ruleset, can be one of: "disabled", "active"'
+                          description: |-
+                            Enforcement is the enforcement level of the ruleset, one of "disabled", "active" or
+                            "evaluate" (GitHub Enterprise only). Defaults to "active".
+                          enum:
+                          - disabled
+                          - active
+                          - evaluate
                           type: string
                         name:
                           description: Name is the name of the ruleset
+                          maxLength: 255
                           type: string
                         rules:
                           description: Rules is the rules for the ruleset
                           properties:
+                            branchNamePattern:
+                              description: BranchNamePattern requires branch names
+                                to match a pattern.
+                              properties:
+                                name:
+                                  description: Name is how this rule appears to users.
+                                  type: string
+                                negate:
+                                  description: 'Negate inverts the rule: matching
+                                    the pattern fails it.'
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  enum:
+                                  - starts_with
+                                  - ends_with
+                                  - contains
+                                  - regex
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              required:
+                              - operator
+                              - pattern
+                              type: object
+                            codeCoverage:
+                              description: CodeCoverage requires code coverage results
+                                before merging.
+                              properties:
+                                maxCoverageDrop:
+                                  description: |-
+                                    MaxCoverageDrop is the largest drop in coverage percentage allowed, a decimal number from 0 to 100 such as "5" or "0.5".
+                                    Unset leaves the drop open.
+                                  pattern: ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$
+                                  type: string
+                                minimumCoverage:
+                                  description: |-
+                                    MinimumCoverage is the lowest coverage percentage allowed, a decimal number from 0 to 100 such as "80" or "72.5".
+                                    Unset leaves the minimum open.
+                                  pattern: ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$
+                                  type: string
+                              type: object
+                            codeQuality:
+                              description: CodeQuality requires code quality results
+                                before merging.
+                              properties:
+                                severity:
+                                  description: Severity is the lowest severity of
+                                    code quality results that blocks a pull request.
+                                  enum:
+                                  - errors
+                                  - warnings
+                                  - notes
+                                  - all
+                                  type: string
+                              required:
+                              - severity
+                              type: object
+                            codeScanning:
+                              description: CodeScanning requires code scanning results
+                                before merging.
+                              properties:
+                                codeScanningTools:
+                                  description: CodeScanningTools is the list of tools
+                                    that must provide code scanning results.
+                                  items:
+                                    properties:
+                                      alertsThreshold:
+                                        description: AlertsThreshold is the severity
+                                          level at which code scanning results that
+                                          raise alerts block a reference update.
+                                        enum:
+                                        - none
+                                        - errors
+                                        - errors_and_warnings
+                                        - all
+                                        type: string
+                                      securityAlertsThreshold:
+                                        description: SecurityAlertsThreshold is the
+                                          severity level at which code scanning results
+                                          that raise security alerts block a reference
+                                          update.
+                                        enum:
+                                        - none
+                                        - critical
+                                        - high_or_higher
+                                        - medium_or_higher
+                                        - all
+                                        type: string
+                                      tool:
+                                        description: Tool is the name of a code scanning
+                                          tool.
+                                        type: string
+                                    required:
+                                    - alertsThreshold
+                                    - securityAlertsThreshold
+                                    - tool
+                                    type: object
+                                  type: array
+                              required:
+                              - codeScanningTools
+                              type: object
+                            commitAuthorEmailPattern:
+                              description: CommitAuthorEmailPattern requires commit
+                                author emails to match a pattern.
+                              properties:
+                                name:
+                                  description: Name is how this rule appears to users.
+                                  type: string
+                                negate:
+                                  description: 'Negate inverts the rule: matching
+                                    the pattern fails it.'
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  enum:
+                                  - starts_with
+                                  - ends_with
+                                  - contains
+                                  - regex
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              required:
+                              - operator
+                              - pattern
+                              type: object
+                            commitMessagePattern:
+                              description: CommitMessagePattern requires commit messages
+                                to match a pattern.
+                              properties:
+                                name:
+                                  description: Name is how this rule appears to users.
+                                  type: string
+                                negate:
+                                  description: 'Negate inverts the rule: matching
+                                    the pattern fails it.'
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  enum:
+                                  - starts_with
+                                  - ends_with
+                                  - contains
+                                  - regex
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              required:
+                              - operator
+                              - pattern
+                              type: object
+                            committerEmailPattern:
+                              description: CommitterEmailPattern requires committer
+                                emails to match a pattern.
+                              properties:
+                                name:
+                                  description: Name is how this rule appears to users.
+                                  type: string
+                                negate:
+                                  description: 'Negate inverts the rule: matching
+                                    the pattern fails it.'
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  enum:
+                                  - starts_with
+                                  - ends_with
+                                  - contains
+                                  - regex
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              required:
+                              - operator
+                              - pattern
+                              type: object
+                            copilotCodeReview:
+                              description: CopilotCodeReview requests a Copilot code
+                                review for new pull requests.
+                              properties:
+                                reviewDraftPullRequests:
+                                  description: ReviewDraftPullRequests requests reviews
+                                    on draft pull requests too.
+                                  type: boolean
+                                reviewOnPush:
+                                  description: ReviewOnPush requests a new review
+                                    on each push to the pull request.
+                                  type: boolean
+                              type: object
                             creation:
                               description: Creation restricts the creation of matching
                                 branches or tags that are set in Conditions
@@ -764,6 +991,139 @@ spec:
                               description: Deletion restricts the deletion of matching
                                 branches or tags that are set in Conditions
                               type: boolean
+                            fileExtensionRestriction:
+                              description: FileExtensionRestriction prevents pushing
+                                files with the listed extensions. Push rulesets only.
+                              properties:
+                                restrictedFileExtensions:
+                                  description: RestrictedFileExtensions is the list
+                                    of file extensions GitHub rejects in a push, each
+                                    starting with "*.", such as "*.exe".
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - restrictedFileExtensions
+                              type: object
+                            filePathRestriction:
+                              description: FilePathRestriction prevents pushing changes
+                                to the listed file paths. Push rulesets only.
+                              properties:
+                                ignoredFilePaths:
+                                  description: IgnoredFilePaths are paths exempt from
+                                    the rule. Unset means an empty list.
+                                  items:
+                                    type: string
+                                  type: array
+                                restrictedFilePaths:
+                                  description: RestrictedFilePaths is the list of
+                                    file paths GitHub rejects changes to.
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - restrictedFilePaths
+                              type: object
+                            licenseComplianceScanning:
+                              description: |-
+                                LicenseComplianceScanning requires license compliance scanning results before merging.
+                                It needs license compliance scanning enabled on GitHub, or GitHub answers 422.
+                              type: boolean
+                            maxFilePathLength:
+                              description: MaxFilePathLength prevents pushing files
+                                with longer paths. Push rulesets only.
+                              properties:
+                                maxFilePathLength:
+                                  description: MaxFilePathLength is the maximum number
+                                    of characters allowed in file paths.
+                                  maximum: 32767
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - maxFilePathLength
+                              type: object
+                            maxFileSize:
+                              description: MaxFileSize prevents pushing files larger
+                                than the limit. Push rulesets only.
+                              properties:
+                                ignoredFilePaths:
+                                  description: IgnoredFilePaths are paths exempt from
+                                    the rule. Unset means an empty list.
+                                  items:
+                                    type: string
+                                  type: array
+                                maxFileSize:
+                                  description: MaxFileSize is the maximum file size
+                                    allowed, in megabytes.
+                                  format: int64
+                                  maximum: 100
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - maxFileSize
+                              type: object
+                            mergeQueue:
+                              description: MergeQueue requires merges to go through
+                                a merge queue.
+                              properties:
+                                checkResponseTimeoutMinutes:
+                                  description: CheckResponseTimeoutMinutes is the
+                                    maximum time, in minutes, for a required status
+                                    check to report a conclusion.
+                                  maximum: 360
+                                  minimum: 1
+                                  type: integer
+                                groupingStrategy:
+                                  description: 'GroupingStrategy decides which pull
+                                    requests'' checks must pass: all of them (ALLGREEN)
+                                    or the head of the group (HEADGREEN).'
+                                  enum:
+                                  - ALLGREEN
+                                  - HEADGREEN
+                                  type: string
+                                maxEntriesToBuild:
+                                  description: MaxEntriesToBuild is the maximum number
+                                    of queued pull requests requesting checks and
+                                    workflow runs at the same time.
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                                maxEntriesToMerge:
+                                  description: MaxEntriesToMerge is the maximum number
+                                    of pull requests merged together in a group.
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                                mergeMethod:
+                                  description: MergeMethod is the method used to merge
+                                    changes in queued pull requests.
+                                  enum:
+                                  - MERGE
+                                  - SQUASH
+                                  - REBASE
+                                  type: string
+                                minEntriesToMerge:
+                                  description: MinEntriesToMerge is the minimum number
+                                    of pull requests merged together in a group.
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                                minEntriesToMergeWaitMinutes:
+                                  description: MinEntriesToMergeWaitMinutes is the
+                                    time, in minutes, the merge queue waits for MinEntriesToMerge
+                                    pull requests.
+                                  maximum: 360
+                                  minimum: 0
+                                  type: integer
+                              required:
+                              - checkResponseTimeoutMinutes
+                              - groupingStrategy
+                              - maxEntriesToBuild
+                              - maxEntriesToMerge
+                              - mergeMethod
+                              - minEntriesToMerge
+                              - minEntriesToMergeWaitMinutes
+                              type: object
                             nonFastForward:
                               description: NonFastForward restricts force pushes to
                                 matching branches or tags that are set in Conditions
@@ -771,14 +1131,77 @@ spec:
                             pullRequest:
                               description: PullRequest is the rules for pull requests
                               properties:
+                                allowedMergeMethods:
+                                  description: AllowedMergeMethods are the methods
+                                    pull requests may be merged with, each listed
+                                    once. Unset allows all three.
+                                  items:
+                                    description: RulesMergeMethod is a method a pull
+                                      request may be merged with.
+                                    enum:
+                                    - merge
+                                    - squash
+                                    - rebase
+                                    type: string
+                                  maxItems: 3
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-validations:
+                                  - message: each merge method may appear once in
+                                      allowedMergeMethods
+                                    rule: self.all(x, self.exists_one(y, y == x))
                                 dismissStaleReviewsOnPush:
                                   description: DismissStaleReviewsOnPush automatically
                                     dismiss approving reviews when someone pushes
                                     a new commit.
                                   type: boolean
+                                dismissalRestriction:
+                                  description: DismissalRestriction limits who can
+                                    dismiss reviews. Unset lets everyone with write
+                                    access dismiss them.
+                                  properties:
+                                    allowedActors:
+                                      description: |-
+                                        AllowedActors are the actors who may dismiss reviews. Each must have write access
+                                        to the repository; of the repository roles, only admin is accepted.
+                                      items:
+                                        properties:
+                                          id:
+                                            description: |-
+                                              Id is the ID of the actor: the user ID, the team ID, the App's installation ID
+                                              for IntegrationInstallation, or the repository role ID.
+                                            format: int64
+                                            type: integer
+                                          type:
+                                            description: Type is the type of the actor.
+                                            enum:
+                                            - User
+                                            - Team
+                                            - IntegrationInstallation
+                                            - RepositoryRole
+                                            type: string
+                                        required:
+                                        - id
+                                        - type
+                                        type: object
+                                      type: array
+                                    enabled:
+                                      description: Enabled limits review dismissal
+                                        to AllowedActors.
+                                      type: boolean
+                                  required:
+                                  - enabled
+                                  type: object
                                 requireCodeOwnerReview:
                                   description: RequireCodeOwnerReview requires the
                                     pull request to be approved by a code owner.
+                                  type: boolean
+                                requireExtraApprovalForUnattributedChanges:
+                                  description: |-
+                                    RequireExtraApprovalForUnattributedChanges requires an additional approval for
+                                    pull requests containing unattributed changes, such as those Copilot makes. When
+                                    unset, the provider sends true, GitHub's default, once GitHub returns the field for
+                                    the rule, and sends the rule without it otherwise.
                                   type: boolean
                                 requireLastPushApproval:
                                   description: RequireLastPushApproval requires the
@@ -789,12 +1212,79 @@ spec:
                                   description: RequiredApprovingReviewCount specifies
                                     the number of reviewers required to approve pull
                                     requests.
+                                  maximum: 10
+                                  minimum: 0
                                   type: integer
                                 requiredReviewThreadResolution:
                                   description: RequiredReviewThreadResolution requires
                                     all conversations on code to be resolved before
                                     a pull request can be merged.
                                   type: boolean
+                                requiredReviewers:
+                                  description: RequiredReviewers requires approvals
+                                    from specific teams for changes to matching files.
+                                    Unset means an empty list.
+                                  items:
+                                    properties:
+                                      filePatterns:
+                                        description: FilePatterns are the file patterns
+                                          whose changes need the reviewer's approval.
+                                        items:
+                                          type: string
+                                        type: array
+                                      minimumApprovals:
+                                        description: MinimumApprovals is how many
+                                          approvals the reviewer must give.
+                                        maximum: 10
+                                        minimum: 0
+                                        type: integer
+                                      reviewer:
+                                        description: Reviewer is the team that must
+                                          approve.
+                                        properties:
+                                          id:
+                                            description: Id is the ID of the team.
+                                            format: int64
+                                            type: integer
+                                          type:
+                                            description: Type is the type of the reviewer.
+                                            enum:
+                                            - Team
+                                            type: string
+                                        required:
+                                        - id
+                                        - type
+                                        type: object
+                                    required:
+                                    - filePatterns
+                                    - minimumApprovals
+                                    - reviewer
+                                    type: object
+                                  type: array
+                              type: object
+                            requireSecretScanningAlertResolution:
+                              description: |-
+                                RequireSecretScanningAlertResolution blocks merging pull requests with unresolved secret
+                                scanning alerts. {} turns it on for GitHub's default secret types. It needs GitHub Secret
+                                Protection or Advanced Security enabled, or GitHub answers 422.
+                              properties:
+                                secretTypes:
+                                  description: |-
+                                    SecretTypes are the kinds of alerts that must be resolved, each listed once. Unset or
+                                    empty means provider_patterns, GitHub's default.
+                                  items:
+                                    description: RulesSecretType is a kind of secret
+                                      scanning alert.
+                                    enum:
+                                    - provider_patterns
+                                    - custom_patterns
+                                    - generic_patterns
+                                    type: string
+                                  maxItems: 3
+                                  type: array
+                                  x-kubernetes-validations:
+                                  - message: each secret type may appear once in secretTypes
+                                    rule: self.all(x, self.exists_one(y, y == x))
                               type: object
                             requiredDeployments:
                               description: RequiredDeployments requires that deployment
@@ -818,6 +1308,11 @@ spec:
                               description: RequiredStatusChecks requires status checks
                                 to pass before merging.
                               properties:
+                                doNotEnforceOnCreate:
+                                  description: DoNotEnforceOnCreate allows a branch
+                                    to be created even if the status checks would
+                                    fail. Defaults to false.
+                                  type: boolean
                                 requiredStatusChecks:
                                   description: RequiredStatusChecks is the list of
                                     status checks to require in order to merge into
@@ -842,19 +1337,66 @@ spec:
                                     branches to be up-to-date before merging.
                                   type: boolean
                               type: object
+                            tagNamePattern:
+                              description: TagNamePattern requires tag names to match
+                                a pattern.
+                              properties:
+                                name:
+                                  description: Name is how this rule appears to users.
+                                  type: string
+                                negate:
+                                  description: 'Negate inverts the rule: matching
+                                    the pattern fails it.'
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  enum:
+                                  - starts_with
+                                  - ends_with
+                                  - contains
+                                  - regex
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              required:
+                              - operator
+                              - pattern
+                              type: object
                             update:
                               description: Update restricts the update of matching
                                 branches or tags that are set in Conditions
                               type: boolean
+                            updateAllowsFetchAndMerge:
+                              description: |-
+                                UpdateAllowsFetchAndMerge lets the branch pull changes from its upstream repository
+                                while Update is on. Defaults to false. It takes effect on forks only.
+                              type: boolean
                           type: object
                         target:
-                          description: 'Target is the target of the ruleset, can be
-                            one of: "branch", "tag"'
+                          description: Target is what the ruleset applies to, one
+                            of "branch", "tag" or "push". Defaults to "branch".
+                          enum:
+                          - branch
+                          - tag
+                          - push
                           type: string
                       required:
                       - name
                       type: object
+                      x-kubernetes-validations:
+                      - message: fileExtensionRestriction, filePathRestriction, maxFilePathLength
+                          and maxFileSize apply to a push ruleset
+                        rule: (has(self.target) && self.target == 'push') || !has(self.rules)
+                          || !(has(self.rules.fileExtensionRestriction) || has(self.rules.filePathRestriction)
+                          || has(self.rules.maxFilePathLength) || has(self.rules.maxFileSize))
+                      - message: conditions apply to a branch or tag ruleset
+                        rule: '!(has(self.target) && self.target == ''push'') || !has(self.conditions)'
+                    maxItems: 75
                     type: array
+                    x-kubernetes-validations:
+                    - message: each ruleset name may appear once in repositoryRules
+                      rule: self.all(x, self.exists_one(y, y.name == x.name))
                   squashMergeCommitMessage:
                     description: |-
                       SquashMergeCommitMessage sets the default body format for squash-merge commits.
@@ -1352,6 +1894,140 @@ spec:
                         rules:
                           description: Rules is the observed rules of the ruleset.
                           properties:
+                            branchNamePattern:
+                              description: BranchNamePattern is the observed branch
+                                name pattern.
+                              properties:
+                                name:
+                                  description: Name is how the rule appears to users.
+                                  type: string
+                                negate:
+                                  description: Negate is whether matching the pattern
+                                    fails the rule.
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              type: object
+                            codeCoverage:
+                              description: CodeCoverage is the observed code coverage
+                                requirement.
+                              properties:
+                                maxCoverageDrop:
+                                  description: MaxCoverageDrop is the largest drop
+                                    in coverage percentage allowed.
+                                  type: string
+                                minimumCoverage:
+                                  description: MinimumCoverage is the lowest coverage
+                                    percentage allowed.
+                                  type: string
+                              type: object
+                            codeQuality:
+                              description: CodeQuality is the observed code quality
+                                requirement.
+                              properties:
+                                severity:
+                                  description: Severity is the lowest severity of
+                                    code quality results that blocks a pull request.
+                                  type: string
+                              type: object
+                            codeScanning:
+                              description: CodeScanning is the observed code scanning
+                                requirement.
+                              properties:
+                                codeScanningTools:
+                                  description: CodeScanningTools lists the tools that
+                                    must provide code scanning results.
+                                  items:
+                                    description: RulesCodeScanningToolObservation
+                                      is a code scanning tool required by a ruleset.
+                                    properties:
+                                      alertsThreshold:
+                                        description: AlertsThreshold is the severity
+                                          at which alerts block a reference update.
+                                        type: string
+                                      securityAlertsThreshold:
+                                        description: SecurityAlertsThreshold is the
+                                          severity at which security alerts block
+                                          a reference update.
+                                        type: string
+                                      tool:
+                                        description: Tool is the name of the code
+                                          scanning tool.
+                                        type: string
+                                    type: object
+                                  type: array
+                              type: object
+                            commitAuthorEmailPattern:
+                              description: CommitAuthorEmailPattern is the observed
+                                commit author email pattern.
+                              properties:
+                                name:
+                                  description: Name is how the rule appears to users.
+                                  type: string
+                                negate:
+                                  description: Negate is whether matching the pattern
+                                    fails the rule.
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              type: object
+                            commitMessagePattern:
+                              description: CommitMessagePattern is the observed commit
+                                message pattern.
+                              properties:
+                                name:
+                                  description: Name is how the rule appears to users.
+                                  type: string
+                                negate:
+                                  description: Negate is whether matching the pattern
+                                    fails the rule.
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              type: object
+                            committerEmailPattern:
+                              description: CommitterEmailPattern is the observed committer
+                                email pattern.
+                              properties:
+                                name:
+                                  description: Name is how the rule appears to users.
+                                  type: string
+                                negate:
+                                  description: Negate is whether matching the pattern
+                                    fails the rule.
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              type: object
+                            copilotCodeReview:
+                              description: CopilotCodeReview is the observed Copilot
+                                code review requirement.
+                              properties:
+                                reviewDraftPullRequests:
+                                  description: ReviewDraftPullRequests is whether
+                                    draft pull requests are reviewed too.
+                                  type: boolean
+                                reviewOnPush:
+                                  description: ReviewOnPush is whether a new review
+                                    is requested on each push.
+                                  type: boolean
+                              type: object
                             creation:
                               description: Creation is whether creating matching refs
                                 is restricted.
@@ -1360,6 +2036,99 @@ spec:
                               description: Deletion is whether deleting matching refs
                                 is restricted.
                               type: boolean
+                            fileExtensionRestriction:
+                              description: FileExtensionRestriction is the observed
+                                file extension restriction.
+                              properties:
+                                restrictedFileExtensions:
+                                  description: RestrictedFileExtensions lists the
+                                    file extensions GitHub rejects in a push.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            filePathRestriction:
+                              description: FilePathRestriction is the observed file
+                                path restriction.
+                              properties:
+                                ignoredFilePaths:
+                                  description: IgnoredFilePaths lists the paths exempt
+                                    from the rule.
+                                  items:
+                                    type: string
+                                  type: array
+                                restrictedFilePaths:
+                                  description: RestrictedFilePaths lists the file
+                                    paths GitHub rejects changes to.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            licenseComplianceScanning:
+                              description: LicenseComplianceScanning is whether license
+                                compliance scanning results are required.
+                              type: boolean
+                            maxFilePathLength:
+                              description: MaxFilePathLength is the observed file
+                                path length limit.
+                              properties:
+                                maxFilePathLength:
+                                  description: MaxFilePathLength is the maximum number
+                                    of characters allowed in file paths.
+                                  type: integer
+                              type: object
+                            maxFileSize:
+                              description: MaxFileSize is the observed file size limit.
+                              properties:
+                                ignoredFilePaths:
+                                  description: IgnoredFilePaths lists the paths exempt
+                                    from the rule.
+                                  items:
+                                    type: string
+                                  type: array
+                                maxFileSize:
+                                  description: MaxFileSize is the maximum file size
+                                    allowed, in megabytes.
+                                  format: int64
+                                  type: integer
+                              type: object
+                            mergeQueue:
+                              description: MergeQueue is the observed merge queue
+                                requirement.
+                              properties:
+                                checkResponseTimeoutMinutes:
+                                  description: CheckResponseTimeoutMinutes is the
+                                    maximum time, in minutes, for a required status
+                                    check to report a conclusion.
+                                  type: integer
+                                groupingStrategy:
+                                  description: GroupingStrategy is whether all pull
+                                    requests' checks (ALLGREEN) or the head of the
+                                    group's (HEADGREEN) must pass.
+                                  type: string
+                                maxEntriesToBuild:
+                                  description: MaxEntriesToBuild is the maximum number
+                                    of queued pull requests requesting checks at the
+                                    same time.
+                                  type: integer
+                                maxEntriesToMerge:
+                                  description: MaxEntriesToMerge is the maximum number
+                                    of pull requests merged together in a group.
+                                  type: integer
+                                mergeMethod:
+                                  description: MergeMethod is the method used to merge
+                                    queued pull requests.
+                                  type: string
+                                minEntriesToMerge:
+                                  description: MinEntriesToMerge is the minimum number
+                                    of pull requests merged together in a group.
+                                  type: integer
+                                minEntriesToMergeWaitMinutes:
+                                  description: MinEntriesToMergeWaitMinutes is the
+                                    time, in minutes, the queue waits for MinEntriesToMerge
+                                    pull requests.
+                                  type: integer
+                              type: object
                             nonFastForward:
                               description: NonFastForward is whether force pushes
                                 to matching refs are restricted.
@@ -1368,13 +2137,49 @@ spec:
                               description: PullRequest is the observed pull request
                                 rules.
                               properties:
+                                allowedMergeMethods:
+                                  description: AllowedMergeMethods lists the methods
+                                    pull requests may be merged with.
+                                  items:
+                                    type: string
+                                  type: array
                                 dismissStaleReviewsOnPush:
                                   description: DismissStaleReviewsOnPush is whether
                                     approving reviews are dismissed on a new commit.
                                   type: boolean
+                                dismissalRestriction:
+                                  description: DismissalRestriction is who may dismiss
+                                    reviews.
+                                  properties:
+                                    allowedActors:
+                                      description: AllowedActors lists the actors
+                                        who may dismiss reviews.
+                                      items:
+                                        description: RulesDismissalActorObservation
+                                          is an actor who may dismiss reviews.
+                                        properties:
+                                          id:
+                                            description: ID is the ID of the actor.
+                                            format: int64
+                                            type: integer
+                                          type:
+                                            description: Type is the type of the actor.
+                                            type: string
+                                        type: object
+                                      type: array
+                                    enabled:
+                                      description: Enabled is whether review dismissal
+                                        is limited to AllowedActors.
+                                      type: boolean
+                                  type: object
                                 requireCodeOwnerReview:
                                   description: RequireCodeOwnerReview is whether a
                                     code owner must approve.
+                                  type: boolean
+                                requireExtraApprovalForUnattributedChanges:
+                                  description: |-
+                                    RequireExtraApprovalForUnattributedChanges is whether pull requests with
+                                    unattributed changes need an additional approval. GitHub returns it for some rules only.
                                   type: boolean
                                 requireLastPushApproval:
                                   description: RequireLastPushApproval is whether
@@ -1389,6 +2194,51 @@ spec:
                                   description: RequiredReviewThreadResolution is whether
                                     conversations must be resolved before merging.
                                   type: boolean
+                                requiredReviewers:
+                                  description: RequiredReviewers lists the teams whose
+                                    approval is required for matching files.
+                                  items:
+                                    description: RulesRequiredReviewerObservation
+                                      is a team whose approval a ruleset requires
+                                      for matching files.
+                                    properties:
+                                      filePatterns:
+                                        description: FilePatterns lists the file patterns
+                                          whose changes need the reviewer's approval.
+                                        items:
+                                          type: string
+                                        type: array
+                                      minimumApprovals:
+                                        description: MinimumApprovals is how many
+                                          approvals the reviewer must give.
+                                        type: integer
+                                      reviewer:
+                                        description: Reviewer is the team that must
+                                          approve.
+                                        properties:
+                                          id:
+                                            description: ID is the ID of the team.
+                                            format: int64
+                                            type: integer
+                                          type:
+                                            description: Type is the type of the reviewer.
+                                            type: string
+                                        type: object
+                                    type: object
+                                  type: array
+                              type: object
+                            requireSecretScanningAlertResolution:
+                              description: |-
+                                ScanningAlertResolution is the observed requirement that secret scanning alerts are
+                                resolved before merging. It is requireSecretScanningAlertResolution in the spec.
+                              properties:
+                                secretTypes:
+                                  description: AlertTypes lists the kinds of alerts
+                                    that must be resolved. It is secretTypes in the
+                                    spec.
+                                  items:
+                                    type: string
+                                  type: array
                               type: object
                             requiredDeployments:
                               description: RequiredDeployments is the observed deployments
@@ -1412,6 +2262,11 @@ spec:
                               description: RequiredStatusChecks is the observed status
                                 checks requirement.
                               properties:
+                                doNotEnforceOnCreate:
+                                  description: DoNotEnforceOnCreate is whether a branch
+                                    may be created even if the status checks would
+                                    fail.
+                                  type: boolean
                                 requiredStatusChecks:
                                   description: RequiredStatusChecks lists the status
                                     checks required to merge.
@@ -1435,9 +2290,32 @@ spec:
                                     whether branches must be up-to-date before merging.
                                   type: boolean
                               type: object
+                            tagNamePattern:
+                              description: TagNamePattern is the observed tag name
+                                pattern.
+                              properties:
+                                name:
+                                  description: Name is how the rule appears to users.
+                                  type: string
+                                negate:
+                                  description: Negate is whether matching the pattern
+                                    fails the rule.
+                                  type: boolean
+                                operator:
+                                  description: Operator is how the pattern is matched.
+                                  type: string
+                                pattern:
+                                  description: Pattern is the pattern to match with.
+                                  type: string
+                              type: object
                             update:
                               description: Update is whether updating matching refs
                                 is restricted.
+                              type: boolean
+                            updateAllowsFetchAndMerge:
+                              description: |-
+                                UpdateAllowsFetchAndMerge is whether the branch may pull changes from its
+                                upstream repository while updates are restricted. GitHub returns it on forks only.
                               type: boolean
                           type: object
                         target:

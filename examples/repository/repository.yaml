@@ -26,6 +26,32 @@ spec:
     mergeCommitMessage: PR_BODY
     squashMergeCommitTitle: PR_TITLE
     squashMergeCommitMessage: PR_BODY
+    # Rulesets. Listing repositoryRules makes the list authoritative: the
+    # repository ends up with exactly these rulesets, and [] deletes them all.
+    # This one uses rule types and parameters beyond a plain branch protection.
+    # Rules that need a GitHub product, a plan or an ID this example cannot
+    # assume (merge queue, code scanning, Copilot review, push rulesets,
+    # required reviewers) are in the CRD documentation.
+    repositoryRules:
+      - name: pgh-e2e-pull-request-rules
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          pullRequest:
+            requiredApprovingReviewCount: 1
+            allowedMergeMethods:
+              - squash
+              - rebase
+          requiredStatusChecks:
+            strictRequiredStatusChecksPolicy: true
+            doNotEnforceOnCreate: true
+            requiredStatusChecks:
+              - context: validate
     # Reference an Organization managed resource instead of naming the
     # organization directly:
     #   orgRef:
