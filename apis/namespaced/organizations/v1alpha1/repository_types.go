@@ -1089,8 +1089,9 @@ type RulesObservation struct {
 	// LicenseComplianceScanning is whether license compliance scanning results are required.
 	LicenseComplianceScanning *bool `json:"licenseComplianceScanning,omitempty"`
 
-	// RequireSecretScanningAlertResolution is the observed secret scanning alert requirement.
-	RequireSecretScanningAlertResolution *RulesSecretScanningAlertResolutionObservation `json:"requireSecretScanningAlertResolution,omitempty"`
+	// ScanningAlertResolution is the observed requirement that secret scanning alerts are
+	// resolved before merging. It is requireSecretScanningAlertResolution in the spec.
+	ScanningAlertResolution *RulesScanningAlertResolutionObservation `json:"requireSecretScanningAlertResolution,omitempty"`
 
 	// CopilotCodeReview is the observed Copilot code review requirement.
 	CopilotCodeReview *RulesCopilotCodeReviewObservation `json:"copilotCodeReview,omitempty"`
@@ -1186,11 +1187,11 @@ type RulesCodeCoverageObservation struct {
 	MaxCoverageDrop *string `json:"maxCoverageDrop,omitempty"`
 }
 
-// RulesSecretScanningAlertResolutionObservation is the observed secret scanning requirement of a ruleset.
-type RulesSecretScanningAlertResolutionObservation struct {
-	// SecretTypes lists the kinds of alerts that must be resolved.
+// RulesScanningAlertResolutionObservation is the observed secret scanning alert requirement of a ruleset.
+type RulesScanningAlertResolutionObservation struct {
+	// AlertTypes lists the kinds of alerts that must be resolved. It is secretTypes in the spec.
 	// +optional
-	SecretTypes []string `json:"secretTypes"`
+	AlertTypes []string `json:"secretTypes"`
 }
 
 // RulesCopilotCodeReviewObservation is the observed Copilot code review requirement of a ruleset.

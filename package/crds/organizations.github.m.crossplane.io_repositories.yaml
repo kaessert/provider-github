@@ -2228,12 +2228,14 @@ spec:
                                   type: array
                               type: object
                             requireSecretScanningAlertResolution:
-                              description: RequireSecretScanningAlertResolution is
-                                the observed secret scanning alert requirement.
+                              description: |-
+                                ScanningAlertResolution is the observed requirement that secret scanning alerts are
+                                resolved before merging. It is requireSecretScanningAlertResolution in the spec.
                               properties:
                                 secretTypes:
-                                  description: SecretTypes lists the kinds of alerts
-                                    that must be resolved.
+                                  description: AlertTypes lists the kinds of alerts
+                                    that must be resolved. It is secretTypes in the
+                                    spec.
                                   items:
                                     type: string
                                   type: array
