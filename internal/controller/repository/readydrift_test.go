@@ -40,7 +40,7 @@ func withDifferentWebhookEvents() repositoryModifier {
 
 func withDifferentRulesetEnforcement() repositoryModifier {
 	return func(r *v1alpha1.Repository) {
-		r.Spec.ForProvider.RepositoryRules[0].Enforcement = github.Ptr("disabled")
+		(*r.Spec.ForProvider.RepositoryRules)[0].Enforcement = github.Ptr("disabled")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestObserveDriftSetsUnavailable(t *testing.T) {
 			cr := repository(tc.mods...)
 			// A previous poll left the resource Available.
 			cr.SetConditions(xpv2.Available())
-			got, err := (&external{github: clientFor(tc.repos)}).Observe(context.Background(), cr)
+			got, err := (&external{github: clientFor(tc.repos, upToDateRulesets())}).Observe(context.Background(), cr)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -114,7 +114,7 @@ func TestObserveDriftSetsUnavailable(t *testing.T) {
 // A drift path that sets Ready on a fresh adoption (no condition yet) sets it.
 func TestObserveDriftSetsUnavailableOnAdoption(t *testing.T) {
 	cr := repository(withDifferentTopics())
-	if _, err := (&external{github: clientFor(upToDateRepositories(nil))}).Observe(context.Background(), cr); err != nil {
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets())}).Observe(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertUnavailable(t, cr.GetCondition(xpv2.TypeReady))
@@ -130,7 +130,7 @@ func TestObserveInSyncSetsAvailable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cr := repository(tc.mods...)
 			cr.SetConditions(xpv2.Unavailable())
-			got, err := (&external{github: clientFor(tc.repos)}).Observe(context.Background(), cr)
+			got, err := (&external{github: clientFor(tc.repos, upToDateRulesets())}).Observe(context.Background(), cr)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -163,7 +163,7 @@ func TestObserveDriftSetsUnavailableNamespaced(t *testing.T) {
 			ns.SetConditions(xpv2.Available())
 
 			bridged := scopebridge.New[*namespacedv1alpha1.Repository](
-				&external{github: clientFor(tc.repos), secretNamespace: ns.Namespace},
+				&external{github: clientFor(tc.repos, upToDateRulesets()), secretNamespace: ns.Namespace},
 				func() *v1alpha1.Repository { return &v1alpha1.Repository{} },
 			)
 			got, err := bridged.Observe(context.Background(), ns)

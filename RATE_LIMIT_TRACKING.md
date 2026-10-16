@@ -52,7 +52,7 @@ Together `(app_id, app_installation_id)` uniquely identifies a credential. With 
 
 - `github_repository_unreconcilable` (Gauge)
   - Labels: `organization`, `repository`, `dimension`
-  - Description: `1` while the repository has declared state GitHub will not apply, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply), `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen) or `settings` (repository settings GitHub did not apply on the last push because they are not available on the repository's plan or type). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial`, `ArchivedConfigFrozen` or `SettingsPartial` condition. A repository's series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
+  - Description: `1` while the repository has declared state that stays unapplied, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply), `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen), `settings` (repository settings GitHub did not apply on the last push because they are not available on the repository's plan or type), `rulesets_forbidden` (GitHub answers the ruleset list with 403, for example on a private repository whose plan has no rulesets, while the Repository declares at least one ruleset, so the declared `repositoryRules` are left as they are; with `repositoryRules: []` the value is `0`, because the Repository declares no ruleset), `ruleset_parameters` (a ruleset the Repository manages carries a rule type GitHub returns and the provider does not model, so that ruleset is left as it is while the other rulesets reconcile, or a parameter GitHub returns and the provider does not model, which the next update of that ruleset resets) or `ruleset_spec` (a ruleset in the Repository's spec lists the same ref pattern or bypass actor twice; the declared `repositoryRules` are left as they are until the spec is fixed). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial`, `ArchivedConfigFrozen`, `SettingsPartial` or `RulesetsPartial` condition; `rulesets_forbidden`, `ruleset_parameters` and `ruleset_spec` share `RulesetsPartial`: reason `RulesetsForbidden` carries GitHub's message, reason `UnmanagedRuleTypes` a message naming each ruleset left as it is and its rule types, followed by any unmanaged parameters, reason `UnmanagedParameters` a message naming the ruleset, rule and parameters, reason `InvalidRulesets` a message naming the ruleset and the duplicate. A repository's series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
 
 ### A note on shared credentials across ProviderConfigs
 
@@ -202,7 +202,7 @@ groups:
       description: "Only {{ $value }} credentials served traffic in the last 10m. Expected the full pool size — check for rotated-out or persistently-failing credentials."
 ```
 
-### Repository state alert rule
+### Repository state alert rules
 
 ```yaml
 groups:
@@ -214,8 +214,28 @@ groups:
     labels:
       severity: warning
     annotations:
-      summary: "GitHub will not apply declared state for {{ $labels.repository }}"
+      summary: "{{ $labels.repository }} has declared state that stays unapplied"
       description: "Repository {{ $labels.repository }} in org {{ $labels.organization }} has had unapplied {{ $labels.dimension }} state for 1h. See the Repository's conditions for the details."
+  - alert: GitHubRulesetUnmanagedParameters
+    expr: github_repository_unreconcilable{dimension="ruleset_parameters"} == 1
+    labels:
+      severity: warning
+    annotations:
+      summary: "A ruleset of {{ $labels.repository }} ({{ $labels.organization }}) holds a rule type or parameter the provider does not model"
+      description: |
+        A ruleset holding an unmodelled rule type is left as it is; the next update of a ruleset holding an unmodelled parameter resets the parameter. The RulesetsPartial condition (reason UnmanagedRuleTypes or UnmanagedParameters) names them:
+        kubectl get repositories -o custom-columns='NAME:.metadata.name,UNMANAGED:.status.conditions[?(@.type=="RulesetsPartial")].message'
+        Then upgrade the provider, or open an issue naming the rule type or parameter.
+  - alert: GitHubRulesetSpecInvalid
+    expr: github_repository_unreconcilable{dimension="ruleset_spec"} == 1
+    labels:
+      severity: warning
+    annotations:
+      summary: "A ruleset in the spec of {{ $labels.repository }} ({{ $labels.organization }}) lists a ref pattern or bypass actor twice"
+      description: |
+        The declared repositoryRules are left as they are until the spec is fixed. The RulesetsPartial condition names the ruleset and the duplicate:
+        kubectl get repositories -o custom-columns='NAME:.metadata.name,INVALID:.status.conditions[?(@.reason=="InvalidRulesets")].message'
+        Then list the pattern or actor once in the Repository's spec.
 ```
 
 ## Benefits

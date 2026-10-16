@@ -21,6 +21,8 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/google/go-github/v90/github"
+
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 )
 
 type Services struct {
@@ -30,6 +32,7 @@ type Services struct {
 	Users         UsersClient
 	Teams         TeamsClient
 	Repositories  RepositoriesClient
+	Rulesets      RulesetsClient
 }
 
 type ActionsClient interface {
@@ -114,18 +117,34 @@ type RepositoriesClient interface {
 	RemoveBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 	RequireSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
 	OptionalSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.Response, error)
-	GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error)
-	GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error)
-	CreateRuleset(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
-	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
-	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 	ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
+}
+
+// RulesetsClient reads and writes repository rulesets with the types of package rulesets.
+type RulesetsClient interface {
+	GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error)
+	GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error)
+	CreateRuleset(ctx context.Context, owner, repo string, ruleset rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error)
+	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error)
+	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 }
 
 func Is404(err error) bool {
 	var errResp *github.ErrorResponse
 
 	if errors.As(err, &errResp) && errResp.Response.StatusCode == 404 {
+		return true
+	}
+
+	return false
+}
+
+// Is403 reports a 403 that carries GitHub's error body. Rate-limit 403s arrive as
+// *github.RateLimitError or *github.AbuseRateLimitError and report false.
+func Is403(err error) bool {
+	var errResp *github.ErrorResponse
+
+	if errors.As(err, &errResp) && errResp.Response.StatusCode == 403 {
 		return true
 	}
 

@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/google/go-github/v90/github"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
@@ -101,6 +102,14 @@ func (c *Client) WithRateLimitTracking(org, appID, installationID, cacheKey stri
 				installationID:     installationID,
 				cacheKey:           cacheKey,
 			},
+			Rulesets: &rulesetsClient{
+				RulesetsClient: c.Rulesets,
+				metrics:        c.metrics,
+				org:            org,
+				appID:          appID,
+				installationID: installationID,
+				cacheKey:       cacheKey,
+			},
 		},
 		metrics: c.metrics,
 	}
@@ -161,6 +170,16 @@ type organizationsClient struct {
 // repositoriesClient wraps the Repositories client with rate limit tracking
 type repositoriesClient struct {
 	RepositoriesClient
+	metrics        *telemetry.RateLimitMetrics
+	org            string
+	appID          string
+	installationID string
+	cacheKey       string
+}
+
+// rulesetsClient wraps the Rulesets client with rate limit tracking
+type rulesetsClient struct {
+	RulesetsClient
 	metrics        *telemetry.RateLimitMetrics
 	org            string
 	appID          string
@@ -406,40 +425,42 @@ func (c *repositoriesClient) OptionalSignaturesOnProtectedBranch(ctx context.Con
 	return resp, err
 }
 
-func (c *repositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetAllRulesets", func() ([]*github.RepositoryRuleset, *github.Response, error) {
-		return c.RepositoriesClient.GetAllRulesets(ctx, owner, repo, opts)
-	})
-}
-
-func (c *repositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
-		return c.RepositoriesClient.GetRuleset(ctx, owner, repo, rulesetID, includesParents)
-	})
-}
-
-func (c *repositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
-		return c.RepositoriesClient.CreateRuleset(ctx, owner, repo, ruleset)
-	})
-}
-
-func (c *repositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.UpdateRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
-		return c.RepositoriesClient.UpdateRuleset(ctx, owner, repo, rulesetID, ruleset)
-	})
-}
-
-func (c *repositoriesClient) DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
-	resp, err := c.RepositoriesClient.DeleteRuleset(ctx, owner, repo, rulesetID)
-	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.DeleteRuleset", resp, err)
-	return resp, err
-}
-
 func (c *repositoriesClient) ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.ReplaceAllTopics", func() ([]string, *github.Response, error) {
 		return c.RepositoriesClient.ReplaceAllTopics(ctx, owner, repo, topics)
 	})
+}
+
+// rulesetsClient methods record "Repositories." method labels, which dashboards and
+// alerts use.
+func (c *rulesetsClient) GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetAllRulesets", func() ([]*rulesets.Ruleset, *github.Response, error) {
+		return c.RulesetsClient.GetAllRulesets(ctx, owner, repo, opts)
+	})
+}
+
+func (c *rulesetsClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetRuleset", func() (*rulesets.Ruleset, *github.Response, error) {
+		return c.RulesetsClient.GetRuleset(ctx, owner, repo, rulesetID, includesParents)
+	})
+}
+
+func (c *rulesetsClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateRuleset", func() (*rulesets.Ruleset, *github.Response, error) {
+		return c.RulesetsClient.CreateRuleset(ctx, owner, repo, ruleset)
+	})
+}
+
+func (c *rulesetsClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.UpdateRuleset", func() (*rulesets.Ruleset, *github.Response, error) {
+		return c.RulesetsClient.UpdateRuleset(ctx, owner, repo, rulesetID, ruleset)
+	})
+}
+
+func (c *rulesetsClient) DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+	resp, err := c.RulesetsClient.DeleteRuleset(ctx, owner, repo, rulesetID)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.DeleteRuleset", resp, err)
+	return resp, err
 }
 
 // teamsClient methods

@@ -17,7 +17,9 @@
 package util
 
 import (
+	stdcmp "cmp"
 	"slices"
+
 	// nolint:gosec
 	"crypto/sha1"
 	"encoding/hex"
@@ -205,20 +207,48 @@ func SortRequiredStatusChecks(checks []*v1alpha1.RequiredStatusCheck) {
 }
 
 // SortRulesRequiredStatusChecks sorts a slice of RequiredStatusCheck pointers in-place
-// by the Context field in ascending order.
+// by the Context field in ascending order, then by IntegrationID with nil first.
 func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksParameters) {
 	sort.Slice(checks, func(i, j int) bool {
-		return checks[i].Context < checks[j].Context
+		a, b := checks[i], checks[j]
+		if a.Context != b.Context {
+			return a.Context < b.Context
+		}
+		if (a.IntegrationID == nil) != (b.IntegrationID == nil) {
+			return a.IntegrationID == nil
+		}
+		return a.IntegrationID != nil && *a.IntegrationID < *b.IntegrationID
 	})
 }
 
-// SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place
-// by the ActorId field in ascending order.
+// SortRulesCodeScanningTools sorts a slice of RulesCodeScanningTool pointers in-place
+// by Tool, then AlertsThreshold, then SecurityAlertsThreshold.
+func SortRulesCodeScanningTools(tools []*v1alpha1.RulesCodeScanningTool) {
+	slices.SortFunc(tools, func(a, b *v1alpha1.RulesCodeScanningTool) int {
+		return stdcmp.Or(
+			strings.Compare(a.Tool, b.Tool),
+			strings.Compare(a.AlertsThreshold, b.AlertsThreshold),
+			strings.Compare(a.SecurityAlertsThreshold, b.SecurityAlertsThreshold),
+		)
+	})
+}
+
+// SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place by
+// ActorType, then ActorID with nil first, then BypassMode.
 func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 	sort.Slice(actors, func(i, j int) bool {
-		return *actors[i].ActorID < *actors[j].ActorID
+		a, b := actors[i], actors[j]
+		if ta, tb := pointer.Deref(a.ActorType, ""), pointer.Deref(b.ActorType, ""); ta != tb {
+			return ta < tb
+		}
+		if (a.ActorID == nil) != (b.ActorID == nil) {
+			return a.ActorID == nil
+		}
+		if a.ActorID != nil && *a.ActorID != *b.ActorID {
+			return *a.ActorID < *b.ActorID
+		}
+		return pointer.Deref(a.BypassMode, "") < pointer.Deref(b.BypassMode, "")
 	})
-
 }
 
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',

@@ -91,7 +91,7 @@ Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube,
 
 ### GitHub client layer (`internal/clients/`)
 
-- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v90`. `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
+- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v90`, except `RulesetsClient`, which speaks the provider's own ruleset wire types (`rulesets/`). `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
 - `cached_services.go` — `NewCachedServices` parses creds in the format `appId,installationId,privateKeyPEM` (using `bradleyfalzon/ghinstallation/v2` for App auth) and keeps a process-wide map of `*Services` instances keyed by `GenerateCacheKey(creds)` (8-byte SHA-256 prefix), with a 50-minute TTL (GitHub App tokens expire at 60). `CleanupExpiredServices` is the periodic eviction routine called from `main`.
 - `client.go` — defines `Client`, the outer wrapper controllers use. Each per-service wrapper (`actionsClient`, `organizationsClient`, etc.) embeds the underlying service interface and records every response into `telemetry.RateLimitMetrics` (Prometheus) and the per-credential cooldown pool. `metrics` is nil-safe so unit tests can skip telemetry setup.
 - `pool.go` — process-wide `globalPool` of per-credential `AppQuota` snapshots (`Remaining` + `CooldownUntil` + `ConsecutiveFailures`). `recordResponse(cacheKey, resp, err)` handles three cases:
@@ -105,7 +105,7 @@ Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube,
 
 ### Telemetry (`internal/telemetry/rate_limit.go`)
 
-Owns seven Prometheus metrics. Six carry `(organization, app_id, app_installation_id)` so each credential is its own time series:
+Owns the provider's Prometheus metrics. The rate-limit and credential metrics carry `(organization, app_id, app_installation_id)` so each credential is its own time series:
 
 - `github_rate_limit_remaining`, `github_rate_limit_reset_time`, `github_rate_limit_limit` — gauges, updated from response headers.
 - `github_rate_limit_exceeded_total` — counter, incremented on 429.
@@ -113,7 +113,7 @@ Owns seven Prometheus metrics. Six carry `(organization, app_id, app_installatio
 - `github_api_calls_total` — counter with an extra `method` label (e.g. `"Organizations.Get"`); incremented on every wrapped call regardless of outcome.
 - `github_app_picker_picks_total` — counter with an extra `reason` label (`"highest_remaining"` | `"random_tiebreak"` | `"only_candidate"`); incremented on every successful picker selection.
 
-The seventh, `github_repository_unreconcilable{organization, repository, dimension}`, is a gauge set by the repository controller: 1 while the `CollaboratorPartial` / `BranchProtectionPartial` / `ArchivedConfigFrozen` / `SettingsPartial` condition (dimension `collaborators` / `branch_protection` / `archived` / `settings`) is True, else 0. Its series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
+`github_repository_unreconcilable{organization, repository, dimension}` is a gauge set by the repository controller: 1 while the `CollaboratorPartial` / `BranchProtectionPartial` / `ArchivedConfigFrozen` / `SettingsPartial` / `RulesetsPartial` condition (dimension `collaborators` / `branch_protection` / `archived` / `settings` / `rulesets_forbidden`, `ruleset_parameters` and `ruleset_spec`) is True, else 0. `RulesetsPartial` feeds three dimensions by reason: `rulesets_forbidden` while GitHub answers the ruleset list with 403 and the Repository declares at least one ruleset (`RulesetsForbidden`; with `repositoryRules: []` the condition is False because no ruleset is declared), `ruleset_parameters` while a managed ruleset carries a rule type GitHub returns and the provider does not model, which leaves that ruleset as it is while the others reconcile (`UnmanagedRuleTypes`), or a parameter GitHub returns and the provider does not model (`UnmanagedParameters`), `ruleset_spec` while a ruleset in the Repository's spec lists the same ref pattern or bypass actor twice, which leaves the declared `repositoryRules` as they are until the spec is fixed (`InvalidRulesets`). Its series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
 
 `app_id` and `app_installation_id` hold the real GitHub App ID / Installation ID parsed via `ExtractAppIDs` — not the cache-key hash. Metrics are initialized once in `main`, registered with the default Prometheus registry, and exposed on `:8081`/metrics. `newRateLimitMetrics()` (lowercase) and `NewForTest()` (exported) build the struct without registering — the former for in-package tests, the latter for cross-package wiring tests. See `RATE_LIMIT_TRACKING.md` for the full metric/alert reference.
 
@@ -128,6 +128,7 @@ The seventh, `github_repository_unreconcilable{organization, repository, dimensi
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.
 - All new managed resources must obtain their GitHub client via `ghclient.ResolveAndConnect`, never by calling `NewCachedServices` / `NewClient` directly — that's how they participate in the multi-app credential pool and quota-aware picking.
+- Repository rulesets are read and written with the provider's own types in `internal/clients/rulesets` (go-github transport, raw JSON per rule). They cover every rule and parameter GitHub accepts on a repository ruleset and keep every rule type GitHub returns, so the controller leaves a ruleset holding a type the provider does not model as it is, reports it through `RulesetsPartial` (reason `UnmanagedRuleTypes`), and reconciles the rest of the repository. A managed ruleset belongs to the CR: an update sends exactly the rules and parameters built from it.
 
 ## Where to find more
 

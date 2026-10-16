@@ -18,6 +18,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,9 +32,25 @@ import (
 	clusterv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
 	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 	"github.com/provider-github/provider-github/internal/controller/scopebridge"
 	"github.com/provider-github/provider-github/internal/driftdetection/ddtest"
 )
+
+// withRule makes a GitHub ruleset hold the rule of the given type with the given
+// parameters, in place of any rule of that type it holds.
+func withRule(r *rulesets.Ruleset, ruleType string, params any) {
+	r.Rules = slices.DeleteFunc(r.Rules, func(x *rulesets.Rule) bool { return x.Type == ruleType })
+	rule := &rulesets.Rule{Type: ruleType}
+	if params != nil {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			panic(err)
+		}
+		rule.Parameters = raw
+	}
+	r.Rules = append(r.Rules, rule)
+}
 
 // An empty list in the spec and an absent list on GitHub both mean "none", so
 // they are not drift: reporting them as drift updates the object on every poll
@@ -40,15 +58,15 @@ import (
 func TestObserveEmptyEqualsAbsent(t *testing.T) {
 	type tweak struct {
 		spec func(*clusterv1alpha1.Repository)
-		gh   func(*fake.MockRepositoriesClient)
+		gh   func(*fake.MockRepositoriesClient, *fake.MockRulesetsClient)
 	}
 
 	// ruleset changes the single declared ruleset and the one GitHub returns for it.
-	ruleset := func(spec func(*clusterv1alpha1.RepositoryRuleset), gh func(*github.RepositoryRuleset)) tweak {
+	ruleset := func(spec func(*clusterv1alpha1.RepositoryRuleset), gh func(*rulesets.Ruleset)) tweak {
 		return tweak{
-			spec: func(cr *clusterv1alpha1.Repository) { spec(&cr.Spec.ForProvider.RepositoryRules[0]) },
-			gh: func(repos *fake.MockRepositoriesClient) {
-				repos.MockGetRuleset = func(_ context.Context, _, _ string, _ int64, _ bool) (*github.RepositoryRuleset, *github.Response, error) {
+			spec: func(cr *clusterv1alpha1.Repository) { spec(&(*cr.Spec.ForProvider.RepositoryRules)[0]) },
+			gh: func(_ *fake.MockRepositoriesClient, rs *fake.MockRulesetsClient) {
+				rs.MockGetRuleset = func(_ context.Context, _, _ string, _ int64, _ bool) (*rulesets.Ruleset, *github.Response, error) {
 					rs := githubRuleset()[0]
 					gh(rs)
 					return rs, fake.GenerateEmptyResponse(), nil
@@ -56,18 +74,18 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			},
 		}
 	}
-	bypass := func(spec []*clusterv1alpha1.RulesetByPassActors, gh []*github.BypassActor) tweak {
+	bypass := func(spec []*clusterv1alpha1.RulesetByPassActors, gh []*rulesets.BypassActor) tweak {
 		return ruleset(
 			func(r *clusterv1alpha1.RepositoryRuleset) { r.BypassActors = spec },
-			func(r *github.RepositoryRuleset) { r.BypassActors = gh },
+			func(r *rulesets.Ruleset) { r.BypassActors = gh },
 		)
 	}
-	actor := func() ([]*clusterv1alpha1.RulesetByPassActors, []*github.BypassActor) {
+	actor := func() ([]*clusterv1alpha1.RulesetByPassActors, []*rulesets.BypassActor) {
 		return []*clusterv1alpha1.RulesetByPassActors{{ActorID: &rr1actorId, ActorType: &rr1actorType, BypassMode: &rr1bypassMode}},
-			[]*github.BypassActor{{
+			[]*rulesets.BypassActor{{
 				ActorID:    &rr1actorId,
-				ActorType:  github.Ptr(github.BypassActorType(rr1actorType)),
-				BypassMode: github.Ptr(github.BypassMode(rr1bypassMode)),
+				ActorType:  github.Ptr(rr1actorType),
+				BypassMode: github.Ptr(rr1bypassMode),
 			}}
 	}
 	specActor, ghActor := actor()
@@ -76,7 +94,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 	protection := func(spec func(*clusterv1alpha1.BranchProtectionRule), gh func(*github.Protection)) tweak {
 		return tweak{
 			spec: func(cr *clusterv1alpha1.Repository) { spec(&cr.Spec.ForProvider.BranchProtectionRules[0]) },
-			gh: func(repos *fake.MockRepositoriesClient) {
+			gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 				repos.MockGetBranchProtection = func(_ context.Context, _, _, _ string) (*github.Protection, *github.Response, error) {
 					p := githubProtectedBranch()
 					gh(p)
@@ -99,7 +117,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 		},
 		"BypassActorsDeclaredEmptyGitHubEmpty": {
 			reason: "bypassActors: [] and an empty list on GitHub is in sync",
-			tweak:  bypass([]*clusterv1alpha1.RulesetByPassActors{}, []*github.BypassActor{}),
+			tweak:  bypass([]*clusterv1alpha1.RulesetByPassActors{}, []*rulesets.BypassActor{}),
 			want:   true,
 		},
 		"BypassActorsDeclaredNilGitHubAbsent": {
@@ -109,7 +127,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 		},
 		"BypassActorsDeclaredNilGitHubEmpty": {
 			reason: "no bypassActors and an empty list on GitHub is in sync",
-			tweak:  bypass(nil, []*github.BypassActor{}),
+			tweak:  bypass(nil, []*rulesets.BypassActor{}),
 			want:   true,
 		},
 		"BypassActorsDeclaredEmptyGitHubHasActor": {
@@ -126,7 +144,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "conditions.refName.exclude: [] and no exclusions on GitHub is in sync",
 			tweak: ruleset(
 				func(r *clusterv1alpha1.RepositoryRuleset) { r.Conditions.RefName.Exclude = []string{} },
-				func(r *github.RepositoryRuleset) { r.Conditions.RefName.Exclude = nil },
+				func(r *rulesets.Ruleset) { r.Conditions.RefName.Exclude = nil },
 			),
 			want: true,
 		},
@@ -134,7 +152,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "an exclusion GitHub lacks is drift",
 			tweak: ruleset(
 				func(*clusterv1alpha1.RepositoryRuleset) {},
-				func(r *github.RepositoryRuleset) { r.Conditions.RefName.Exclude = nil },
+				func(r *rulesets.Ruleset) { r.Conditions.RefName.Exclude = nil },
 			),
 			want: false,
 		},
@@ -144,8 +162,8 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				func(r *clusterv1alpha1.RepositoryRuleset) {
 					r.Rules.RequiredDeployments = &clusterv1alpha1.RulesRequiredDeployments{Environments: []string{}}
 				},
-				func(r *github.RepositoryRuleset) {
-					r.Rules.RequiredDeployments = &github.RequiredDeploymentsRuleParameters{}
+				func(r *rulesets.Ruleset) {
+					withRule(r, "required_deployments", &rulesets.RequiredDeploymentsRuleParameters{})
 				},
 			),
 			want: true,
@@ -156,8 +174,8 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				func(r *clusterv1alpha1.RepositoryRuleset) {
 					r.Rules.RequiredDeployments = &clusterv1alpha1.RulesRequiredDeployments{Environments: []string{"prod"}}
 				},
-				func(r *github.RepositoryRuleset) {
-					r.Rules.RequiredDeployments = &github.RequiredDeploymentsRuleParameters{}
+				func(r *rulesets.Ruleset) {
+					withRule(r, "required_deployments", &rulesets.RequiredDeploymentsRuleParameters{})
 				},
 			),
 			want: false,
@@ -168,8 +186,8 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				func(r *clusterv1alpha1.RepositoryRuleset) {
 					r.Rules.RequiredStatusChecks = &clusterv1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*clusterv1alpha1.RulesRequiredStatusChecksParameters{}}
 				},
-				func(r *github.RepositoryRuleset) {
-					r.Rules.RequiredStatusChecks = &github.RequiredStatusChecksRuleParameters{}
+				func(r *rulesets.Ruleset) {
+					withRule(r, "required_status_checks", &rulesets.RequiredStatusChecksRuleParameters{})
 				},
 			),
 			want: true,
@@ -180,8 +198,8 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				func(r *clusterv1alpha1.RepositoryRuleset) {
 					r.Rules.RequiredStatusChecks = &clusterv1alpha1.RulesRequiredStatusChecks{}
 				},
-				func(r *github.RepositoryRuleset) {
-					r.Rules.RequiredStatusChecks = &github.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*github.RuleStatusCheck{}}
+				func(r *rulesets.Ruleset) {
+					withRule(r, "required_status_checks", &rulesets.RequiredStatusChecksRuleParameters{RequiredStatusChecks: []*rulesets.StatusCheck{}})
 				},
 			),
 			want: true,
@@ -268,7 +286,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "topics: [] and no topics on GitHub is in sync",
 			tweak: tweak{
 				spec: func(cr *clusterv1alpha1.Repository) { cr.Spec.ForProvider.Topics = []string{} },
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockGet = func(_ context.Context, _, _ string) (*github.Repository, *github.Response, error) {
 						r := githubRepository()
 						r.Topics = nil
@@ -282,7 +300,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "a declared topic GitHub lacks is drift",
 			tweak: tweak{
 				spec: func(*clusterv1alpha1.Repository) {},
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockGet = func(_ context.Context, _, _ string) (*github.Repository, *github.Response, error) {
 						r := githubRepository()
 						r.Topics = nil
@@ -298,7 +316,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				spec: func(cr *clusterv1alpha1.Repository) {
 					cr.Spec.ForProvider.Webhooks = []clusterv1alpha1.RepositoryWebhook{}
 				},
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockListHooks = func(_ context.Context, _, _ string, _ *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 						return nil, fake.GenerateEmptyResponse(), nil
 					}
@@ -310,7 +328,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "a webhook with events: [] and no events on GitHub is in sync",
 			tweak: tweak{
 				spec: func(cr *clusterv1alpha1.Repository) { cr.Spec.ForProvider.Webhooks[0].Events = []string{} },
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockListHooks = func(_ context.Context, _, _ string, _ *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 						hooks := githubWebhooks()
 						hooks[0].Events = nil
@@ -326,7 +344,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 				spec: func(cr *clusterv1alpha1.Repository) {
 					cr.Spec.ForProvider.Permissions.Teams = []clusterv1alpha1.RepositoryTeam{}
 				},
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockListTeams = func(_ context.Context, _, _ string, _ *github.ListOptions) ([]*github.Team, *github.Response, error) {
 						return nil, fake.GenerateEmptyResponse(), nil
 					}
@@ -338,7 +356,7 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			reason: "declared teams that GitHub lacks are drift",
 			tweak: tweak{
 				spec: func(*clusterv1alpha1.Repository) {},
-				gh: func(repos *fake.MockRepositoriesClient) {
+				gh: func(repos *fake.MockRepositoriesClient, _ *fake.MockRulesetsClient) {
 					repos.MockListTeams = func(_ context.Context, _, _ string, _ *github.ListOptions) ([]*github.Team, *github.Response, error) {
 						return nil, fake.GenerateEmptyResponse(), nil
 					}
@@ -357,10 +375,11 @@ func TestObserveEmptyEqualsAbsent(t *testing.T) {
 			}
 			cr := repository()
 			tc.tweak.spec(cr)
-			tc.tweak.gh(repos)
+			rs := upToDateRulesets()
+			tc.tweak.gh(repos, rs)
 
 			var mg resource.Managed = cr
-			c := &external{github: clientFor(repos)}
+			c := &external{github: clientFor(repos, rs)}
 			var (
 				got managed.ExternalObservation
 				err error

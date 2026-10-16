@@ -60,13 +60,8 @@ func repositoryClient(notFound bool) func() managed.ExternalClient {
 				MockGetBranchProtection: func(_ context.Context, _, _, _ string) (*github.Protection, *github.Response, error) {
 					return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 				},
-				MockGetAllRulesets: func(_ context.Context, _, _ string, _ *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
-					return githubRuleset(), fake.GenerateEmptyResponse(), nil
-				},
-				MockGetRuleset: func(_ context.Context, _, _ string, _ int64, _ bool) (*github.RepositoryRuleset, *github.Response, error) {
-					return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
-				},
 			},
+			Rulesets: upToDateRulesets(),
 		}}}
 	}
 }

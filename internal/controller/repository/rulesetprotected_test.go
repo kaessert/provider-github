@@ -165,7 +165,7 @@ func scopeRunners(t *testing.T, repos *fake.MockRepositoriesClient, mods ...repo
 				return &github.Repository{Permissions: repoPermissions(map[string]bool{"push": true})}, fake.GenerateEmptyResponse(), nil
 			},
 		}
-		gh := &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams}}
+		gh := &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: upToDateRulesets()}}
 		return &external{github: gh, secretNamespace: ns}
 	}
 
@@ -355,7 +355,7 @@ func TestBranchProtectionOtherNotFoundStillFails(t *testing.T) {
 
 	_, err := getBPRWithConfig(context.Background(), clientFor(&fake.MockRepositoriesClient{
 		MockGetBranchProtection: gh.Repositories.GetBranchProtection,
-	}), "acme", repo, []*github.Branch{{Name: github.Ptr(bpr1branch)}})
+	}, upToDateRulesets()), "acme", repo, []*github.Branch{{Name: github.Ptr(bpr1branch)}})
 	if err == nil {
 		t.Fatal("getBPRWithConfig on a plain 404: want an error, got nil")
 	}

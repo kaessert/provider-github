@@ -32,7 +32,7 @@ import (
 func observeMirror(t *testing.T, cr *v1alpha1.Repository, repos *fake.MockRepositoriesClient) {
 	t.Helper()
 	cr.Spec.ForProvider.Org = "acme"
-	e := external{github: clientFor(repos)}
+	e := external{github: clientFor(repos, upToDateRulesets())}
 	if _, err := e.Observe(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestObserveMirrorsRepository(t *testing.T) {
 			BypassActors: []v1alpha1.RulesetByPassActorsObservation{{ActorID: github.Ptr(rr1actorId), ActorType: &rr1actorType, BypassMode: &rr1bypassMode}},
 			Conditions:   &v1alpha1.RulesetConditionsObservation{RefName: &v1alpha1.RulesetRefNameObservation{Include: rr1Include, Exclude: rr1Exclude}},
 			Rules: &v1alpha1.RulesObservation{
-				Creation: &tr, Deletion: &tr, Update: &tr, RequiredLinearHistory: &tr, RequiredSignatures: &tr, NonFastForward: &tr,
+				Creation: &tr, Deletion: &tr, Update: &tr, RequiredLinearHistory: &tr, RequiredSignatures: &tr, NonFastForward: &tr, LicenseComplianceScanning: &f,
 			},
 		}},
 		UnappliedBranchProtection: []v1alpha1.UnappliedBranchProtection{},
