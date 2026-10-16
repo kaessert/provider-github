@@ -44,7 +44,8 @@ type RepositoryParameters struct {
 	// on GitHub stay as they are. GitHub allows at most 75 rulesets per repository.
 	// +kubebuilder:validation:MaxItems=75
 	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.name == x.name))",message="each ruleset name may appear once in repositoryRules"
-	RepositoryRules *[]RepositoryRuleset `json:"repositoryRules,omitempty"`
+	// +optional
+	RepositoryRules *[]RepositoryRuleset `json:"repositoryRules,omitzero"`
 
 	// Creates a new repository using a repository template
 	CreateFromTemplate *TemplateRepo `json:"createFromTemplate,omitempty"`
@@ -626,7 +627,7 @@ type RulesSecretScanningAlertResolution struct {
 	// +kubebuilder:validation:MaxItems=3
 	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="each secret type may appear once in secretTypes"
 	// +optional
-	SecretTypes []RulesSecretType `json:"secretTypes,omitempty"`
+	SecretTypes []RulesSecretType `json:"secretTypes"`
 }
 
 type RulesCopilotCodeReview struct {
@@ -648,7 +649,7 @@ type RulesFilePathRestriction struct {
 	RestrictedFilePaths []string `json:"restrictedFilePaths"`
 	// IgnoredFilePaths are paths exempt from the rule. Unset means an empty list.
 	// +optional
-	IgnoredFilePaths []string `json:"ignoredFilePaths,omitempty"`
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
 }
 
 type RulesMaxFilePathLength struct {
@@ -665,7 +666,7 @@ type RulesMaxFileSize struct {
 	MaxFileSize int64 `json:"maxFileSize"`
 	// IgnoredFilePaths are paths exempt from the rule. Unset means an empty list.
 	// +optional
-	IgnoredFilePaths []string `json:"ignoredFilePaths,omitempty"`
+	IgnoredFilePaths []string `json:"ignoredFilePaths"`
 }
 
 type RulesRequiredDeployments struct {
@@ -684,7 +685,7 @@ type RulesPullRequest struct {
 	// +kubebuilder:validation:MaxItems=3
 	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="each merge method may appear once in allowedMergeMethods"
 	// +optional
-	AllowedMergeMethods []RulesMergeMethod `json:"allowedMergeMethods,omitempty"`
+	AllowedMergeMethods []RulesMergeMethod `json:"allowedMergeMethods"`
 	// DismissalRestriction limits who can dismiss reviews. Unset lets everyone with write access dismiss them.
 	// +optional
 	DismissalRestriction *RulesDismissalRestriction `json:"dismissalRestriction,omitempty"`
@@ -699,7 +700,7 @@ type RulesPullRequest struct {
 	RequireExtraApprovalForUnattributedChanges *bool `json:"requireExtraApprovalForUnattributedChanges,omitempty"`
 	// RequiredReviewers requires approvals from specific teams for changes to matching files. Unset means an empty list.
 	// +optional
-	RequiredReviewers []*RulesRequiredReviewer `json:"requiredReviewers,omitempty"`
+	RequiredReviewers []*RulesRequiredReviewer `json:"requiredReviewers"`
 	// RequireCodeOwnerReview requires the pull request to be approved by a code owner.
 	// +optional
 	RequireCodeOwnerReview *bool `json:"requireCodeOwnerReview,omitempty"`
@@ -722,7 +723,7 @@ type RulesDismissalRestriction struct {
 	// AllowedActors are the actors who may dismiss reviews. Each must have write access
 	// to the repository; of the repository roles, only admin is accepted.
 	// +optional
-	AllowedActors []*RulesDismissalActor `json:"allowedActors,omitempty"`
+	AllowedActors []*RulesDismissalActor `json:"allowedActors"`
 }
 
 type RulesDismissalActor struct {
