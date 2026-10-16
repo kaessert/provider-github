@@ -11,7 +11,9 @@
 #     setting and a changed timestamp, ignores an unrelated object, and drops
 #     timestamps on request;
 #   * the fixture validator rejects an unknown field, a `selected` object without
-#     repositories and a write-capable object that omits a create-time field;
+#     repositories, a write-capable object that omits a create-time field, and each CEL rule
+#     of repositoryRules (a repeated name, a file rule on a branch ruleset, conditions on a
+#     push ruleset, a repeated list element);
 #   * the coverage checker rejects a missing row, an unsatisfied row and a coverage
 #     row with no adoption expectation;
 #   * the adoption flow's pure parts: the manifests derived from the v1 fixtures, the
@@ -159,6 +161,25 @@ validate_expect_fail() { # validate_expect_fail <name> <text that must appear>
     record FAIL "$1" "validator output: $(grep -E '^(FAIL|PASS)' <<<"${out}" | head -3 | tr '\n' ';')"
   fi
 }
+
+# The CEL rules of Repository.forProvider.repositoryRules: each is evaluated
+# from its text, and an unrecognised rule fails the validator, so a rule added to the CRDs without
+# a case here cannot pass unseen.
+copy_fixtures
+yq -i 'select(.kind == "Repository" and .metadata.name == "pgh-mig-repo-rules") .spec.forProvider.repositoryRules += [.spec.forProvider.repositoryRules[0]]' "${T}/fx/v1/30-repositories.yaml"
+validate_expect_fail "the validator rejects two repositoryRules of one name" "has repositoryRules with a repeated name"
+
+copy_fixtures
+yq -i 'select(.kind == "Repository" and .metadata.name == "pgh-mig-repo-rules") .spec.forProvider.repositoryRules[0].rules.maxFileSize.maxFileSize = 1' "${T}/fx/v1/30-repositories.yaml"
+validate_expect_fail "the validator rejects a file rule on a branch ruleset" "is not a push ruleset but sets a file rule"
+
+copy_fixtures
+yq -i 'select(.kind == "Repository" and .metadata.name == "pgh-mig-repo-rules") .spec.forProvider.repositoryRules[0].target = "push"' "${T}/fx/v1/30-repositories.yaml"
+validate_expect_fail "the validator rejects conditions on a push ruleset" "is a push ruleset but sets conditions"
+
+copy_fixtures
+yq -i 'select(.kind == "Repository" and .metadata.name == "pgh-mig-repo-main") .spec.forProvider.repositoryRules[0].rules.pullRequest.allowedMergeMethods = ["merge", "merge"]' "${T}/fx/v1/30-repositories.yaml"
+validate_expect_fail "the validator rejects a repeated allowedMergeMethods element" "repeats an element of allowedMergeMethods"
 
 copy_fixtures
 yq -i 'select(.kind == "Team" and .metadata.name == "pgh-mig-team-parent") .spec.forProvider.noSuchField = "x"' "${T}/fx/v1/10-teams.yaml"

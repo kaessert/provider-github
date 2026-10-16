@@ -150,18 +150,26 @@ kc_check "adoption fixtures (namespaced) validate against the candidate CRDs" "$
 # CEL rules, evaluated from the rule text
 # ---------------------------------------------------------------------------
 # cel_check <name> <crd-dir> <fixture-dir>
-# Rule shapes handled (these are the only two the CRDs carry):
+# Rule shapes handled (these are the only ones the CRDs carry):
 #   self.visibility != 'selected' || (has(self.selectedRepositories) && ...)
 #   !has(self.spec) || !has(self.spec.managementPolicies) || !(... 'Create' ...) || has(self.spec.forProvider.<field>)
+#   the four rules of Repository.forProvider.repositoryRules: unique names, file rules only
+#   on a push ruleset, no conditions on a push ruleset, no repeated allowedMergeMethods or
+#   secretTypes element
 cel_check() {
   local name="$1" crddir="$2" fxdir="$3" crd kind group rule field bad="" doc
   local rules="${WORK}/cel-rules.tsv"
   : >"${rules}"
   for crd in "${crddir}"/*.yaml; do
+    # The fourth column is the schema property a rule sits on (the last path
+    # element that is not "properties" or "items"): the uniqueness rules of the
+    # repositoryRules lists need it, the same rule text sits on two properties.
     yq -o=json '.' "${crd}" | jq -r '
-      .spec.names.kind as $k | .spec.group as $g |
-      [.. | objects | select(has("x-kubernetes-validations")) | .["x-kubernetes-validations"][].rule] | unique[] |
-      "\($g)\t\($k)\t\(.)"' >>"${rules}"
+      .spec.names.kind as $k | .spec.group as $g | . as $root |
+      [paths(type == "object" and has("x-kubernetes-validations")) as $p |
+        ($p | map(select(type == "string" and . != "properties" and . != "items")) | last) as $leaf |
+        ($root | getpath($p) | .["x-kubernetes-validations"][].rule) as $rule |
+        "\($g)\t\($k)\t\($rule)\t\($leaf)"] | unique[]' >>"${rules}"
   done
   # Flatten every fixture document to one JSON object per line.
   local docs="${WORK}/docs.jsonl"
@@ -169,7 +177,7 @@ cel_check() {
   for f in "${fxdir}"/*.yaml; do
     yq -o=json -I=0 '.' "${f}" >>"${docs}"
   done
-  while IFS=$'\t' read -r group kind rule; do
+  while IFS=$'\t' read -r group kind rule leaf; do
     case "${rule}" in
       *"has(self.spec.forProvider."*)
         field="$(printf '%s' "${rule}" | sed -E 's/.*has\(self\.spec\.forProvider\.([A-Za-z0-9]+)\)$/\1/')"
@@ -186,6 +194,40 @@ cel_check() {
           select(.spec.forProvider.visibility == "selected") |
           select(((.spec.forProvider.selectedRepositories // []) | length) == 0) |
           "\(.kind)/\(.metadata.name) has visibility selected without selectedRepositories"' "${docs}")"$'\n'
+        ;;
+      # repositoryRules: names are unique within the list
+      *"y.name == x.name"*)
+        bad+="$(jq -r --arg kind "${kind}" --arg g "${group}" '
+          select(.kind == $kind and (.apiVersion | startswith($g + "/"))) |
+          (.spec.forProvider.repositoryRules // []) as $rs |
+          select(($rs | map(.name) | length) != ($rs | map(.name) | unique | length)) |
+          "\(.kind)/\(.metadata.name) has repositoryRules with a repeated name"' "${docs}")"$'\n'
+        ;;
+      # repositoryRules: the file rules belong to a push ruleset only
+      *"has(self.rules.fileExtensionRestriction)"*)
+        bad+="$(jq -r --arg kind "${kind}" --arg g "${group}" '
+          select(.kind == $kind and (.apiVersion | startswith($g + "/"))) |
+          .metadata.name as $n | .spec.forProvider.repositoryRules[]? |
+          select(.target != "push") |
+          select(.rules != null and ((.rules | keys) | map(select(. == "fileExtensionRestriction" or . == "filePathRestriction" or . == "maxFilePathLength" or . == "maxFileSize")) | length) > 0) |
+          "\(.name) of \($n) is not a push ruleset but sets a file rule"' "${docs}" | sed "s|^|${kind}: |")"$'\n'
+        ;;
+      # repositoryRules: a push ruleset has no conditions
+      *"!(has(self.target) && self.target == 'push') || !has(self.conditions)"*)
+        bad+="$(jq -r --arg kind "${kind}" --arg g "${group}" '
+          select(.kind == $kind and (.apiVersion | startswith($g + "/"))) |
+          .metadata.name as $n | .spec.forProvider.repositoryRules[]? |
+          select(.target == "push" and .conditions != null) |
+          "\(.name) of \($n) is a push ruleset but sets conditions"' "${docs}" | sed "s|^|${kind}: |")"$'\n'
+        ;;
+      # allowedMergeMethods, secretTypes: no element repeats
+      "self.all(x, self.exists_one(y, y == x))")
+        bad+="$(jq -r --arg kind "${kind}" --arg g "${group}" --arg f "${leaf}" '
+          select(.kind == $kind and (.apiVersion | startswith($g + "/"))) |
+          .metadata.name as $n |
+          (.spec.forProvider | [.. | objects | .[$f]? | arrays | select(length != (unique | length))]) | length as $dup |
+          select($dup > 0) |
+          "\($n) repeats an element of \($f)"' "${docs}" | sed "s|^|${kind}: |")"$'\n'
         ;;
       *) bad+="unrecognised CEL rule on ${kind}: ${rule}"$'\n' ;;
     esac
