@@ -336,3 +336,8 @@ linters:
           - gosec
           - noctx
           - wrapcheck
+      # Fixture data and declarative descriptor tables under tools/ repeat
+      # string literals by design; goconst stays strict on internal/.
+      - path: '^tools/'
+        linters:
+          - goconst
