@@ -5830,14 +5830,9 @@ func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
 // A repository whose rulesets the provider leaves alone publishes rulesets=0,
 // ruleset_parameters=0, ruleset_spec=0 and RulesetsPartial False, so an earlier report does not keep
 // an alert firing:
-// repositoryRules unset, the repository archived, or the CR being deleted.
+// repositoryRules unset, or the CR being deleted. An archived repository lists its
+// rulesets as any other does (TestArchivedRepositoryRulesetListErrors).
 func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
-	archived := upToDateRepositories(nil)
-	archived.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-		r := githubRepository()
-		r.Archived = github.Ptr(true)
-		return r, nil, nil
-	}
 	deleted := repository()
 	now := metav1.Now()
 	deleted.SetDeletionTimestamp(&now)
@@ -5848,10 +5843,6 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 		"RepositoryRulesUnset": {
 			repos: upToDateRepositories(nil),
 			cr:    repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = nil }),
-		},
-		"Archived": {
-			repos: archived,
-			cr:    repository(withArchived(true)),
 		},
 		"Deleted": {
 			repos: upToDateRepositories(nil),
