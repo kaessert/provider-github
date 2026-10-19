@@ -480,27 +480,54 @@ func (c *external) mirrorFrozenSections(ctx context.Context, cr *v1alpha1.Reposi
 		}
 	}
 
-	cr.Status.AtProvider.RepositoryRules = nil
-	if cr.Spec.ForProvider.RepositoryRules != nil {
-		// As when not archived, a failed list reads as no rulesets: an organization
-		// whose plan has no rulesets answers the list with an error.
-		ghRulesets, _ := getRepositoryRules(ctx, c.github, org, name)
-		// Every ruleset is fetched, and one holding rule types this provider does not
-		// manage is mirrored with the rule types it models: only a write needs it
-		// left alone.
-		named := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
-		for _, r := range ghRulesets {
-			named[r.Name] = v1alpha1.RepositoryRuleset{Name: r.Name}
-		}
-		_, report, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, named)
-		if err != nil {
-			return err
-		}
-		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(report.observed); err != nil {
-			return err
-		}
+	if cr.Spec.ForProvider.RepositoryRules == nil {
+		cr.Status.AtProvider.RepositoryRules = nil
+		return nil
 	}
-	return nil
+	// A failed list leaves the mirror as it was. A refused one, reported on
+	// RulesetsPartial, leaves nothing to mirror.
+	ghRulesets, listed, err := c.listRulesets(ctx, cr, name)
+	if err != nil {
+		return err
+	}
+	if !listed {
+		cr.Status.AtProvider.RepositoryRules = nil
+		return nil
+	}
+	// Every ruleset is fetched, and one holding rule types this provider does not
+	// manage is mirrored with the rule types it models: only a write needs it
+	// left alone.
+	named := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
+	for _, r := range ghRulesets {
+		named[r.Name] = v1alpha1.RepositoryRuleset{Name: r.Name}
+	}
+	_, report, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, named)
+	if err != nil {
+		return err
+	}
+	cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(report.observed)
+	return err
+}
+
+// listRulesets lists the repository's rulesets. Any error but a 403 is returned. A 403,
+// which GitHub answers on a plan without rulesets, leaves the rulesets unread and
+// reported on RulesetsPartial, and listed is false. The refusal leaves the declared
+// rulesets unapplied; a repository that declares none already has the state it asks for.
+func (c *external) listRulesets(ctx context.Context, cr *v1alpha1.Repository, name string) (ghRulesets []*rulesets.Ruleset, listed bool, err error) {
+	ghRulesets, err = getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
+	if err == nil {
+		return ghRulesets, true, nil
+	}
+	if !ghclient.Is403(err) {
+		return nil, false, err
+	}
+	if len(*cr.Spec.ForProvider.RepositoryRules) > 0 {
+		setRulesetsPartialCondition(cr, nil, err, rulesetReport{})
+	} else {
+		setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
+	}
+	c.recordRulesetsUnreconcilable(cr)
+	return nil, false, nil
 }
 
 // observeRulesets reads the repository's rulesets, mirrors them into
@@ -516,20 +543,9 @@ func (c *external) observeRulesets(ctx context.Context, cr *v1alpha1.Repository,
 		return false, nil
 	}
 
-	ghRulesets, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
-	if err != nil && !ghclient.Is403(err) {
+	ghRulesets, listed, err := c.listRulesets(ctx, cr, name)
+	if err != nil || !listed {
 		return false, err
-	}
-	if err != nil {
-		// The refusal leaves the declared rulesets unapplied; a repository that declares
-		// none already has the state it asks for.
-		if len(*cr.Spec.ForProvider.RepositoryRules) > 0 {
-			setRulesetsPartialCondition(cr, nil, err, rulesetReport{})
-		} else {
-			setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
-		}
-		c.recordRulesetsUnreconcilable(cr)
-		return false, nil
 	}
 
 	ghRulesetsToConfig, report, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRulesets, crRulesets)

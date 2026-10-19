@@ -20,11 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
@@ -38,6 +40,7 @@ import (
 	"github.com/provider-github/provider-github/internal/clients/rulesets"
 	"github.com/provider-github/provider-github/internal/controller/scopebridge"
 	"github.com/provider-github/provider-github/internal/driftdetection/ddtest"
+	"github.com/provider-github/provider-github/internal/telemetry"
 )
 
 // rulesetScopes are the two scope variants of the Repository kind. Each runs the same
@@ -619,5 +622,86 @@ func TestArchivedRepositoryMirrorsRulesetsInBothScopes(t *testing.T) {
 				t.Errorf("status.atProvider.repositoryRules lacks %s: %s", rr1name, s.atProviderRules())
 			}
 		})
+	}
+}
+
+// An archived repository lists its rulesets as one that is not archived does: an error
+// other than 403 fails Observe and leaves the mirror as it was, and a 403 leaves the
+// rulesets unread and reported on RulesetsPartial and the rulesets_forbidden gauge, in
+// both scopes. A repository declaring no rulesets keeps the condition False on the 403.
+func TestArchivedRepositoryRulesetListErrors(t *testing.T) {
+	serverError := func() *fake.MockRulesetsClient {
+		rs := rulesetsWithoutWrites(t)
+		rs.MockGetAllRulesets = func(context.Context, string, string, *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return nil, nil, &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusInternalServerError}, Message: "boom"}
+		}
+		return rs
+	}
+	noDeclaredRulesets := func(cr *clusterv1alpha1.Repository) {
+		cr.Spec.ForProvider.RepositoryRules = &[]clusterv1alpha1.RepositoryRuleset{}
+	}
+	cases := map[string]struct {
+		rs         *fake.MockRulesetsClient
+		mods       []repositoryModifier
+		wantErr    bool
+		wantStatus corev1.ConditionStatus
+		wantReason xpv2.ConditionReason
+		wantGauge  float64
+	}{
+		"ServerError": {
+			rs: serverError(), wantErr: true,
+			wantStatus: corev1.ConditionFalse, wantReason: reasonRulesetsReconciled,
+		},
+		"ForbiddenWithDeclaredRulesets": {
+			rs:         rulesetsForbidden(t),
+			wantStatus: corev1.ConditionTrue, wantReason: reasonRulesetsForbidden, wantGauge: 1,
+		},
+		"ForbiddenWithoutDeclaredRulesets": {
+			rs: rulesetsForbidden(t), mods: []repositoryModifier{noDeclaredRulesets},
+			wantStatus: corev1.ConditionFalse, wantReason: reasonRulesetsReconciled,
+		},
+	}
+	for name, tc := range cases {
+		for _, scope := range rulesetScopes {
+			t.Run(scope+"/"+name, func(t *testing.T) {
+				metrics := telemetry.NewForTest()
+				cr := repository(append([]repositoryModifier{withArchived(true)}, tc.mods...)...)
+				cr.Spec.ForProvider.Org = "acme"
+				// A mirror from an earlier poll, which a failed list must not wipe.
+				cr.Status.AtProvider.RepositoryRules = []clusterv1alpha1.RepositoryRulesetObservation{{Name: "earlier"}}
+
+				s := newScopedRepository(t, scope, &external{github: clientFor(archivedRepositories(), tc.rs), metrics: metrics}, cr)
+				got, err := s.observe()
+				if tc.wantErr {
+					if err == nil {
+						t.Fatalf("Observe = %+v, nil error, want the ruleset list error", got)
+					}
+					if !strings.Contains(string(s.atProviderRules()), "earlier") {
+						t.Errorf("status.atProvider.repositoryRules = %s, want the earlier mirror left in place", s.atProviderRules())
+					}
+				} else {
+					if err != nil {
+						t.Fatalf("Observe: %v", err)
+					}
+					if !got.ResourceExists || !got.ResourceUpToDate {
+						t.Errorf("Observe = %+v, want an existing, up to date repository", got)
+					}
+					if rules := string(s.atProviderRules()); rules != "null" {
+						t.Errorf("status.atProvider.repositoryRules = %s, want none: the list was refused", rules)
+					}
+				}
+				if c := s.condition(typeRulesetsPartial); c.Status != tc.wantStatus || c.Reason != tc.wantReason {
+					t.Errorf("RulesetsPartial = %s/%s, want %s/%s", c.Status, c.Reason, tc.wantStatus, tc.wantReason)
+				}
+				if tc.wantReason == reasonRulesetsForbidden {
+					if c := s.condition(typeRulesetsPartial); !strings.HasSuffix(c.Message, ": "+planWithoutRulesets) {
+						t.Errorf("RulesetsPartial message = %q, want GitHub's message %q", c.Message, planWithoutRulesets)
+					}
+				}
+				if g := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); g != tc.wantGauge {
+					t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want %v", g, tc.wantGauge)
+				}
+			})
+		}
 	}
 }
