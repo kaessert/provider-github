@@ -27,7 +27,7 @@ env:
 
 jobs:
   detect-noop:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       noop: ${{ steps.noop.outputs.should_skip }}
     steps:
@@ -38,13 +38,13 @@ jobs:
       # matches provider-upjet-aws, which omits the token for the same reason.
       - name: Detect No-op Changes
         id: noop
-        uses: fkirc/skip-duplicate-actions@f75f66ce1886f00957d99748a42c724f4330bdcf # v5.3.1
+        uses: fkirc/skip-duplicate-actions@b974a9395958c231af965b70070979a577efa578 # v5.3.2
         with:
           paths_ignore: '["**.md", "**.png", "**.jpg"]'
           do_not_skip: '["workflow_dispatch", "schedule", "push"]'
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -70,7 +70,7 @@ jobs:
           version: ${{ env.GOLANGCI_VERSION }}
 
   check-diff:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -109,7 +109,7 @@ jobs:
   # pull_request only -- on a push to main the merge has already happened and
   # the comparison has already been made.
   check-breaking-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true' && github.event_name == 'pull_request'
 
@@ -142,7 +142,7 @@ jobs:
         run: make check-breaking-changes
 
   check-conventions:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -162,7 +162,7 @@ jobs:
   # no vens. Reads the same security/vex-exceptions.openvex.json the release
   # gate reads, so a PR and a release cannot disagree about what is waived.
   security-checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -259,7 +259,7 @@ jobs:
           echo "PASS: license check passed -- $TOTAL license(s) found, no GPL-family licenses"
 
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -291,7 +291,7 @@ jobs:
   # the Github API. Live E2E is gated behind the /test-examples comment trigger
   # in uptest-trigger.yaml, because it creates billable Github resources.
   local-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
@@ -311,7 +311,6 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
-          install: true
 
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

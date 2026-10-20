@@ -78,7 +78,7 @@ jobs:
   # regardless of which trigger fired.
   # ════════════════════════════════════════════════════════════════════
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions: {}          # no checkout, no API call -- needs no token scope
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -106,7 +106,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   security-gate:
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read        # actions/checkout; nothing else here touches the API
     steps:
@@ -458,7 +458,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   build-and-push:
     needs: [resolve, security-gate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read        # actions/checkout; the registry push authenticates
                             # with the secrets login below, not GITHUB_TOKEN
@@ -493,7 +493,6 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
-          install: true
 
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -595,7 +594,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   attest:
     needs: [resolve, build-and-push]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write       # `gh api .../releases/generate-notes` fallback in
                             # "Generate release notes" (POST needs contents:write)
@@ -631,7 +630,7 @@ jobs:
         id: syft-install
 
       - name: Download security artifacts
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: security-artifacts
 
@@ -860,12 +859,12 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   release:
     needs: [resolve, attest]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write       # softprops/action-gh-release creates the Release
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
 
@@ -873,7 +872,7 @@ jobs:
       # as a pre-release, so a throwaway or candidate build is not presented as
       # the latest stable release on the repository front page.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           name: ${{ needs.resolve.outputs.tag }}

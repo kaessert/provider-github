@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   check-permissions:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       permission: ${{ steps.check-permissions.outputs.permission }}
     steps:
@@ -58,7 +58,7 @@ jobs:
   get-example-list:
     needs: check-permissions
     if: ${{ (needs.check-permissions.outputs.permission == 'admin' || needs.check-permissions.outputs.permission == 'write') && github.event.issue.pull_request != null && contains(github.event.comment.body, '/test-examples') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       example_list: ${{ steps.get-example-list-name.outputs.example-list }}
       example_hash: ${{ steps.get-example-list-name.outputs.example-hash }}
@@ -157,7 +157,7 @@ jobs:
       - check-permissions
       - get-example-list
     if: ${{ (needs.check-permissions.outputs.permission == 'admin' || needs.check-permissions.outputs.permission == 'write') && github.event.issue.pull_request != null && contains(github.event.comment.body, '/test-examples') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     concurrency:
       # Every /test-examples trigger in this repository shares one backend --
       # a live tenant, a fixed-name example object, or (for infobloxnios) a
@@ -186,7 +186,6 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
           version: 'v0.23.0'
-          install: true
 
       - name: Checkout PR
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
