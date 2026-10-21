@@ -86,14 +86,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.Wrap(err, errGetSecret)
 	}
 
-	ap := &cr.Status.AtProvider
-	ap.ID = name
-	ap.Org = org
-	ap.Name = s.GetName()
-	ap.Visibility = s.Visibility
-	ap.CreatedAt = formatTime(s.CreatedAt)
-	ap.UpdatedAt = formatTime(s.UpdatedAt)
-	ap.SelectedRepositories = nil
+	cr.Status.AtProvider.ID = name
+	cr.Status.AtProvider.Org = org
+	cr.Status.AtProvider.Name = s.GetName()
+	cr.Status.AtProvider.Visibility = s.Visibility
+	cr.Status.AtProvider.CreatedAt = formatTime(s.CreatedAt)
+	cr.Status.AtProvider.UpdatedAt = formatTime(s.UpdatedAt)
+	cr.Status.AtProvider.SelectedRepositories = nil
 
 	// The list exists on GitHub's side while GitHub's visibility is selected,
 	// whatever the spec says; it is read and mirrored before any difference is
@@ -104,7 +103,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, errors.Wrap(err, errListRepos)
 		}
-		ap.SelectedRepositories = secretaccess.RepoObservations(ghRepos)
+		cr.Status.AtProvider.SelectedRepositories = secretaccess.RepoObservations(ghRepos)
 	}
 
 	drift := configDrifted(cr.Spec.ForProvider, s.Visibility, ghRepos)
