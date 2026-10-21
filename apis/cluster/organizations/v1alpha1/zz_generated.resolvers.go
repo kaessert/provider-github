@@ -25,6 +25,53 @@ import (
 	client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// ResolveReferences of this ActionsOrganizationSecret.
+func (mg *ActionsOrganizationSecret) ResolveReferences(ctx context.Context, c client.Reader) error {
+	r := reference.NewAPIResolver(c, mg)
+
+	var rsp reference.ResolutionResponse
+	var err error
+
+	rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+		CurrentValue: mg.Spec.ForProvider.Org,
+		Extract:      reference.ExternalName(),
+		Namespace:    mg.GetNamespace(),
+		Reference:    mg.Spec.ForProvider.OrgRef,
+		Selector:     mg.Spec.ForProvider.OrgSelector,
+		To: reference.To{
+			List:    &OrganizationList{},
+			Managed: &Organization{},
+		},
+	})
+	if err != nil {
+		return errors.Wrap(err, "mg.Spec.ForProvider.Org")
+	}
+	mg.Spec.ForProvider.Org = rsp.ResolvedValue
+	mg.Spec.ForProvider.OrgRef = rsp.ResolvedReference
+
+	for i3 := 0; i3 < len(mg.Spec.ForProvider.SelectedRepositories); i3++ {
+		rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+			CurrentValue: mg.Spec.ForProvider.SelectedRepositories[i3].Repo,
+			Extract:      reference.ExternalName(),
+			Namespace:    mg.GetNamespace(),
+			Reference:    mg.Spec.ForProvider.SelectedRepositories[i3].RepoRef,
+			Selector:     mg.Spec.ForProvider.SelectedRepositories[i3].RepoSelector,
+			To: reference.To{
+				List:    &RepositoryList{},
+				Managed: &Repository{},
+			},
+		})
+		if err != nil {
+			return errors.Wrap(err, "mg.Spec.ForProvider.SelectedRepositories[i3].Repo")
+		}
+		mg.Spec.ForProvider.SelectedRepositories[i3].Repo = rsp.ResolvedValue
+		mg.Spec.ForProvider.SelectedRepositories[i3].RepoRef = rsp.ResolvedReference
+
+	}
+
+	return nil
+}
+
 // ResolveReferences of this ActionsSecretAccess.
 func (mg *ActionsSecretAccess) ResolveReferences(ctx context.Context, c client.Reader) error {
 	r := reference.NewAPIResolver(c, mg)
