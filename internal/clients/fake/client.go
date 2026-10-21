@@ -12,7 +12,10 @@ import (
 type MockActionsClient struct {
 	MockListEnabledReposInOrg           func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
 	MockSetEnabledReposInOrg            func(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
+	MockGetOrgPublicKey                 func(ctx context.Context, org string) (*github.PublicKey, *github.Response, error)
 	MockGetOrgSecret                    func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	MockCreateOrUpdateOrgSecret         func(ctx context.Context, org, name string, secret github.SecretOrgRequest) (*github.Response, error)
+	MockDeleteOrgSecret                 func(ctx context.Context, org, name string) (*github.Response, error)
 	MockListSelectedReposForOrgSecret   func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 	MockSetSelectedReposForOrgSecret    func(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 	MockGetOrgVariable                  func(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error)
@@ -34,6 +37,18 @@ func (m *MockActionsClient) ListEnabledReposInOrg(ctx context.Context, owner str
 
 func (m *MockActionsClient) SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error) {
 	return m.MockSetEnabledReposInOrg(ctx, owner, repositoryIDs)
+}
+
+func (m *MockActionsClient) GetOrgPublicKey(ctx context.Context, org string) (*github.PublicKey, *github.Response, error) {
+	return m.MockGetOrgPublicKey(ctx, org)
+}
+
+func (m *MockActionsClient) CreateOrUpdateOrgSecret(ctx context.Context, org, name string, secret github.SecretOrgRequest) (*github.Response, error) {
+	return m.MockCreateOrUpdateOrgSecret(ctx, org, name, secret)
+}
+
+func (m *MockActionsClient) DeleteOrgSecret(ctx context.Context, org, name string) (*github.Response, error) {
+	return m.MockDeleteOrgSecret(ctx, org, name)
 }
 
 func (m *MockActionsClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {

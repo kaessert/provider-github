@@ -12,6 +12,7 @@ import (
 
 	clusterorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	namespacedorganizationsv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/internal/controller/actionsorganizationsecret"
 	"github.com/provider-github/provider-github/internal/controller/actionssecretaccess"
 	"github.com/provider-github/provider-github/internal/controller/config"
 	"github.com/provider-github/provider-github/internal/controller/dependabotsecretaccess"
@@ -35,6 +36,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		return err
 	}
 	for _, setup := range []setupFunc{
+		actionsorganizationsecret.SetupWithTimeout,
 		actionssecretaccess.SetupWithTimeout,
 		dependabotsecretaccess.SetupWithTimeout,
 		membership.SetupWithTimeout,
@@ -44,6 +46,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		repository.SetupWithTimeout,
 		runnergroup.SetupWithTimeout,
 		team.SetupWithTimeout,
+		actionsorganizationsecret.SetupNamespacedWithTimeout,
 		actionssecretaccess.SetupNamespacedWithTimeout,
 		dependabotsecretaccess.SetupNamespacedWithTimeout,
 		membership.SetupNamespacedWithTimeout,
@@ -72,6 +75,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateL
 		gvk   schema.GroupVersionKind
 		setup setupFunc
 	}{
+		{clusterorganizationsv1alpha1.ActionsOrganizationSecretGroupVersionKind, actionsorganizationsecret.SetupWithTimeout},
 		{clusterorganizationsv1alpha1.ActionsSecretAccessGroupVersionKind, actionssecretaccess.SetupWithTimeout},
 		{clusterorganizationsv1alpha1.DependabotSecretAccessGroupVersionKind, dependabotsecretaccess.SetupWithTimeout},
 		{clusterorganizationsv1alpha1.MembershipGroupVersionKind, membership.SetupWithTimeout},
@@ -81,6 +85,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateL
 		{clusterorganizationsv1alpha1.RepositoryGroupVersionKind, repository.SetupWithTimeout},
 		{clusterorganizationsv1alpha1.RunnerGroupGroupVersionKind, runnergroup.SetupWithTimeout},
 		{clusterorganizationsv1alpha1.TeamGroupVersionKind, team.SetupWithTimeout},
+		{namespacedorganizationsv1alpha1.ActionsOrganizationSecretGroupVersionKind, actionsorganizationsecret.SetupNamespacedWithTimeout},
 		{namespacedorganizationsv1alpha1.ActionsSecretAccessGroupVersionKind, actionssecretaccess.SetupNamespacedWithTimeout},
 		{namespacedorganizationsv1alpha1.DependabotSecretAccessGroupVersionKind, dependabotsecretaccess.SetupNamespacedWithTimeout},
 		{namespacedorganizationsv1alpha1.MembershipGroupVersionKind, membership.SetupNamespacedWithTimeout},

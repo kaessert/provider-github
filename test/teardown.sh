@@ -3,12 +3,14 @@
 #
 # uptest runs this script (--teardown-script) after the delete step has
 # passed. It removes the disposable objects test/setup.sh created: the
-# organization secrets the SecretAccess and Organization examples manage and the
-# template and workflow repositories the Repository branches, RunnerGroup and
+# organization secrets the SecretAccess and Organization examples manage, the two
+# secrets the ActionsOrganizationSecret examples create (in case the provider did
+# not delete them), and the template and workflow repositories the Repository branches, RunnerGroup and
 # Organization examples need. Deleting an object that is already gone is not an
 # error, so running it twice is safe.
 #
-# Required environment when E2E_ORG_SECRETS=true or E2E_REPO_FIXTURES=true: the
+# Required environment when E2E_ORG_SECRETS, E2E_ORG_OWN_SECRETS or
+# E2E_REPO_FIXTURES is true: the
 # GitHub App credentials and E2E_ORG named in test/org-secrets.sh. It does
 # nothing otherwise.
 set -euo pipefail
@@ -18,6 +20,12 @@ rc=0
 
 if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
   "${here}/org-secrets.sh" delete || rc=1
+fi
+
+# A run with the ActionsOrganizationSecret examples removes just their two
+# secrets; a missing one is fine.
+if [ "${E2E_ORG_OWN_SECRETS:-}" = "true" ]; then
+  "${here}/org-secrets.sh" delete-own || rc=1
 fi
 
 if [ "${E2E_REPO_FIXTURES:-}" = "true" ]; then

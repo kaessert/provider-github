@@ -556,6 +556,24 @@ func (c *actionsClient) SetEnabledReposInOrg(ctx context.Context, owner string, 
 	return resp, err
 }
 
+func (c *actionsClient) GetOrgPublicKey(ctx context.Context, org string) (*github.PublicKey, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.GetOrgPublicKey", func() (*github.PublicKey, *github.Response, error) {
+		return c.ActionsClient.GetOrgPublicKey(ctx, org)
+	})
+}
+
+func (c *actionsClient) CreateOrUpdateOrgSecret(ctx context.Context, org, name string, secret github.SecretOrgRequest) (*github.Response, error) {
+	resp, err := c.ActionsClient.CreateOrUpdateOrgSecret(ctx, org, name, secret)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.CreateOrUpdateOrgSecret", resp, err)
+	return resp, err
+}
+
+func (c *actionsClient) DeleteOrgSecret(ctx context.Context, org, name string) (*github.Response, error) {
+	resp, err := c.ActionsClient.DeleteOrgSecret(ctx, org, name)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.DeleteOrgSecret", resp, err)
+	return resp, err
+}
+
 func (c *actionsClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.GetOrgSecret", func() (*github.Secret, *github.Response, error) {
 		return c.ActionsClient.GetOrgSecret(ctx, org, name)

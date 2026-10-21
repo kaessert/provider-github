@@ -2,12 +2,16 @@
 # test/org-secrets.sh -- disposable organization secrets for the E2E.
 #
 # ActionsSecretAccess and DependabotSecretAccess manage which repositories can
-# use an organization secret, and so does the Organization's secrets field; the
-# provider never creates the secret. GitHub
-# accepts a secret only as a libsodium sealed box of its value, so this script
-# asks test/sealedbox (a standard-library Go helper, no module beyond the
-# provider's own) to encrypt a random value and PUTs it through the REST API
-# with an installation token minted from the three GitHub App credentials.
+# use an organization secret, and so does the Organization's secrets field; those
+# kinds never create the secret. GitHub accepts a secret only as a libsodium
+# sealed box of its value, so this script asks test/sealedbox (a standard-library
+# Go helper, no module beyond the provider's own) to encrypt a random value and
+# PUTs it through the REST API with an installation token minted from the three
+# GitHub App credentials.
+#
+# ActionsOrganizationSecret does create its own secret, so its examples need no
+# fixture. The delete-own and watch-own verbs only remove the two secrets its
+# examples create, as a net for a run that fails before the provider deletes them.
 #
 # Usage:
 #   test/org-secrets.sh create   create (or overwrite) the eight secrets, visibility selected,
@@ -17,6 +21,11 @@
 #                                kubeconfig file in WATCH_KUBECONFIG is gone, then
 #                                delete the eight secrets (the net for a run that ends
 #                                without reaching the teardown script)
+#   test/org-secrets.sh delete-own
+#                                delete the two secrets the ActionsOrganizationSecret
+#                                examples create; a missing secret is fine
+#   test/org-secrets.sh watch-own
+#                                like watch, but deletes only those two secrets
 #   test/org-secrets.sh check-actions
 #                                fail unless the organization's Actions policy is the
 #                                one the Organization update test restores: enabled
@@ -65,6 +74,11 @@ ORG_ACTIONS_SECRET=PGH_E2E_ORG_ACTIONS_SECRET
 ORG_ACTIONS_SECRET_NS=PGH_E2E_ORG_ACTIONS_SECRET_NS
 ORG_DEPENDABOT_SECRET=PGH_E2E_ORG_DEPENDABOT_SECRET
 ORG_DEPENDABOT_SECRET_NS=PGH_E2E_ORG_DEPENDABOT_SECRET_NS
+
+# The secrets the ActionsOrganizationSecret examples create themselves. They are
+# not among the eight above and are never created by this script.
+OWN_ACTIONS_SECRET=PGH_E2E_ORG_SECRET
+OWN_ACTIONS_SECRET_NS=PGH_E2E_ORG_SECRET_NS
 
 require_env PROVIDER_GITHUB_APP_ID PROVIDER_GITHUB_APP_INSTALLATION_ID PROVIDER_GITHUB_APP_PRIVATE_KEY_B64 E2E_ORG
 require_tools curl openssl jq base64
@@ -118,6 +132,14 @@ delete_both() {
   return "${rc}"
 }
 
+delete_own() {
+  local token rc=0
+  token="$(mint_token)"
+  delete_secret "${token}" actions "${OWN_ACTIONS_SECRET}" || rc=1
+  delete_secret "${token}" actions "${OWN_ACTIONS_SECRET_NS}" || rc=1
+  return "${rc}"
+}
+
 # check_actions fails unless the organization's Actions policy is the baseline the
 # Organization update test puts back: enabled repositories "selected" and exactly
 # the repositories in ACTIONS_BASELINE_REPOS. The test lists a disposable
@@ -137,7 +159,7 @@ check_actions() {
   body="$(resp_body "${resp}")"
   [ "${status}" = 200 ] || fail "listing the repositories enabled for Actions in ${E2E_ORG} returned HTTP ${status}: ${body}"
   have="$(printf '%s' "${body}" | jq -r '[.repositories[].name] | sort | join(" ")')"
-  # shellcheck disable=SC2086 -- the list is space-separated on purpose
+  # shellcheck disable=SC2086 # the list is space-separated on purpose
   want="$(printf '%s\n' ${ACTIONS_BASELINE_REPOS} | sort | tr '\n' ' ' | sed 's/ $//')"
   [ "${have}" = "${want}" ] || fail "${E2E_ORG} has these repositories enabled for Actions: [${have}], not the baseline [${want}]; the Organization update test would change the list for good"
   echo "org-secrets.sh: the Actions policy of ${E2E_ORG} is the baseline (selected: ${have})"
@@ -162,11 +184,18 @@ case "${1:-}" in
     watch_cluster_gone
     delete_both
     ;;
+  delete-own)
+    delete_own
+    ;;
+  watch-own)
+    watch_cluster_gone
+    delete_own
+    ;;
   check-actions)
     check_actions
     ;;
   *)
-    echo "usage: ${0##*/} create|delete|watch|check-actions" >&2
+    echo "usage: ${0##*/} create|delete|watch|delete-own|watch-own|check-actions" >&2
     exit 2
     ;;
 esac

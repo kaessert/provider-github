@@ -22,6 +22,8 @@ import "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 // reconciler and the usage tracker rely on. Nothing else binds a concrete type
 // to them at compile time.
 var (
+	_ resource.Managed       = &ActionsOrganizationSecret{}
+	_ resource.ModernManaged = &ActionsOrganizationSecret{}
 	_ resource.Managed       = &ActionsSecretAccess{}
 	_ resource.ModernManaged = &ActionsSecretAccess{}
 	_ resource.Managed       = &DependabotSecretAccess{}

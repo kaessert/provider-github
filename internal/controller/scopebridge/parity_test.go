@@ -133,8 +133,8 @@ func TestScopesShareForProviderAndAtProviderSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	sort.Strings(files)
-	if len(files) != 9 {
-		t.Fatalf("found %d cluster-scoped Kinds, want 9", len(files))
+	if len(files) != 10 {
+		t.Fatalf("found %d cluster-scoped Kinds, want 10", len(files))
 	}
 
 	for _, clusterFile := range files {
