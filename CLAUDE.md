@@ -123,7 +123,7 @@ Owns the provider's Prometheus metrics. The rate-limit and credential metrics ca
 
 ## Code conventions
 
-- Go 1.26.9 (the `go` directive in `go.mod`), modules. Module path: `github.com/provider-github/provider-github`.
+- Go 1.26.10 (the `go` directive in `go.mod`), modules. Module path: `github.com/provider-github/provider-github`.
 - Imports follow `goimports` with local prefix `github.com/my/project` (per `.golangci.yml` — yes, that prefix string is a quirk of the config).
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.
