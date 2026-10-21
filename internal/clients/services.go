@@ -38,7 +38,10 @@ type Services struct {
 type ActionsClient interface {
 	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
 	SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
+	GetOrgPublicKey(ctx context.Context, org string) (*github.PublicKey, *github.Response, error)
 	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	CreateOrUpdateOrgSecret(ctx context.Context, org, name string, secret github.SecretOrgRequest) (*github.Response, error)
+	DeleteOrgSecret(ctx context.Context, org, name string) (*github.Response, error)
 	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 	GetOrgVariable(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error)
