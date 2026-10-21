@@ -22,12 +22,15 @@ following permissions:
 | Actions variables    | Read and write | `OrganizationVariable` CR                                    |
 | Self-hosted runners  | Read and write | `RunnerGroup` CR                                             |
 | Webhooks             | Read and write | `OrganizationWebhook` CR                                     |
-| Secrets              | Read and write | `secrets.actionsSecrets` on the `Organization` CR (repo-access selection) |
+| Secrets              | Read and write | `ActionsOrganizationSecret` CR (secret create/update/delete); `secrets.actionsSecrets` on the `Organization` CR (repo-access selection) |
 | Dependabot secrets   | Read and write | `secrets.dependabotSecrets` on the `Organization` CR (repo-access selection) |
 
-> **Note** — the provider does not create or update the secret values themselves;
-> it only manages which repositories are granted access to existing
-> organization-level secrets. The secret values are expected to be set out-of-band.
+> **Note** — only the `ActionsOrganizationSecret` CR sets a secret value: it
+> reads the value from a Kubernetes Secret, seals it with the organization's
+> public key and writes it to GitHub. The `Organization`, `ActionsSecretAccess`
+> and `DependabotSecretAccess` CRs never create or update a secret value; they
+> only manage which repositories are granted access to existing
+> organization-level secrets, whose values are set out-of-band.
 
 ## Per-resource breakdown
 
@@ -40,6 +43,7 @@ provider picks an App per reconcile based on rate-limit headroom.
 | Managed resource       | Repository permissions                                | Organization permissions                                       |
 | ---------------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
 | `Organization`         | Metadata (R)                                          | Administration (R/W), Secrets (R/W), Dependabot secrets (R/W)  |
+| `ActionsOrganizationSecret` | Metadata (R)                                     | Secrets (R/W)                                                  |
 | `OrganizationVariable` | Metadata (R)                                          | Actions variables (R/W)                                        |
 | `OrganizationWebhook`  | Metadata (R)                                          | Webhooks (R/W)                                                 |
 | `RunnerGroup`          | Metadata (R)                                          | Self-hosted runners (R/W)                                      |

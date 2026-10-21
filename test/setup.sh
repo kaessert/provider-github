@@ -19,6 +19,11 @@
 #                    creates the disposable organization secrets those examples
 #                    manage, and removes them when it ends. Needs E2E_ORG, which
 #                    the Makefile exports.
+#   E2E_ORG_OWN_SECRETS "true" when the run includes the ActionsOrganizationSecret
+#                    examples (the Makefile sets it); the provider creates those
+#                    secrets itself, so setup only starts a detached watcher that
+#                    deletes them if the run ends without reaching the teardown
+#                    script. Needs E2E_ORG, which the Makefile exports.
 #   E2E_ORG_ACTIONS  "true" when the run includes the Organization examples (the
 #                    Makefile sets it); the run first checks that the
 #                    organization's Actions policy is the baseline the update test
@@ -149,17 +154,18 @@ YAML
 # ---------------------------------------------------------------------------
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# start_watcher <script> detaches "<script> watch". The runner removes the
-# kubeconfig it gives this script once the script returns, so the watcher keeps a
-# private flattened copy of the context; the copy is the watcher's own (it deletes
-# the file when it exits), so each watcher gets one.
+# start_watcher <script> [verb] detaches "<script> <verb>" (verb defaults to
+# watch). The runner removes the kubeconfig it gives this script once the script
+# returns, so the watcher keeps a private flattened copy of the context; the copy
+# is the watcher's own (it deletes the file when it exits), so each watcher gets
+# one.
 start_watcher() {
-  local script="$1" watch_kubeconfig
+  local script="$1" verb="${2:-watch}" watch_kubeconfig
   watch_kubeconfig="$(mktemp)"
   ${KUBECTL} config view --minify --flatten > "${watch_kubeconfig}"
   WATCH_KUBECONFIG="${watch_kubeconfig}" KUBECTL="${KUBECTL}" \
-    setsid nohup "${ROOT}/test/${script}" watch \
-    >"${TMPDIR:-/tmp}/${script}-watch.$$.log" 2>&1 </dev/null &
+    setsid nohup "${ROOT}/test/${script}" "${verb}" \
+    >"${TMPDIR:-/tmp}/${script}-${verb}.$$.log" 2>&1 </dev/null &
 }
 
 if [ "${E2E_ORG_ACTIONS:-}" = "true" ]; then
@@ -171,6 +177,12 @@ if [ "${E2E_ORG_SECRETS:-}" = "true" ]; then
   # made a secret, and nothing else would remove it.
   start_watcher org-secrets.sh
   "${ROOT}/test/org-secrets.sh" create
+fi
+
+if [ "${E2E_ORG_OWN_SECRETS:-}" = "true" ]; then
+  # The provider creates these secrets, so there is nothing to create here; the
+  # watcher removes them if the run ends before the teardown script.
+  start_watcher org-secrets.sh watch-own
 fi
 
 if [ "${E2E_REPO_FIXTURES:-}" = "true" ]; then

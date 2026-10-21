@@ -17,6 +17,44 @@ implements the following resources with partial functionality:
   * selected repositories
 * **OrganizationWebhook** — organization-level webhooks
   * url, content type, events, active flag, SSL verification, secret (from a Kubernetes Secret)
+* **ActionsOrganizationSecret** — an Actions organization secret, created and kept current by the provider
+  * value (read from a Kubernetes Secret and sealed before it is sent; GitHub never returns it)
+  * visibility (`all`, `private`, `selected`), selected repositories
+  * deleting the resource deletes the secret from GitHub
+
+  ```yaml
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ci-token
+    namespace: crossplane-system
+  stringData:
+    value: <the secret value>
+  ---
+  apiVersion: organizations.github.crossplane.io/v1alpha1
+  kind: ActionsOrganizationSecret
+  metadata:
+    name: ci-token
+    annotations:
+      # GitHub secret names allow only letters, digits and underscores, so set
+      # the external name explicitly; metadata.name is not a valid default.
+      crossplane.io/external-name: CI_TOKEN
+  spec:
+    forProvider:
+      org: my-org
+      visibility: selected
+      selectedRepositories:
+        - repo: my-repo
+      valueSecretRef:
+        name: ci-token
+        namespace: crossplane-system
+        key: value
+    providerConfigRef:
+      name: default
+  ```
+
+  A namespaced resource (`organizations.github.m.crossplane.io`) reads the value
+  from a Secret in its own namespace.
 * **ActionsSecretAccess** — repository access to an existing Actions organization secret (the secret and its value are managed out-of-band)
   * deleting the resource leaves the secret and its repository access unchanged on GitHub, whatever `deletionPolicy` is set to
 * **DependabotSecretAccess** — repository access to an existing Dependabot organization secret (the secret and its value are managed out-of-band)
@@ -376,7 +414,7 @@ given:
 
 | Kind | Fields that may be omitted |
 |---|---|
-| `ActionsSecretAccess`, `DependabotSecretAccess`, `RunnerGroup` | `visibility` |
+| `ActionsOrganizationSecret`, `ActionsSecretAccess`, `DependabotSecretAccess`, `RunnerGroup` | `visibility` |
 | `OrganizationVariable` | `visibility`, `value` |
 | `Membership` | `role` |
 | `Organization` | `description` |

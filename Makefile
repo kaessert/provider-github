@@ -412,6 +412,10 @@ space := $(empty) $(empty)
 # Sorted alphabetically by resource name so a new resource's addition lands at a
 # distinct diff hunk instead of colliding with a concurrent addition.
 #
+# ActionsOrganizationSecret creates its own organization Actions secret, so it needs
+# none of the fixtures behind E2E_ORG_SECRETS; test/teardown.sh removes the two
+# secrets the examples name (see E2E_ORG_OWN_SECRETS below).
+UPTEST_MANIFESTS_ACTIONS_ORGANIZATION_SECRET := examples/actions-organization-secret/actions-organization-secret.yaml,examples/actions-organization-secret/actions-organization-secret-namespaced.yaml
 # ActionsSecretAccess manages access to an organization Actions secret that must
 # already exist; test/setup.sh creates a disposable one (see E2E_ORG_SECRETS below).
 UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS := examples/actions-secret-access/actions-secret-access.yaml,examples/actions-secret-access/actions-secret-access-namespaced.yaml
@@ -438,7 +442,7 @@ UPTEST_MANIFESTS_TEAM := examples/team/team.yaml,examples/team/team-namespaced.y
 
 # E2E manifest tiers
 # CORE: resources that need nothing beyond the GitHub App credentials and the test organization.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_REPOSITORY_BRANCHES),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_ACTIONS_ORGANIZATION_SECRET),$(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS),$(UPTEST_MANIFESTS_DEPENDABOT_SECRET_ACCESS),$(UPTEST_MANIFESTS_ORGANIZATION_VARIABLE),$(UPTEST_MANIFESTS_ORGANIZATION_WEBHOOK),$(UPTEST_MANIFESTS_REPOSITORY),$(UPTEST_MANIFESTS_REPOSITORY_BRANCHES),$(UPTEST_MANIFESTS_RUNNER_GROUP),$(UPTEST_MANIFESTS_TEAM)
 # GATED: resources that need an out-of-band prerequisite (an inviteable user, the
 # shared organization itself).
 UPTEST_MANIFESTS_GATED = $(UPTEST_MANIFESTS_MEMBERSHIP),$(UPTEST_MANIFESTS_ORGANIZATION),$(UPTEST_MANIFESTS_ORGANIZATION_NS)
@@ -462,6 +466,12 @@ UPTEST_SETUP_SCRIPT ?= test/setup.sh
 # secrets. The values stay recursive (`=`) so a per-resource target's
 # UPTEST_INPUT_MANIFESTS is seen.
 export E2E_ORG_SECRETS = $(if $(or $(findstring secret-access,$(UPTEST_INPUT_MANIFESTS)),$(findstring examples/organization/,$(UPTEST_INPUT_MANIFESTS))),true)
+# ActionsOrganizationSecret creates the secrets PGH_E2E_ORG_SECRET and
+# PGH_E2E_ORG_SECRET_NS itself. A run that includes it has test/setup.sh start a
+# watcher, and test/teardown.sh delete both names from $(E2E_ORG) once the delete
+# step has passed, so a failed run does not leave them behind. It creates none of
+# the secrets E2E_ORG_SECRETS covers, and a run without it writes nothing.
+export E2E_ORG_OWN_SECRETS = $(if $(findstring examples/actions-organization-secret/,$(UPTEST_INPUT_MANIFESTS)),true)
 # The Organization update test lists a disposable repository next to the repositories
 # the organization has enabled for Actions and then lists the original ones again.
 # test/setup.sh refuses to start such a run unless the organization's Actions policy
@@ -547,6 +557,9 @@ uptest: e2e-wait-crds
 
 # Per-resource E2E target blocks, sorted alphabetically by resource name.
 
+e2e.actions-organization-secret: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_ORGANIZATION_SECRET)
+e2e.actions-organization-secret: e2e
+
 e2e.actions-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS)
 e2e.actions-secret-access: e2e
 
@@ -588,6 +601,7 @@ e2e.team: e2e
 # One dotted per-resource target per .PHONY line, sorted, so two concurrent waves
 # adding different resources land on distinct lines instead of the same shared line.
 .PHONY: e2e-preflight
+.PHONY: e2e.actions-organization-secret
 .PHONY: e2e.actions-secret-access
 .PHONY: e2e.dependabot-secret-access
 .PHONY: e2e.membership
