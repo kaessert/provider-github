@@ -166,6 +166,14 @@ generate.done: generate-cleanup
 
 .PHONY: generate-registration generate-cleanup
 
+.PHONY: generate-interface-assertions
+generate-interface-assertions: ## Emit zz_generated.interfaces_test.go (compile-time MR interface assertions)
+	@$(INFO) generating MR interface assertions
+	@go run hack/generate-interface-assertions.go || $(FAIL)
+	@$(OK) generating MR interface assertions
+
+generate.done: generate-interface-assertions
+
 # ====================================================================================
 # Convention checks
 
