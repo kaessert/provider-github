@@ -33,7 +33,7 @@ type ActionsOrganizationSecretParameters struct {
 	// Org is the name of the GitHub organization that owns this secret. It is
 	// immutable after creation.
 	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Organization
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="org is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="org is immutable after creation"
 	Org string `json:"org,omitempty"`
 
 	// OrgRef is a reference to an Organization.
