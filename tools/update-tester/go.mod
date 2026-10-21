@@ -1,6 +1,6 @@
 module github.com/provider-github/provider-github/tools/update-tester
 
-go 1.26.9
+go 1.26.10
 
 tool github.com/kaessert/crossplane-update-tester
 
