@@ -22,6 +22,8 @@ import "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 // reconciler and the usage tracker rely on. Nothing else binds a concrete type
 // to them at compile time.
 var (
+	_ resource.Managed       = &ActionsOrganizationSecret{}
+	_ resource.LegacyManaged = &ActionsOrganizationSecret{} //nolint:staticcheck // LegacyManaged is deprecated upstream but is what cluster-scoped managed resources implement.
 	_ resource.Managed       = &ActionsSecretAccess{}
 	_ resource.LegacyManaged = &ActionsSecretAccess{} //nolint:staticcheck // LegacyManaged is deprecated upstream but is what cluster-scoped managed resources implement.
 	_ resource.Managed       = &DependabotSecretAccess{}
