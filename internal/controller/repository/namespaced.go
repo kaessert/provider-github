@@ -33,6 +33,7 @@ import (
 	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
 	namespacedapis "github.com/provider-github/provider-github/apis/namespaced/v1alpha1"
 	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/refresolver"
 	"github.com/provider-github/provider-github/internal/controller/scopebridge"
 	"github.com/provider-github/provider-github/internal/driftdetection"
 	"github.com/provider-github/provider-github/internal/telemetry"
@@ -54,6 +55,7 @@ func SetupNamespacedWithTimeout(mgr ctrl.Manager, o controller.Options, metrics 
 			metrics: metrics})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
+		managed.WithReferenceResolver(refresolver.New(mgr.GetClient())),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))), //nolint:staticcheck // crossplane-runtime's event.NewAPIRecorder still takes the record.EventRecorder that GetEventRecorderFor returns; the replacement events API is not accepted by it yet.
 		managed.WithManagementPolicies(),
 		managed.WithFinalizer(&forgettingFinalizer{

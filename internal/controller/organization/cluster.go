@@ -27,6 +27,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/pkg/errors"
+	"github.com/provider-github/provider-github/internal/controller/refresolver"
 	"github.com/provider-github/provider-github/internal/driftdetection"
 	"github.com/provider-github/provider-github/internal/telemetry"
 	"k8s.io/apimachinery/pkg/types"
@@ -54,6 +55,7 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 			metrics: metrics})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
+		managed.WithReferenceResolver(refresolver.New(mgr.GetClient())),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))), //nolint:staticcheck // crossplane-runtime's event.NewAPIRecorder still takes the record.EventRecorder that GetEventRecorderFor returns; the replacement events API is not accepted by it yet.
 		managed.WithManagementPolicies(),
 	}

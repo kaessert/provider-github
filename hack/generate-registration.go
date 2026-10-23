@@ -35,7 +35,8 @@ limitations under the License.
 // exposes SetupWithTimeout (cluster scope) and SetupNamespacedWithTimeout
 // (namespaced scope); the generated SetupGated registers each scope's
 // controller on the CRD gate for that scope's GroupVersionKind. The config
-// package (ProviderConfig controllers) is never gated.
+// package (ProviderConfig controllers) is never gated. The refresolver package
+// is shared reconciler wiring, not a controller, and is never registered.
 package main
 
 import (
@@ -157,7 +158,7 @@ func scanControllers(pkgs []apiPackage) ([]controllerPkg, error) {
 	}
 	var out []controllerPkg
 	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "config" {
+		if !e.IsDir() || e.Name() == "config" || e.Name() == "refresolver" {
 			continue
 		}
 		name := e.Name()
