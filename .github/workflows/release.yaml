@@ -116,6 +116,14 @@ jobs:
           submodules: true
           ref: ${{ needs.resolve.outputs.tag }}
 
+      # The Marketplace logo is a publishing requirement. Upbound's indexer
+      # drops a logo it rejects without failing the push, so the listing would
+      # silently ship with no icon; checking here, before build-and-push, means
+      # a bad or missing extensions/icons/icon.svg pushes nothing. The script
+      # is the single statement of the indexer's rules.
+      - name: "Gate: Marketplace icon"
+        run: hack/check-marketplace-icon.sh
+
       # govulncheck reports stdlib CVEs against the toolchain it runs under,
       # so this must track go.mod -- a pin drifting behind it would assess a
       # Go version the shipped binary is not built with.
