@@ -7,8 +7,8 @@
 #   hack/check-marketplace-icon.sh [path]      # default: extensions/icons/icon.svg
 #
 # Run by release.yaml's security-gate before anything is pushed, by the
-# release skill before a tag is created, and by the convention 0104 verify
-# check. One implementation, three callers.
+# release skill before a tag is created, and by the repository's
+# convention checks. One implementation, three callers.
 #
 # Rules (the indexer's, no more). Every failure prints
 #   FAIL [<rule>] <detail>
