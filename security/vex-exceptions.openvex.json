@@ -1,7 +1,26 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
   "author": "provider-github security team",
-  "timestamp": "2026-10-09T12:30:00Z",
-  "version": 1,
-  "statements": []
+  "timestamp": "2026-11-02T10:05:30Z",
+  "version": 2,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "GO-2026-5932",
+        "@id": "https://pkg.go.dev/vuln/GO-2026-5932"
+      },
+      "timestamp": "2026-11-02T10:05:30Z",
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/provider-github/provider-github"
+        },
+        {
+          "@id": "pkg:golang/golang.org/x/crypto@v0.58.0"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "GO-2026-5932 is an advisory against golang.org/x/crypto/openpgp, which is unmaintained and unsafe by design. provider-github requires golang.org/x/crypto v0.58.0 directly, but only for golang.org/x/crypto/nacl/box, which internal/controller/actionsorganizationsecret/seal.go uses to seal GitHub Actions secrets in the libsodium sealed-box format GitHub's API requires. The x/crypto packages that reach this provider's build are nacl/box and the primitives it pulls with it (nacl/secretbox, salsa20/salsa, curve25519, blake2b, internal/poly1305, internal/alias). The openpgp package is not among them. Measured on provider-github at commit 603ab40: `go list -deps ./...` and `go list -deps -test ./...` both return zero packages matching openpgp, so the vulnerable code is not compiled into the provider binary at all -- it is not merely uncalled, it is not linked. govulncheck agrees at symbol level ('Your code is affected by 0 vulnerabilities'), flagging GO-2026-5932 only as a module-level finding. The module cannot be removed from the graph: crossplane-runtime/v2, golang.org/x/net, google.golang.org/grpc and k8s.io/apiextensions-apiserver all require it independently. Risk accepted by Tobias Kässer on 2026-11-02. No upstream fix exists (Fixed in: N/A) and none is expected -- the advisory's remedy is to stop using the package, which this provider already does not use. This exception is void the moment golang.org/x/crypto publishes a fixed version for this advisory, or the moment any openpgp package enters this provider's build graph."
+    }
+  ]
 }
