@@ -13,7 +13,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.0
