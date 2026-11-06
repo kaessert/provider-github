@@ -12,12 +12,11 @@
 # annotate a bad release, not prevent it. attest runs after the push because
 # signing, SBOM generation and provenance all read the published image.
 #
-# Gates are deliberately at their strictest setting for now (grype
-# --fail-on negligible, unfixed vulnerabilities included). The sanctioned way
-# to ship past a finding is a VEX statement in security/vex-exceptions.openvex.json,
-# which is applied to BOTH grype and govulncheck -- not by loosening a
-# threshold. Thresholds can be tuned down later; the exception file keeps an
-# audit trail of what was waived and why.
+# Any unwaived finding blocks the release, unfixed vulnerabilities included.
+# The sanctioned way to ship past a finding is a VEX statement in
+# security/vex-exceptions.openvex.json, which is applied to BOTH grype and
+# govulncheck. The exception file is the policy and keeps an audit trail of
+# what was waived and why.
 
 name: Release
 
@@ -67,9 +66,6 @@ env:
   # ── Security gate ─────────────────────────────────────────────────
   VEX_EXCEPTIONS: security/vex-exceptions.openvex.json
   VENS_CONFIG: security/vens-config.yaml
-  # Lowest severity that fails the build. Currently the strictest setting
-  # grype offers; raise to low/medium/high to relax.
-  GRYPE_FAIL_ON: negligible
   DOCKER_BUILDX_VERSION: 'v0.23.0'
 
 jobs:
@@ -247,7 +243,13 @@ jobs:
           fi
           echo "govulncheck: no unwaived reachable vulnerabilities"
 
-      # Gate 2: module-level CVEs, at grype's strictest threshold.
+      # Gate 2: module-level CVEs. Any unwaived match fails the release.
+      #
+      # There is no severity threshold: grype scores some advisories
+      # `Unknown`, which sorts below every --fail-on level, so no threshold
+      # can fail on them. With --vex, waived findings move to
+      # `ignoredMatches` and `matches` is exactly the unwaived set, so the
+      # report is read directly.
       #
       # --only-fixed is deliberately NOT used: vulnerabilities with no
       # upstream fix still block a release, and are waived individually via
@@ -266,11 +268,30 @@ jobs:
           if [ -f "$VEX_EXCEPTIONS" ]; then
             VEX_ARGS=(--vex "$VEX_EXCEPTIONS")
           fi
-          grype dir:. --fail-on "$GRYPE_FAIL_ON" "${VEX_ARGS[@]}" -q \
+          grype dir:. -o json --file /tmp/grype-gate.json "${VEX_ARGS[@]}" -q \
             --exclude './.cache/**' \
             --exclude './_output/**' \
             --exclude './.work/**' \
             --exclude './bin/**'
+
+          # No parseable report is a failure, never a pass: an empty or
+          # truncated file would otherwise read as zero findings.
+          if ! jq -e '.matches | type == "array"' /tmp/grype-gate.json >/dev/null; then
+            echo "::error::grype produced no parseable report -- the gate is not actually checking anything"
+            exit 1
+          fi
+
+          WAIVED=$(jq '(.ignoredMatches // []) | length' /tmp/grype-gate.json)
+          UNWAIVED=$(jq '.matches | length' /tmp/grype-gate.json)
+          echo "grype: $UNWAIVED unwaived match(es), $WAIVED waived by $VEX_EXCEPTIONS"
+          if [ "$UNWAIVED" -ne 0 ]; then
+            echo "::error::$UNWAIVED unwaived vulnerability match(es) with no VEX exception:"
+            jq -r '.matches[]
+                   | "  \(.vulnerability.id)  \(.artifact.name) \(.artifact.version)  \((.artifact.locations // []) | map(.path) | unique | join(","))  (\(.vulnerability.severity))"' \
+              /tmp/grype-gate.json | sort -u
+            echo "Fix them, or add a justified statement to $VEX_EXCEPTIONS."
+            exit 1
+          fi
 
       # Gate 3: no GPL-family licenses in the dependency tree.
       #
